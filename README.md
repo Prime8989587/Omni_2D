@@ -1,21 +1,28 @@
-# Omni 2D — Part 0: Bare Installable APK Shell
+# Omni 2D
 
-This is **step one** of building Omni 2D: proving that a plain HTML/JS/Canvas
-page can be wrapped by [Capacitor](https://capacitorjs.com/) and turned into
+An HTML/JS/Canvas app wrapped by [Capacitor](https://capacitorjs.com/) into
 a real, installable Android APK.
 
-There is **no app UI, no buttons, and no game logic yet** — on purpose. The
-web page (`www/index.html`) does exactly one thing: it draws a full-screen
-black `<canvas>` with the white text "Hello, Omni 2D" in the middle. If that
-shows up on your phone as an installed app, the entire build pipeline
-(HTML → Capacitor → Android project → Gradle → APK) is proven to work, and
-every future step just adds more code on top of this foundation.
+- **Part 0** proved the build pipeline end to end: a blank canvas, wrapped
+  by Capacitor, built into an installable APK.
+- **Part 1** (current) adds the app shell's screens, navigation, and
+  visual theme — Home, Animate mode, and Recording, plus the export modal
+  — all with placeholder behavior (console logs, no real file output yet).
+  **There is still no bone/mesh/skeleton/animation logic** — that's a
+  later step. See "App states & how to navigate" below for how to test
+  the flow on your phone.
 
 ## What's in this repo
 
 ```
-www/index.html        The entire "app" — one HTML file, blank canvas, one line of text
-capacitor.config.json  Tells Capacitor the app's name, ID, and where the web files live
+www/index.html          App shell markup (screens, buttons, export modal)
+www/css/style.css       The black/pink theme, layout, and button states
+www/js/state.js         The app's state machine (home/animating/recording) — no DOM code
+www/js/canvas.js        Rendering-engine facade — currently just clears the canvas;
+                         future bone/mesh/animation code hooks in here
+www/js/ui.js             DOM wiring: button handlers, disabled states, the export modal
+www/js/app.js            Thin entry point that boots ui.js once the page loads
+capacitor.config.json   Tells Capacitor the app's name, ID, and where the web files live
 android/                The native Android project Capacitor generated (this is what Gradle builds)
 package.json            Node project file listing Capacitor as a dependency
 ```
@@ -214,14 +221,61 @@ phone selected as the target device does the build-and-install in one step.
 4. Tap **Install**.
 
 Once installed, you should see an app named **Omni 2D** in your app
-drawer. Opening it should show a black screen with white text reading
-"Hello, Omni 2D" — that confirms the entire pipeline works end to end.
+drawer. Opening it should show the black-and-pink app shell described
+below — that confirms the entire pipeline works end to end.
+
+---
+
+## App states & how to navigate (manual test flow)
+
+This build has no bone/mesh/animation logic yet — every button below is a
+placeholder that just logs to the console (visible via `adb logcat` or
+Android Studio's Logcat panel if you want to watch them) or shows a modal.
+What you're testing here is purely the screen flow and button
+enabled/disabled behavior.
+
+There are three app states:
+
+1. **Home** — the starting screen. Shows the (currently blank) canvas
+   with an **Import** button top-left and a large **Animate** button
+   across the bottom.
+   - Tapping **Import** just logs `Import triggered` — no file picker yet.
+   - Tapping **Animate** moves you into Animate mode →
+2. **Animating** — Animate mode, before recording starts. The canvas gets
+   a pink border, and an "ANIMATE MODE" label appears top-right. Controls
+   change to an **✕** (exit), **Start**, and a greyed-out, disabled
+   **Stop**.
+   - Tapping **✕** exits back to **Home**.
+   - Tapping **Start** begins "recording" →
+3. **Recording** — after Start is pressed. The canvas border and mode
+   label turn red, the label reads "RECORDING...", **Start** becomes
+   disabled/greyed, and **Stop** becomes the active button.
+   - Tapping **✕** here cancels the recording (logs a message) and exits
+     straight back to **Home**.
+   - Tapping **Stop** ends the recording, returns you to the
+     **Animating** state, and automatically opens the **Export modal**.
+
+**Export modal** (appears automatically after Stop, not its own button):
+a filename field (defaults to `animation_01` if left blank), **Save as
+GIF** / **Save as MP4** buttons (both just log a placeholder export
+message — no real encoding yet), and a red **Cancel** button that closes
+the modal without exporting. Closing the modal either way leaves you in
+the **Animating** state, ready to Start another recording.
+
+A quick end-to-end pass to try on your phone: **Home → Animate → Start →
+Stop → (export modal appears) → Save as GIF → back in Animate mode →
+✕ → Home**. Also worth checking: tapping **✕** while **Recording** should
+cancel straight back to Home, and disabled buttons (**Stop** on the
+Animating screen, **Start** on the Recording screen) should be visibly
+greyed out and not respond to taps.
 
 ---
 
 ## What's next
 
-Once you've confirmed the APK installs and shows the hello-world canvas,
-the next steps will layer in real rendering (bones/mesh/animation) and app
-UI on top of this same `www/index.html` + Capacitor + Android project
-structure — no changes to this pipeline should be needed for that.
+Once you've confirmed this screen flow works on your phone, the next
+step layers in the real rendering/animation engine (bones, mesh,
+skeleton, drag handling) behind this same shell. That logic is designed
+to hook into `www/js/canvas.js`, which is kept deliberately separate from
+the state/UI code in `www/js/state.js` and `www/js/ui.js` — look for the
+`FUTURE HOOK` comments in those files.

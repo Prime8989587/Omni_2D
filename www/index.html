@@ -4,46 +4,56 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
   <title>Omni 2D</title>
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background: #000;
-      overflow: hidden;
-    }
-    canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-  </style>
+  <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <canvas id="canvas"></canvas>
-  <script>
-    var canvas = document.getElementById('canvas');
-    var ctx = canvas.getContext('2d');
+  <div id="app" class="app">
+    <header class="topbar">
+      <button id="importBtn" class="btn btn--icon-text" type="button">Import</button>
+      <div id="modeLabel" class="mode-label" hidden>
+        <span class="mode-label__dot" aria-hidden="true"></span>
+        <span id="modeLabelText">Animate Mode</span>
+      </div>
+    </header>
 
-    function draw() {
-      var dpr = window.devicePixelRatio || 1;
-      canvas.width = window.innerWidth * dpr;
-      canvas.height = window.innerHeight * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    <main id="canvasWrap" class="canvas-wrap">
+      <canvas id="canvas" class="canvas"></canvas>
+      <!--
+        FUTURE HOOK: bone/mesh/skeleton rendering, drag-handle overlays,
+        and animation playback will draw onto #canvas via js/canvas.js.
+        This screen intentionally shows a blank canvas for now.
+      -->
+    </main>
 
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    <footer class="controls">
+      <div id="homeControls" class="control-row">
+        <button id="animateBtn" class="btn btn--lg" type="button">Animate</button>
+      </div>
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '28px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Hello, Omni 2D', window.innerWidth / 2, window.innerHeight / 2);
-    }
+      <div id="animateControls" class="control-row" hidden>
+        <button id="exitBtn" class="btn btn--icon" type="button" aria-label="Exit animate mode">&#10005;</button>
+        <button id="startBtn" class="btn" type="button" disabled>Start</button>
+        <button id="stopBtn" class="btn" type="button" disabled>Stop</button>
+      </div>
+    </footer>
 
-    window.addEventListener('resize', draw);
-    draw();
-  </script>
+    <div id="exportModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+        <h2 id="exportTitle" class="modal__title">Export Animation</h2>
+
+        <label for="filenameInput" class="field-label">Filename</label>
+        <input id="filenameInput" class="text-input" type="text" placeholder="animation_01" autocomplete="off" />
+
+        <div class="modal__actions">
+          <button id="saveGifBtn" class="btn" type="button">Save as GIF</button>
+          <button id="saveMp4Btn" class="btn" type="button">Save as MP4</button>
+        </div>
+
+        <button id="cancelExportBtn" class="btn btn--cancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
