@@ -25,6 +25,49 @@ manages it for you.
 
 ---
 
+## Easiest option: download a pre-built APK, no local setup at all
+
+This repo has a GitHub Actions workflow
+(`.github/workflows/build-apk.yml`) that automatically builds the debug
+APK in the cloud every time code is pushed to `main` or a `claude/**`
+branch. You don't need Node, Android Studio, or anything else installed to
+get an installable APK this way — just a browser and your phone.
+
+There are two ways to grab it from GitHub:
+
+1. **Releases page (recommended — stable link).** Go to the repo's
+   **Releases** page (right-hand sidebar on GitHub, or
+   `https://github.com/<owner>/<repo>/releases`) and open **"Latest Debug
+   APK."** Download `app-debug.apk` from the Assets list. This release is
+   overwritten on every push, so the link never changes — bookmark it and
+   it'll always have the newest build.
+2. **Actions artifacts (tied to one specific build).** Go to the
+   **Actions** tab, click the most recent **Build Android APK** run, and
+   download the `omni2d-debug-apk` artifact from the "Artifacts" section
+   at the bottom of the run page. Artifacts expire after 30 days and
+   require being logged into GitHub to download; the Release above doesn't.
+
+Either way, once the `.apk` file is on your phone, open it with a file
+manager and tap **Install** (Android will ask permission to "install
+unknown apps" the first time — allow it for that app/source). No cable,
+no `adb`, no Android Studio required.
+
+If you want to trigger a fresh build without pushing a new commit, go to
+**Actions → Build Android APK → Run workflow**.
+
+> **One-time repo setting, if the release step fails with a permissions
+> error:** GitHub sometimes defaults a repo's Actions token to read-only.
+> If the workflow fails specifically on the "Publish/update latest debug
+> build release" step, go to **Settings → Actions → General → Workflow
+> permissions**, select **"Read and write permissions,"** save, then
+> re-run the workflow.
+
+The rest of this README covers building the APK yourself locally — useful
+once you're actively editing code and want faster iteration than waiting
+on a cloud build each time.
+
+---
+
 ## Prerequisites (one-time setup on your machine)
 
 Do these once, before you touch the terminal steps below.
