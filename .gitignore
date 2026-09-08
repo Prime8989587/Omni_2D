@@ -1,0 +1,9 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Editor/OS cruft
+.DS_Store
+
+# Capacitor's synced web assets inside the Android project are generated,
+# not source. Everything else in android/ is handled by android/.gitignore.

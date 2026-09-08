@@ -1,0 +1,26 @@
+{
+  "name": "omni_2d",
+  "version": "1.0.0",
+  "description": "Capacitor-wrapped HTML/JS/Canvas app for Android.",
+  "main": "index.js",
+  "scripts": {
+    "sync": "cap sync android",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Prime8989587/Omni_2D.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Prime8989587/Omni_2D/issues"
+  },
+  "homepage": "https://github.com/Prime8989587/Omni_2D#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1"
+  }
+}
