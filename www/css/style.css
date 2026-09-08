@@ -118,6 +118,19 @@ button {
   display: block;
   width: 100%;
   height: 100%;
+  /* The gesture layer handles all touch input; without this the browser
+     would steal drags for scrolling and pinches for page zoom. */
+  touch-action: none;
+  image-rendering: pixelated;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .canvas-empty-hint {
@@ -172,6 +185,12 @@ button {
   width: 48px;
   height: 48px;
   font-size: 20px;
+  flex: 0 0 auto;
+}
+
+.btn--sm {
+  padding: 8px 12px;
+  font-size: 13px;
   flex: 0 0 auto;
 }
 
@@ -257,6 +276,115 @@ button {
 #animateControls #startBtn,
 #animateControls #stopBtn {
   flex: 1;
+}
+
+/* ---------- Scene Parts panel ---------- */
+
+.scene-panel {
+  margin-bottom: 12px;
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.selection-bar__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-accent);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.scene-panel__header {
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 2px solid var(--color-accent);
+  border-radius: 10px;
+  background: var(--color-bg);
+  color: var(--color-accent);
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.scene-panel__chevron {
+  font-size: 14px;
+}
+
+.scene-parts {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 26vh;
+  overflow-y: auto;
+}
+
+.scene-parts li + li {
+  margin-top: 6px;
+}
+
+.scene-part {
+  -webkit-tap-highlight-color: transparent;
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  border-radius: 10px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 15px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scene-part.is-selected {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.scene-part:active {
+  background: var(--color-accent);
+  color: #000000;
+}
+
+/* ---------- Toast ---------- */
+
+.toast {
+  /* Anchored to the top: the bottom of the screen is where the Animate
+     button and the Scene Parts panel live, and a toast must not cover
+     the controls it is telling the user about. */
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  top: calc(76px + env(safe-area-inset-top));
+  z-index: 60;
+  padding: 12px 16px;
+  border: 2px solid var(--color-accent);
+  border-radius: 10px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
 }
 
 /* ---------- Export modal ---------- */
