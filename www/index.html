@@ -9,7 +9,8 @@
 <body>
   <div id="app" class="app">
     <header class="topbar">
-      <button id="importBtn" class="btn btn--icon-text" type="button">Import</button>
+      <button id="importBtn" class="btn btn--flourish" type="button">Import</button>
+      <div id="logo" class="logo">&#8734;omni-2D</div>
       <div id="modeLabel" class="mode-label" hidden>
         <span class="mode-label__dot" aria-hidden="true"></span>
         <span id="modeLabelText">Animate Mode</span>
@@ -18,6 +19,9 @@
 
     <main id="canvasWrap" class="canvas-wrap">
       <canvas id="canvas" class="canvas"></canvas>
+      <p id="canvasEmptyHint" class="canvas-empty-hint">
+        No rig loaded yet.<br />Tap Import to add character parts.
+      </p>
       <!--
         FUTURE HOOK: bone/mesh/skeleton rendering, drag-handle overlays,
         and animation playback will draw onto #canvas via js/canvas.js.
@@ -27,13 +31,19 @@
 
     <footer class="controls">
       <div id="homeControls" class="control-row">
-        <button id="animateBtn" class="btn btn--lg" type="button">Animate</button>
+        <button id="animateBtn" class="btn btn--lg btn--flourish-4" type="button">
+          <span class="flourish flourish--tl" aria-hidden="true">&#10047;</span>
+          <span class="flourish flourish--tr" aria-hidden="true">&#10047;</span>
+          Animate
+          <span class="flourish flourish--bl" aria-hidden="true">&#10047;</span>
+          <span class="flourish flourish--br" aria-hidden="true">&#10047;</span>
+        </button>
       </div>
 
       <div id="animateControls" class="control-row" hidden>
         <button id="exitBtn" class="btn btn--icon" type="button" aria-label="Exit animate mode">&#10005;</button>
-        <button id="startBtn" class="btn" type="button" disabled>Start</button>
-        <button id="stopBtn" class="btn" type="button" disabled>Stop</button>
+        <button id="startBtn" class="btn btn--flourish" type="button" disabled>Start</button>
+        <button id="stopBtn" class="btn btn--flourish" type="button" disabled>Stop</button>
       </div>
     </footer>
 
@@ -45,8 +55,8 @@
         <input id="filenameInput" class="text-input" type="text" placeholder="animation_01" autocomplete="off" />
 
         <div class="modal__actions">
-          <button id="saveGifBtn" class="btn" type="button">Save as GIF</button>
-          <button id="saveMp4Btn" class="btn" type="button">Save as MP4</button>
+          <button id="saveGifBtn" class="btn btn--flourish" type="button">Save as GIF</button>
+          <button id="saveMp4Btn" class="btn btn--flourish" type="button">Save as MP4</button>
         </div>
 
         <button id="cancelExportBtn" class="btn btn--cancel" type="button">Cancel</button>

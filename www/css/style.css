@@ -83,6 +83,14 @@ button {
   50% { opacity: 0.25; }
 }
 
+.logo {
+  color: var(--color-accent);
+  opacity: 0.85;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
 /* ---------- Canvas ---------- */
 
 .canvas-wrap {
@@ -112,9 +120,24 @@ button {
   height: 100%;
 }
 
+.canvas-empty-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  width: 80%;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 14px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
 /* ---------- Buttons ---------- */
 
 .btn {
+  position: relative;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   font-weight: 700;
@@ -169,6 +192,49 @@ button {
   background: var(--color-disabled-bg);
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* ---------- Decorative flourishes ----------
+   Small pink flower marks on primary/CTA buttons (Import, Start, Stop,
+   Animate, Save as GIF/MP4), matching the app's visual identity. Utility
+   icon buttons (Exit) and destructive actions (Cancel) intentionally have
+   none, same as in the reference design. Purely decorative -- hidden from
+   screen readers and never intercepts taps. */
+
+.btn--flourish::before,
+.btn--flourish::after {
+  content: '\273F';
+}
+
+.btn--flourish::before,
+.btn--flourish::after,
+.flourish {
+  position: absolute;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-accent);
+  pointer-events: none;
+  user-select: none;
+}
+
+.btn--flourish::before {
+  top: -8px;
+  left: -8px;
+}
+
+.btn--flourish::after {
+  bottom: -8px;
+  right: -8px;
+}
+
+.flourish--tl { top: -8px; left: -8px; }
+.flourish--tr { top: -8px; right: -8px; }
+.flourish--bl { bottom: -8px; left: -8px; }
+.flourish--br { bottom: -8px; right: -8px; }
+
+.btn:disabled::before,
+.btn:disabled::after {
+  content: none;
 }
 
 /* ---------- Bottom control bar ---------- */

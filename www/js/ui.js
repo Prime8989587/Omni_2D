@@ -22,6 +22,8 @@ function cacheElements() {
   els.animateControls = document.getElementById('animateControls');
   els.modeLabel = document.getElementById('modeLabel');
   els.modeLabelText = document.getElementById('modeLabelText');
+  els.logo = document.getElementById('logo');
+  els.canvasEmptyHint = document.getElementById('canvasEmptyHint');
 
   els.exportModal = document.getElementById('exportModal');
   els.filenameInput = document.getElementById('filenameInput');
@@ -99,6 +101,8 @@ function render(state) {
   els.modeLabel.hidden = !isAnimateMode;
   els.modeLabelText.textContent = isRecording ? 'Recording...' : 'Animate Mode';
   els.modeLabel.classList.toggle('is-recording', isRecording);
+  els.logo.hidden = !isHome;
+  els.canvasEmptyHint.hidden = !isHome;
 
   els.canvasWrap.classList.toggle('is-animate-mode', isAnimateMode);
   els.canvasWrap.classList.toggle('is-recording', isRecording);
