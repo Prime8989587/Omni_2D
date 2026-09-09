@@ -79,7 +79,48 @@
         <button id="addBoneBtn" class="btn btn--flourish" type="button">Add Bone</button>
       </div>
 
+      <p id="bindHint" class="rig-hint" hidden></p>
+
+      <div id="bindPanel" class="scene-panel" hidden>
+        <div class="bind-row">
+          <button id="autoWeightBtn" class="btn btn--sm btn--flourish" type="button">Auto-weight Part</button>
+          <label class="slider-field">
+            <span>Density <b id="densityValue">8</b></span>
+            <input id="densitySlider" class="slider" type="range" min="3" max="16" step="1" />
+          </label>
+        </div>
+
+        <div class="bind-row">
+          <label class="slider-field">
+            <span>Brush <b id="brushValue">45</b></span>
+            <input id="brushSlider" class="slider" type="range" min="10" max="120" step="1" />
+          </label>
+          <label class="slider-field">
+            <span>Strength <b id="strengthValue">0.35</b></span>
+            <input id="strengthSlider" class="slider" type="range" min="0.05" max="1" step="0.05" />
+          </label>
+        </div>
+
+        <label id="debugRotateField" class="slider-field slider-field--wide" hidden>
+          <span>Debug: rotate <b id="debugBoneName">—</b> <b id="debugRotateValue">0°</b></span>
+          <input id="debugRotateSlider" class="slider" type="range" min="-180" max="180" step="1" />
+        </label>
+
+        <div class="segmented">
+          <button id="showPartsTab" class="segmented__btn is-active" type="button">Parts</button>
+          <button id="showBonesTab" class="segmented__btn" type="button">Bones</button>
+        </div>
+
+        <ul id="bindList" class="scene-parts"></ul>
+      </div>
+
+      <div id="bindControls" class="control-row" hidden>
+        <button id="bindExitBtn" class="btn btn--icon" type="button" aria-label="Exit bind mode">&#10005;</button>
+        <span id="bindStatus" class="bind-status"></span>
+      </div>
+
       <div id="homeControls" class="control-row">
+        <button id="bindBtn" class="btn btn--lg btn--flourish" type="button">Bind</button>
         <button id="rigBtn" class="btn btn--lg btn--flourish" type="button">Rig</button>
         <button id="animateBtn" class="btn btn--lg btn--flourish-4" type="button">
           <span class="flourish flourish--tl" aria-hidden="true">&#10047;</span>

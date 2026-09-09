@@ -11,12 +11,15 @@ a real, installable Android APK.
 - **Part 2** added real PNG import and character assembly: pick several
   pixel-art PNGs at once, then drag, pinch, rotate, and reorder each piece
   on the canvas. See "Importing and assembling a character" below.
-- **Part 3** (current) adds **Rig mode**: place bones over the assembled
-  character and build a parent/child skeleton. Rotating a bone carries its
-  whole chain of children with it. See "Building a skeleton (Rig mode)"
-  below. **Bones do not deform the artwork yet** — this step only defines
-  the skeleton; mesh binding and weight painting come next, and export is
-  still a placeholder that only logs.
+- **Part 3** added **Rig mode**: place bones over the assembled character
+  and build a parent/child skeleton. Rotating a bone carries its whole
+  chain of children with it. See "Building a skeleton (Rig mode)" below.
+- **Part 4** (current) adds **Bind mode**: generate a deformable mesh over
+  each Part, bind its vertices to nearby bones with weights, and paint
+  those weights by hand. **Rotating a bone now actually warps the pixel
+  art.** See "Binding artwork to bones (Bind mode)" below. Drag-driven
+  animation and real GIF/MP4 export are still to come; export remains a
+  placeholder that only logs.
 
 ## What's in this repo
 
@@ -27,9 +30,12 @@ www/js/state.js         The app's state machine (home/rig/animating/recording) �
 www/js/parts.js         The scene model: the Part object and the store holding them
 www/js/bones.js         The skeleton: Bone objects, the parent/child tree, and the
                          forward-kinematics math. Kept separate from parts.js
+www/js/mesh.js          Mesh generation, auto-weighting, weight painting maths, and
+                         the linear blend skinning that deforms the artwork
 www/js/importer.js      Picked files -> Parts (PNG validation, decode, placement)
 www/js/gestures.js      Touch handling for Parts: drag, pinch-scale, two-finger rotate
 www/js/rigTool.js       Touch handling for Bones: two-tap placement, handle dragging
+www/js/bindTool.js      Touch handling for weights: the paint brush
 www/js/canvas.js        Renderer — draws parts with smoothing off so pixel art stays
                          crisp, plus the skeleton overlay in Rig mode
 www/js/ui.js            DOM wiring: buttons, Scene Parts panel, the export modal
@@ -449,6 +455,131 @@ session only; it isn't saved to disk yet.
 
 ---
 
+## Binding artwork to bones (Bind mode)
+
+Rig mode defines *where the bones are*. Bind mode decides *which pixels
+each bone moves* — and it's the step that makes bone rotation actually
+warp the pixel art.
+
+### Entering Bind mode
+
+Tap **Bind** on the Home screen. You need artwork (Part 2) and a skeleton
+(Part 3) first; if there are no bones, the hint line says so.
+
+The panel at the bottom has a **Parts** / **Bones** tab pair. Use the
+Parts tab to choose which piece you're working on, and the Bones tab to
+choose which bone you're inspecting or painting.
+
+### Binding a Part (auto-weighting)
+
+1. On the **Parts** tab, tap the piece you want to bind.
+2. Tap **Auto-weight Part**.
+
+That builds a grid mesh over the Part's image, splits it into triangles,
+and gives every vertex weights to its nearest bones — inverse squared
+distance to each bone's line segment, capped at the 3 closest bones and
+normalized to sum to 1. Capping matters: letting every bone tug on every
+vertex produces mush.
+
+The Parts list marks bound pieces as **"— bound"**, and the status line
+shows the vertex count.
+
+**Nothing should look different yet.** That is the correctness check: a
+freshly bound Part renders pixel-for-pixel identically to the flat sprite
+until a bone actually moves. (Verified — the bound render is currently
+byte-identical to the unbound one at rest.)
+
+**Mesh density** controls how many cells the grid gets along the Part's
+longest side. Pixel art wants a coarse mesh, so the default is 6–10 cells
+depending on the image's pixel size — a small hand PNG needs far fewer
+vertices than a big torso. Moving the slider on an already-bound Part
+rebuilds its mesh, **which discards hand-painted weights** and
+auto-assigns fresh ones.
+
+### Seeing what a bone controls
+
+Switch to the **Bones** tab and tap a bone. Its influence appears as a
+heatmap over the mesh:
+
+- **Bright, large pink dots** — vertices this bone strongly controls.
+- **Faint, small dots** — weak influence.
+- **No dot at all** — this bone doesn't move that vertex.
+
+### Painting weights by hand
+
+With a Part bound and a bone selected, **drag your finger across the
+mesh**. That raises the selected bone's weight on the vertices under the
+brush, and every other bone's weight on those same vertices is scaled
+down to compensate, so each vertex's weights always still sum to 1.
+
+- **Brush** — the radius of the brush in pixels. Influence falls off
+  linearly from the centre to the rim.
+- **Strength** — how fast each pass pushes weight toward this bone.
+
+To take influence *away* from a bone, select a different bone and paint
+over the same area — that bone gains, so this one loses.
+
+**Auto-weight Part** doubles as the undo: it throws away all hand-painted
+weights for that Part and recomputes the automatic defaults.
+
+### Testing the deformation (temporary debug slider)
+
+Select any bone and use the **Debug: rotate** slider. It drives that
+bone's rotation directly so you can watch the skinning work. This control
+is scaffolding for this step — real drag-driven animation replaces it
+later.
+
+Rotate a bone and the artwork weighted to it warps and follows, with the
+pixel art staying hard-edged rather than blurring. Because the skeleton is
+a forward-kinematics chain, rotating a parent also swings every child
+bone, and the artwork bound to those children comes along too.
+
+### How the deformation works
+
+Standard **linear blend skinning**. For each vertex, every influencing
+bone proposes a position — take the vertex's rest position, rotate it
+about that bone's head by however much the bone has rotated since binding,
+then translate to where the bone's head is now. The vertex's final
+position is the weighted average of those proposals:
+
+```
+deformed = Σ  w_bone × ( R(θ_now − θ_bind) × (rest − head_bind) + head_now )
+```
+
+With no bone moved, every term collapses back to the rest position, which
+is exactly why a bound Part looks untouched until you rotate something.
+
+### A caveat worth knowing
+
+Bone bind poses are recorded in world space at the moment you bind. If you
+go back to Home and **move a Part after binding it**, its deformation
+pivots stay where the bones were at bind time. The Part still drags and
+renders normally — but re-tap **Auto-weight Part** to re-establish the
+relationship. This is normal rigging-tool behavior: change the model,
+re-bind the model.
+
+### Suggested test on your phone
+
+1. Import a Part and build a 2–3 bone chain over it in Rig mode.
+2. **Bind** → Parts tab → tap the Part → **Auto-weight Part**. Confirm it
+   looks *exactly* as it did before.
+3. Bones tab → tap a bone → check the heatmap highlights the region you'd
+   expect that bone to own.
+4. Drag the **Debug: rotate** slider — the artwork should bend, and the
+   pixels should stay crisp and blocky, never blurry.
+5. Return the slider to 0, paint that bone over a different area, then
+   rotate again — more of the artwork should now follow it.
+6. Tap **Auto-weight Part** to reset if the painting goes wrong.
+
+### Performance note
+
+Each triangle is drawn as a separate clipped draw call, so a very high
+density on many Parts will cost frame rate on a phone. The 6–10 default
+keeps it modest. If live animation later feels sluggish, lower the density
+first.
+
+---
+
 ## App states & how to navigate (manual test flow)
 
 Import and part assembly are real (see the section above). Everything
@@ -457,15 +588,17 @@ the console (visible via `adb logcat` or Android Studio's Logcat panel) or
 shows a modal — there's no bone/mesh/animation logic yet, so what you're
 testing here is the screen flow and button enabled/disabled behavior.
 
-There are four app states:
+There are five app states:
 
 1. **Home** — the starting screen, and where you assemble the character.
-   Shows the canvas with an **Import** button top-left and the **Rig** and
-   **Animate** buttons across the bottom, plus the Scene Parts panel once
-   anything is imported.
+   Shows the canvas with an **Import** button top-left and the **Bind**,
+   **Rig** and **Animate** buttons across the bottom, plus the Scene Parts
+   panel once anything is imported.
    - Tapping **Import** opens the file picker (see above).
    - Tapping **Rig** moves you into Rig mode (see above) — a separate
      branch from Animate; **✕** brings you back Home.
+   - Tapping **Bind** moves you into Bind mode (see above), also a
+     separate branch; **✕** brings you back Home.
    - Tapping **Animate** moves you into Animate mode →
 2. **Animating** — Animate mode, before recording starts. The canvas gets
    a pink border, and an "ANIMATE MODE" label appears top-right. Controls
@@ -499,10 +632,10 @@ greyed out and not respond to taps.
 
 ## What's next
 
-With parts assembled and a skeleton built, the next step is **binding**:
-associating the pixel art with the bones (mesh / weights) so that posing a
-bone actually moves the artwork attached to it. After that comes posing
-and playback in Animate mode, and finally real GIF/MP4 encoding.
+With artwork bound to a working skeleton, the next step is **live
+drag-driven animation**: dragging bones directly on the canvas to pose the
+character, recording those poses over time, and finally encoding real
+GIF/MP4 files instead of logging placeholders.
 
 The code is arranged for that already:
 
@@ -511,11 +644,21 @@ The code is arranged for that already:
 - `www/js/bones.js` holds the skeleton — each `Bone` has an id, name,
   parent id, head/tail, rotation, and length, stored *relative to its
   parent* so forward kinematics comes for free.
-- The two are **deliberately kept separate**. A bone doesn't belong to a
-  Part: a single mesh may later span several parts, or one part may need
-  several bones. Binding is what will connect them, referencing bones by
-  id.
+- `www/js/mesh.js` holds the binding — each Part's mesh has a vertex list
+  (rest position, UV, and a `{boneId: weight}` map per vertex), a triangle
+  index list, and the bone bind poses.
+- Parts and bones are **deliberately kept separate**. A bone doesn't
+  belong to a Part: a mesh may span several parts, or a part may need
+  several bones. The weight map is the only thing that connects them, and
+  it references bones by id.
 
-Rendering lives in `www/js/canvas.js`, separate from the state machine
-(`state.js`) and the DOM wiring (`ui.js`). Look for the `FUTURE HOOK`
-comments marking where mesh deformation and frame capture plug in.
+Animation needs exactly one call per frame:
+
+```js
+bonesStore.snapshotTransforms()                 // live bone transforms
+deformVertices(part.mesh, part, transforms)     // -> deformed positions
+```
+
+No binding data has to be touched to drive it. Rendering lives in
+`www/js/canvas.js`, separate from the state machine (`state.js`) and the
+DOM wiring (`ui.js`).

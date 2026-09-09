@@ -18,10 +18,10 @@ export class Part {
     this.rotation = rotation; // radians
     this.zIndex = 0; // assigned by the store on add
 
-    // FUTURE HOOK: bone/skeleton binding data attaches here in a later
-    // part (attachment joint, parent bone, per-vertex weights). Nothing
-    // in the store, renderer, or gesture layer assumes these fields are
-    // absent, so adding them does not require touching those files.
+    // The deformable mesh bound to the skeleton, or null while unbound.
+    // Built and owned by mesh.js; the store, renderer, and gesture layers
+    // only ever read it.
+    this.mesh = null;
   }
 
   get naturalWidth() {

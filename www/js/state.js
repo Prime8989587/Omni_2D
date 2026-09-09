@@ -6,6 +6,7 @@
 export const AppState = Object.freeze({
   HOME: 'home',
   RIG: 'rig', // building the skeleton; parts are not draggable here
+  BIND: 'bind', // binding meshes to bones and painting weights
   ANIMATING: 'animating', // in Animate mode, before Start is pressed
   RECORDING: 'recording', // in Animate mode, after Start, before Stop
 });
@@ -42,6 +43,18 @@ class StateManager {
 
   exitRigMode() {
     if (this._state === AppState.RIG) {
+      this._transition(AppState.HOME);
+    }
+  }
+
+  enterBindMode() {
+    if (this._state === AppState.HOME) {
+      this._transition(AppState.BIND);
+    }
+  }
+
+  exitBindMode() {
+    if (this._state === AppState.BIND) {
       this._transition(AppState.HOME);
     }
   }

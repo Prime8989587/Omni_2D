@@ -125,6 +125,20 @@ class BonesStore {
     };
   }
 
+  // Every bone's current world transform, keyed by id. This is the whole
+  // input the mesh skinning needs each frame -- Part 6's animation loop
+  // can feed exactly this into deformVertices().
+  snapshotTransforms() {
+    const transforms = {};
+    for (const bone of this._bones) {
+      transforms[bone.id] = {
+        head: this.worldHead(bone),
+        rotation: this.worldRotation(bone),
+      };
+    }
+    return transforms;
+  }
+
   // Converts a world point into the coordinate frame a child of `parent`
   // is stored in. With no parent, the frame is world space.
   toParentSpace(parent, x, y) {
