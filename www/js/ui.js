@@ -14,7 +14,7 @@ import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import { initBindTool, setBrushRadius, setBrushStrength, getBrush } from './bindTool.js';
-import { initPoseTool, dragTargets, getDragTargetId, setDragTarget, subscribeTargets } from './poseTool.js';
+import { initPoseTool } from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
 import { serializeProject, applyProject } from './project.js';
@@ -158,8 +158,6 @@ function cacheElements() {
   els.inertiaSlider = document.getElementById('inertiaSlider');
   els.inertiaValue = document.getElementById('inertiaValue');
   els.animateHint = document.getElementById('animateHint');
-  els.movePanel = document.getElementById('movePanel');
-  els.moveTargets = document.getElementById('moveTargets');
 
   els.confirmModal = document.getElementById('confirmModal');
   els.confirmMessage = document.getElementById('confirmMessage');
@@ -898,17 +896,14 @@ function renderChrome() {
   els.canvasWrap.classList.toggle('is-rig-mode', isRig || isBind);
   els.canvasWrap.classList.toggle('is-recording', isRecording);
 
-  // Free Move: pick what to move, then drag anywhere on the canvas.
+  // Free Move: one handle on the character, and it moves all of it.
   els.animateHint.hidden = !isAnimating;
-  els.movePanel.hidden = !isAnimating;
   if (isAnimating) {
-    renderMoveTargets();
     els.animateHint.textContent = bonesStore.isEmpty
-      ? 'Build a skeleton in Rig mode first — Free Move needs bones to move.'
+      ? 'Build a skeleton in Rig mode first — Free Move moves the character by its root bone.'
       : partsStore.isEmpty
-        ? 'Import artwork first, then drag it here.'
-        : 'Now drag anywhere on the canvas. Everything under the chosen part follows; ' +
-          'spring bones trail behind and settle.';
+        ? 'Import artwork first, then move it here.'
+        : 'Drag the ✥ handle to move the whole character. Spring bones trail behind and settle.';
   }
 
   els.startBtn.disabled = !isAnimating;
@@ -1140,48 +1135,6 @@ async function discardRecovery() {
   }
 }
 
-// The drag target is chosen by NAME, before touching the canvas, and can
-// be changed at any time without leaving the screen. Nothing about where
-// a finger lands decides which bone moves.
-function renderMoveTargets() {
-  els.moveTargets.replaceChildren();
-
-  const targets = dragTargets();
-  if (targets.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'move-panel__empty';
-    empty.textContent = 'No bones yet.';
-    els.moveTargets.appendChild(empty);
-    return;
-  }
-
-  const activeId = getDragTargetId();
-  for (const { bone, depth } of targets) {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'chip';
-    chip.setAttribute('aria-pressed', String(bone.id === activeId));
-    chip.dataset.boneId = bone.id;
-
-    if (depth > 0) {
-      const marker = document.createElement('span');
-      marker.className = 'chip__depth';
-      marker.textContent = '└ ';
-      chip.appendChild(marker);
-    }
-    chip.appendChild(document.createTextNode(bone.name));
-    if (bone.physicsEnabled) {
-      const tag = document.createElement('span');
-      tag.className = 'chip__tag';
-      tag.textContent = 'spring';
-      chip.appendChild(tag);
-    }
-
-    chip.addEventListener('click', () => setDragTarget(bone.id));
-    els.moveTargets.appendChild(chip);
-  }
-}
-
 function bindEvents() {
   // FIRST, before the handlers that actually mutate: listeners on one
   // element fire in registration order, so the snapshot has to be taken
@@ -1331,9 +1284,6 @@ export function initUI() {
   subscribeRig(renderChrome);
   sceneStore.subscribe(renderChrome);
   history.subscribe(renderHistoryChrome);
-  subscribeTargets(() => {
-    if (currentState === AppState.ANIMATING) renderMoveTargets();
-  });
 
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();

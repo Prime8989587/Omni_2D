@@ -1,100 +1,88 @@
-// Free Move: posing the character by dragging it.
+// Free Move: moving the whole character.
 //
-// SELECTION FIRST, THEN DRAG ANYWHERE
+// ONE HANDLE, ONE MEANING
 //
-// The user picks which bone they are moving from a list of names, before
-// touching the canvas. After that, a drag ANYWHERE on the canvas moves
-// that bone. There is deliberately no hit-testing of any kind here: not
-// of bones, not of layers, not of pixels. Which bone moves is a decision
-// the user already made, not something inferred from where a fingertip
-// happened to land -- and on a phone, landing a fingertip on the right
-// piece of a character is exactly the fiddly problem this avoids.
+// Free Move has exactly one control: a big round handle riding on the
+// character's root bone. Drag it and the whole character moves. There is
+// nothing to choose and nothing to aim at -- no bone picker, no per-bone
+// gizmos, no hit-testing of layers or pixels. The handle is deliberately
+// far larger than Rig mode's precision handles, because this one is meant
+// to be grabbed with a thumb, mid-motion, without looking.
 //
 // WHAT A DRAG WRITES
 //
-// Exactly one number pair: the target bone's offset from its parent.
-// Every other bone is DERIVED from that, every frame, by the forward
-// kinematics the app already uses --
+// The ROOT BONE'S OWN position, directly. moveWorldHead() writes
+// bone.localHead, and for a root -- which has no parent to be relative to
+// -- that IS its world position. No delta is passed downstream to anyone.
+//
+// Every other bone then DERIVES its position from that, every frame, by
+// the forward kinematics the app already uses:
 //
 //   world head = parent's current world transform  x  stored rest offset
 //
-// so there is no separate "pose" to keep in sync with anything. A bone
-// without physics tracks its parent exactly, with no lag, because its
-// position is not integrated at all: it is recomputed from scratch each
-// time anything asks where it is. A bone WITH physics reads its target
-// from that same chain, live, and keeps its own simulated angle trailing
-// behind it, carrying on after the finger lifts.
-//
-// Writing the target's own offset is also what makes the two directions
-// come out right without a special case: everything BELOW it is expressed
-// relative to it and comes along, while everything ABOVE it is expressed
-// relative to ITS parent and is untouched. Drag the body and the whole
-// character moves; drag a hand and only the hand and its fingers move.
+// so a bone without physics tracks the root exactly, with no lag, because
+// its position is not integrated at all -- it is recomputed from scratch
+// each time anything asks where it is. A bone WITH physics reads its
+// target from that same chain, live, and keeps its own simulated angle
+// trailing behind, carrying on after the finger lifts.
 
 import { bonesStore } from './bones.js';
-import { partsStore } from './parts.js';
 import { view } from './view.js';
 import { history } from './history.js';
 import { appState, AppState } from './state.js';
 
-let targetId = null;
+// Rig mode's handles are 5-7px drawn with a 26px grab radius, sized for
+// placing a bone precisely. This one is for a thumb, so it is roughly
+// twice that across and easier to hit than to miss.
+export const MASTER_HANDLE_RADIUS_PX = 30;
+const MASTER_HANDLE_HIT_PX = 40;
+const EDGE_MARGIN_PX = MASTER_HANDLE_RADIUS_PX + 8;
+const TAP_SLOP_PX = 8;
+
 let drag = null;
-const listeners = new Set();
 
-function emit() {
-  listeners.forEach((listener) => listener());
-}
-
-export function subscribeTargets(listener) {
-  listeners.add(listener);
-  listener();
-  return () => listeners.delete(listener);
-}
-
-// Every bone is offered. A spring bone's ANGLE is simulated, but its
-// position is not, so moving one is still meaningful -- it is where that
-// hair or cloth hangs from. Hiding bones on a guess would be worse than
-// showing one the user turns out not to want.
-export function dragTargets() {
-  return bonesStore.toTreeList();
-}
-
-// The chosen bone, falling back to the root so the common case (move the
-// whole character) needs no setup. Also recovers if the chosen bone was
-// deleted while the picker was not looking.
-export function getDragTarget() {
-  const chosen = targetId ? bonesStore.byId(targetId) : null;
-  if (chosen) return chosen;
+// The character's root bone. Always the target; there is no other.
+export function masterBone() {
   const [root] = bonesStore.roots;
   return root || null;
 }
 
-export function getDragTargetId() {
-  const target = getDragTarget();
-  return target ? target.id : null;
+// Where the handle sits on screen: on the root bone, but kept inside the
+// canvas so that a character dragged off the edge can still be grabbed
+// and brought back.
+export function masterHandlePosition() {
+  const bone = masterBone();
+  if (!bone) return null;
+
+  const head = bonesStore.worldHead(bone);
+  const point = view.toScreen(head.x, head.y);
+  const maxX = Math.max(EDGE_MARGIN_PX, view.viewWidth - EDGE_MARGIN_PX);
+  const maxY = Math.max(EDGE_MARGIN_PX, view.viewHeight - EDGE_MARGIN_PX);
+  const x = Math.min(Math.max(point.x, EDGE_MARGIN_PX), maxX);
+  const y = Math.min(Math.max(point.y, EDGE_MARGIN_PX), maxY);
+  return { x, y, tethered: x !== point.x || y !== point.y };
 }
 
-export function setDragTarget(id) {
-  if (targetId === id) return;
-  targetId = id;
-  emit();
+export function isOnMasterHandle(screenPoint) {
+  const handle = masterHandlePosition();
+  if (!handle) return false;
+  return Math.hypot(screenPoint.x - handle.x, screenPoint.y - handle.y) <= MASTER_HANDLE_HIT_PX;
 }
 
 export function isPosing() {
   return drag !== null;
 }
 
-// Bone endpoints sit on pixel centres (the grid revision's rule), so a
-// dragged bone lands on whole pixels like a placed one does.
+// Bone endpoints sit on pixel centres (the grid revision's rule), so the
+// character lands on whole pixels however it is dragged.
 function snapToCell(point) {
   return { x: Math.floor(point.x) + 0.5, y: Math.floor(point.y) + 0.5 };
 }
 
 export function beginPoseDrag(bone, scenePoint) {
   if (drag || !bone) return;
-  // The offset is measured from wherever the finger went down, so the
-  // bone moves WITH the finger rather than jumping to it. Taken against
-  // the rest pose, which is what a drag writes.
+  // Offset from wherever the finger went down, so the character moves
+  // WITH the finger instead of snapping its root under it.
   const head = bonesStore.restWorldHead(bone);
   drag = {
     bone,
@@ -114,6 +102,7 @@ export function updatePoseDrag(scenePoint) {
   const head = bonesStore.restWorldHead(drag.bone);
   if (head.x === target.x && head.y === target.y) return;
 
+  // Writes the root bone's own position. Everything else derives from it.
   bonesStore.moveWorldHead(drag.bone, target.x, target.y);
   drag.moved = true;
 }
@@ -127,12 +116,19 @@ export function endPoseDrag() {
 // ---------------------------------------------------------------------------
 // Canvas input for the Free Move screen.
 
-function sceneFromEvent(canvasEl, event) {
+function screenFromEvent(canvasEl, event) {
   const rect = canvasEl.getBoundingClientRect();
-  return view.toScene(event.clientX - rect.left, event.clientY - rect.top);
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function sceneFromScreen(point) {
+  return view.toScene(point.x, point.y);
 }
 
 export function initPoseTool(canvasEl) {
+  let pointerDownScreen = null;
+  let pan = null;
+
   const active = () => appState.state === AppState.ANIMATING;
 
   canvasEl.addEventListener('pointerdown', (event) => {
@@ -140,40 +136,56 @@ export function initPoseTool(canvasEl) {
     // Two fingers belong to the camera (viewGestures pinches and pans).
     if (view.activePointerCount > 1) {
       endPoseDrag();
+      pointerDownScreen = null;
+      pan = null;
       return;
     }
-    const bone = getDragTarget();
-    if (!bone || partsStore.isEmpty) return;
-
     event.preventDefault();
     canvasEl.setPointerCapture(event.pointerId);
-    beginPoseDrag(bone, sceneFromEvent(canvasEl, event));
+
+    const screenPoint = screenFromEvent(canvasEl, event);
+    pointerDownScreen = screenPoint;
+    pan = null;
+
+    if (isOnMasterHandle(screenPoint)) {
+      beginPoseDrag(masterBone(), sceneFromScreen(screenPoint));
+    }
   });
 
   canvasEl.addEventListener('pointermove', (event) => {
-    if (!active() || !isPosing()) return;
+    if (!active() || !pointerDownScreen) return;
     if (view.activePointerCount > 1) {
       endPoseDrag();
       return;
     }
     event.preventDefault();
-    updatePoseDrag(sceneFromEvent(canvasEl, event));
+    const screenPoint = screenFromEvent(canvasEl, event);
+
+    if (isPosing()) {
+      updatePoseDrag(sceneFromScreen(screenPoint));
+      return;
+    }
+
+    // Anywhere off the handle, a finger pans the view -- the camera is
+    // not part of the rig, so this does not compete with the one control.
+    if (!pan) {
+      const moved = Math.hypot(screenPoint.x - pointerDownScreen.x, screenPoint.y - pointerDownScreen.y);
+      if (moved <= TAP_SLOP_PX) return;
+      pan = { lastX: pointerDownScreen.x, lastY: pointerDownScreen.y };
+    }
+    view.panBy(screenPoint.x - pan.lastX, screenPoint.y - pan.lastY);
+    pan.lastX = screenPoint.x;
+    pan.lastY = screenPoint.y;
   });
 
   const endPointer = () => {
     if (!active()) return;
     endPoseDrag();
+    if (pan) view.snapToDevicePixels();
+    pan = null;
+    pointerDownScreen = null;
   };
 
   canvasEl.addEventListener('pointerup', endPointer);
   canvasEl.addEventListener('pointercancel', endPointer);
-
-  // A deleted or reloaded skeleton must not leave the picker pointing at
-  // a bone that no longer exists.
-  bonesStore.subscribe(() => {
-    if (targetId && !bonesStore.byId(targetId)) {
-      targetId = null;
-      emit();
-    }
-  });
 }

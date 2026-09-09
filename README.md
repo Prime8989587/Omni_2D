@@ -31,10 +31,10 @@ a real, installable Android APK.
   "Re-assembling layers exported from another app").
   See "The pixel grid" below, which also lists what was
   re-verified from Parts 2–5 and the one gesture that changed.
-- **Part 6** (current) adds **Free Move**: pick which part you want to
-  move by name, then drag anywhere on the canvas and the whole rig
-  responds live — rigid bones in lockstep, spring bones trailing and
-  settling. See "Free Move: posing by hand" below.
+- **Part 6** (current) adds **Free Move**: one big handle on the
+  character moves the whole thing, live — rigid bones in lockstep, spring
+  bones trailing and settling. See "Free Move: moving the character"
+  below.
 - **Editor batch** makes it a tool you can actually work in:
   delete, reorder, duplicate, hide and lock layers; assign bones to layers
   and hide bone branches; **undo and redo everything**; and **save projects
@@ -69,8 +69,8 @@ www/js/rigTool.js       Touch handling for Bones: two-tap placement, handle drag
 www/js/bindTool.js      Touch handling for weights: the paint brush
 www/js/physics.js       The frame loop that keeps spring bones settling after
                          the input that disturbed them has stopped
-www/js/poseTool.js      Free Move: the chosen bone, dragged from anywhere on the
-                         canvas, drives the whole chain live
+www/js/poseTool.js      Free Move: the master handle on the root bone, and the
+                         drag that moves the whole character
 www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
 www/js/project.js       The whole scene as plain data and back — used by both
                          undo/redo and save/load, so there is one serializer
@@ -987,10 +987,10 @@ before you tune anything.
 
 ### Testing it by hand
 
-Go to **Animate**, pick the parent from the chip row, and drag anywhere on
-the canvas — the whole chain responds live and the spring bones trail (see
-"Free Move: posing by hand"). The **Debug: rotate** slider is still there
-in the bone editor when you want a precise angle rather than a fingertip.
+Go to **Animate** and drag the ✥ handle around — the whole character
+follows and the spring bones trail behind it (see "Free Move: moving the
+character"). The **Debug: rotate** slider is still there in the bone
+editor when you want a precise angle rather than a fingertip.
 
 Build a rig where the contrast is visible side by side:
 
@@ -1094,82 +1094,48 @@ two poses are the same thing.
 
 ---
 
-## Free Move: posing by hand
+## Free Move: moving the character
 
-Tap **Animate**. This is the screen for moving the character around, and
-it works in two steps: **say what you want to move, then drag**.
+Tap **Animate**. One large round handle with a four-way arrow sits on the
+character. Drag it and the whole character moves.
 
-### Step 1 — choose what moves
+That is the entire control surface. There is no bone list, no target to
+choose, no per-bone gizmos, and no hit-testing of layers or pixels. One
+handle, one meaning: *move the character*. It is roughly 60 pixels across,
+about four times the size of Rig mode's precision handles, because this
+one is meant to be grabbed with a thumb, in motion, without looking — and
+its grab area is more generous still, so being 30 px off centre still
+catches it.
 
-A row of chips under the canvas lists every bone in the rig by the names
-you gave them: `body`, `head`, `hair`. Tap one. That bone is now the drag
-target, and stays the target until you tap a different chip — you can
-change it at any time without leaving the screen.
+The handle rides on the character's **root bone**, so it is always where
+the character is. Drag the character past the edge of the canvas and the
+handle stays pinned just inside, drawn with a dashed ring to show it is
+waiting there rather than sitting on the character, so you can always grab
+it and bring the character back.
 
-The root is selected by default, so "move the whole character" needs no
-setup at all. Spring bones are listed too, tagged `spring`; their *angle*
-is simulated but their *position* is not, so moving one is still
-meaningful — it is where that hair or cloth hangs from.
-
-### Step 2 — drag anywhere
-
-Now drag **anywhere on the canvas**. Not on the bone; not on a particular
-layer; anywhere. The chosen bone moves with your finger.
-
-This is deliberate, and it is the whole point of the two-step design.
-Landing a fingertip precisely on a small piece of a pixel-art character —
-a hand, a strand of hair, a bone a few pixels long — is fiddly, and it is
-worse when pieces overlap. So Free Move does **no hit-testing at all**:
-not of bones, not of layers, not of pixels. Which bone moves was decided
-by a tap on a name, where there is no ambiguity and nothing to aim at.
-
-Two fingers still pinch to zoom and pan the view, and **⤢** re-fits.
+Dragging anywhere **off** the handle pans the view instead, and two
+fingers still pinch to zoom. **⤢** re-fits.
 
 ### What follows what
 
-- **The bone you chose** goes exactly where your finger goes, with no lag
-  at all — it is the input, so there is nothing for it to catch up with.
-  It lands on whole pixels, like every other bone endpoint.
-- **Bones under it without physics** move in perfect lockstep. Not "very
-  quickly": their positions are not simulated at all, they are recomputed
-  from the chain every time anything asks where they are, so a rigid
-  child is never even one frame behind its parent.
-- **Bones under it with physics** have their target recomputed from the
-  chain every frame too, but what gets *drawn* is the spring's own angle
-  trailing that target. They lean, swing past, and keep settling for a
-  moment after your finger lifts, then come to rest at exactly their own
-  correct position relative to the parent.
+The drag writes **the root bone's own position** — for a root, which has
+no parent to be relative to, its stored offset *is* its world position.
+Nothing is passed downstream as a delta. Every other bone then derives its
+own position from that, every frame:
+
+- **Bones without physics** move in perfect lockstep. Not "very quickly":
+  their positions are not simulated at all, they are recomputed from the
+  chain every time anything asks where they are, so a rigid bone is never
+  even one frame behind the root. Measured across every frame of a drag,
+  the deviation is exactly zero.
+- **Bones with physics** have their target recomputed from that same
+  chain, live, but what gets *drawn* is the spring's own angle trailing
+  the target. They lean, swing past, and keep settling for a moment after
+  your finger lifts, then come to rest at exactly their own correct
+  position relative to the root.
 
 Two spring bones on the same parent stay independent — a left one and a
 right one keep their own separate offsets and never drift together.
-
-### Choosing the root vs choosing a limb
-
-The two cases are deliberately different, and it falls out of the data
-rather than being special-cased:
-
-- **Choose the root** and the whole character moves. Everything else in
-  the skeleton is stored as an offset from something above it, so moving
-  the top moves all of it.
-- **Choose a hand**, or any other bone, and only that bone and what hangs
-  below it moves. Its parent chain does not budge, because a drag
-  rewrites the offset of *the chosen bone only* — the bones above it are
-  described relative to their own parents and are never touched.
-
-### Nothing to look at but the character
-
-Free Move draws **no skeleton**: no bone bodies, no handles, no parent
-links, not even a selection outline on a layer. The only bone-related
-thing on screen is the row of names. Bones are for Rig mode; this screen
-is for watching the character move.
-
-### Rig mode is for building, not posing
-
-Dragging in Rig mode does what it did in Part 3: the **handles** on a
-selected bone's head and tail author its rest pose, and dragging empty
-grid pans. Bones are not posed by grabbing them there — posing lives in
-Free Move. The **Debug: rotate** sliders remain in the bone editor for
-setting a precise angle.
 
 ### Sway: how much a bone minds being moved
 
@@ -1186,12 +1152,21 @@ when moved** slider in the physics controls sets how strongly:
 This is the same physics as the Gravity slider, which is a bone's response
 to a constant downward pull; Sway is its response to being moved.
 
+### Rig mode is for building, not moving
+
+Dragging in Rig mode does what it did in Part 3: the **handles** on a
+selected bone's head and tail author that bone's rest pose, and dragging
+empty grid pans. The master handle belongs to Free Move only. The
+**Debug: rotate** sliders remain in the bone editor for setting a precise
+angle.
+
 ### What it renders through
 
 Every frame of a drag goes through the same pixel-grid pipeline as
 everything else: the skinned mesh is snapped to whole pixels and drawn by
-the rasterizer. The artwork stays crisp and cell-aligned *during* the
-drag, not just once it settles.
+the rasterizer. The whole character — every layer — updates live, and the
+artwork stays crisp and cell-aligned *during* the drag, not just once it
+settles.
 
 ---
 
