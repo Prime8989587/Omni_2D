@@ -131,11 +131,16 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
     return mesh;
   }
 
+  // The REST skeleton, not wherever a spring bone happens to be swinging
+  // right now. The bind pose is the reference the deformation is measured
+  // against, so capturing a mid-jiggle pose would leave the artwork
+  // permanently skewed once the bone came back to rest -- and would break
+  // the invariant that a freshly bound part renders identically at rest.
   const segments = bones.map((bone) => ({
     id: bone.id,
-    head: bonesStore.worldHead(bone),
-    tail: bonesStore.worldTail(bone),
-    rotation: bonesStore.worldRotation(bone),
+    head: bonesStore.restWorldHead(bone),
+    tail: bonesStore.restWorldTail(bone),
+    rotation: bonesStore.restWorldRotation(bone),
   }));
 
   for (const segment of segments) {

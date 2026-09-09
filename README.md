@@ -1030,6 +1030,47 @@ The simulation runs continuously in its own frame loop, so a bone keeps
 settling after the input stops. Once everything has come to rest the loop
 sleeps, and any change wakes it again — an idle character costs nothing.
 
+### Where a spring bone settles
+
+**Exactly where it would be with physics off.** The spring changes how a
+bone *gets* somewhere, never where that somewhere is. Move the parent and
+the bone lags, swings past and wobbles; when it stops, it is back on its
+proper position relative to the parent — the same place a rigid bone would
+occupy — to within about a twentieth of a pixel. Move the parent back and
+it returns to exactly where it started.
+
+The one exception is **Gravity Influence above 0**, which is meant to hold
+the bone below its rigid position. That sag is stable: disturb the bone and
+it comes back to the same sagged angle, it does not creep further each time.
+
+Two bones hanging off the same parent keep their own separate offsets. Put
+one to the left and one to the right and they stay a left one and a right
+one through any amount of swinging — they never drift toward each other or
+collapse onto the parent.
+
+### The rest pose and the simulated pose
+
+A spring bone has two poses at once, and the difference matters when you
+edit a rig while it is moving:
+
+- Its **rest pose** — the position and angle stored relative to its parent.
+  This is what you author, and what the bone returns to.
+- Its **simulated pose** — where it is drawn at this instant, trailing the
+  rest pose while it catches up.
+
+Drawing, tapping and the artwork's deformation all use the *simulated*
+pose, so you see and touch the bone where it actually is. Everything that
+*records* a pose uses the *rest* pose: creating a bone, dragging a handle,
+nudging, deleting a bone (which re-parents its children), and binding a
+mesh. That split is deliberate. A stored offset measured against a
+swinging parent would have the swing baked into it permanently, and the
+bone would then settle somewhere it was never put.
+
+The practical consequence: if you drag a handle while the rig is still
+jiggling, you are editing the rest pose, so the bone springs to where you
+put it rather than landing there instantly. Wait for it to settle and the
+two poses are the same thing.
+
 ### Suggested test on your phone
 
 1. Build the two-sibling rig above and enable physics on one child.
@@ -1041,6 +1082,9 @@ sleeps, and any change wakes it again — an idle character costs nothing.
    skeleton puts it, then hold there.
 6. Bind a Part (Bind mode) and repeat — the artwork should lag with the
    bone rather than with the skeleton.
+7. With Gravity at 0, swing the parent right round and back to where it
+   started: every spring bone should end up exactly where it began, with
+   the pixels landing on the same cells as before.
 
 ---
 

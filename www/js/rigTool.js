@@ -100,7 +100,9 @@ export function beginPlaceBone() {
 
   // A child starts life attached to its parent's tail; it only needs a
   // tail point. The head can be dragged elsewhere on the parent after.
-  placement = { stage: 'tail', parentId: parent.id, head: bonesStore.worldTail(parent) };
+  // The parent's REST tail: this point becomes the new bone's stored
+  // offset, so taking it from a swinging parent would bake that swing in.
+  placement = { stage: 'tail', parentId: parent.id, head: bonesStore.restWorldTail(parent) };
   emit();
 }
 

@@ -372,8 +372,11 @@ function renderRigChrome() {
 
   if (bone && !status.placing) {
     if (els.boneNameInput.value !== bone.name) els.boneNameInput.value = bone.name;
-    const head = bonesStore.worldHead(bone);
-    const degrees = Math.round((bonesStore.worldRotation(bone) * 180) / Math.PI);
+    // The bone's REST pose: this readout sits beside the nudge buttons and
+    // describes the pose being authored, so it must not flicker with a
+    // spring's jiggle (and must match what a nudge actually changes).
+    const head = bonesStore.restWorldHead(bone);
+    const degrees = Math.round((bonesStore.restWorldRotation(bone) * 180) / Math.PI);
     els.boneReadout.textContent =
       `x ${Math.round(head.x)} · y ${Math.round(head.y)} · ${degrees}° · length ${Math.round(bone.length)}`;
 

@@ -49,15 +49,20 @@ export const PHYSICS_RANGES = Object.freeze({
 const MAX_FRAME_DT = 1 / 30;
 const MAX_SUBSTEP = 1 / 120;
 
-// Below these the bone counts as at rest and the frame loop may stop.
-// Set at the threshold of visibility rather than at true numerical zero:
-// a spring approaches its target exponentially, so waiting for machine
-// precision would keep a phone redrawing for seconds after the motion
-// became imperceptible. 0.02 rad/s is about 1 degree per second, and the
-// acceleration bound keeps the bone within a small fraction of a degree
-// of where it was heading.
-const SETTLE_VELOCITY = 0.02;
-const SETTLE_ACCELERATION = 0.05;
+// When the bone counts as at rest and the frame loop may stop.
+//
+// The test has to bound the bone's remaining DISTANCE from equilibrium,
+// not its raw acceleration. Acceleration is stiffness times that distance,
+// so a fixed acceleration bound means a soft spring may stop while still
+// far from where it belongs -- and it stays there, because the loop has
+// gone to sleep. A bone at stiffness 10 could park 4.5 degrees short.
+//
+// Near rest, distance-from-equilibrium is (|acceleration| + damping *
+// |velocity|) / stiffness, which is what SETTLE_ANGLE bounds. 0.0005 rad
+// is 0.03 degrees: about 1/20 of a pixel at the tip of a 100px bone, so
+// under the grid's resolution however the artwork is snapped.
+const SETTLE_ANGLE = 0.0005;
+const SETTLE_VELOCITY = 0.004; // rad/s -- also stops it sleeping mid-coast
 
 export class Bone {
   constructor({ name, parentId = null, localHead, rotation = 0, length = 0 }) {
@@ -225,12 +230,51 @@ class BonesStore {
     return transforms;
   }
 
+  // ---- The REST pose ----------------------------------------------------
+  //
+  // worldRotation() and worldHead() report where a bone IS -- for a spring
+  // bone, mid-jiggle. That is right for drawing, hit-testing and skinning.
+  //
+  // It is exactly wrong for AUTHORING. A bone's stored transform is an
+  // offset from its parent, and that offset has to be measured against the
+  // parent's REST pose. Measure it against a parent that happens to be
+  // swinging and the swing is baked into the stored offset permanently:
+  // the bone then settles somewhere it was never put.
+  //
+  // So every capture -- creating a bone, dragging a handle, nudging,
+  // re-parenting, binding a mesh -- goes through these, which walk the
+  // hierarchy ignoring the simulation entirely.
+
+  restWorldRotation(bone) {
+    const parent = this.parentOf(bone);
+    return parent ? this.restWorldRotation(parent) + bone.rotation : bone.rotation;
+  }
+
+  restWorldHead(bone) {
+    const parent = this.parentOf(bone);
+    if (!parent) return { x: bone.localHead.x, y: bone.localHead.y };
+
+    const parentHead = this.restWorldHead(parent);
+    const offset = rotatePoint(bone.localHead.x, bone.localHead.y, this.restWorldRotation(parent));
+    return { x: parentHead.x + offset.x, y: parentHead.y + offset.y };
+  }
+
+  restWorldTail(bone) {
+    const head = this.restWorldHead(bone);
+    const angle = this.restWorldRotation(bone);
+    return {
+      x: head.x + bone.length * Math.cos(angle),
+      y: head.y + bone.length * Math.sin(angle),
+    };
+  }
+
   // Converts a world point into the coordinate frame a child of `parent`
-  // is stored in. With no parent, the frame is world space.
+  // is stored in, using the parent's REST pose. With no parent, the frame
+  // is world space.
   toParentSpace(parent, x, y) {
     if (!parent) return { x, y };
-    const parentHead = this.worldHead(parent);
-    return rotatePoint(x - parentHead.x, y - parentHead.y, -this.worldRotation(parent));
+    const parentHead = this.restWorldHead(parent);
+    return rotatePoint(x - parentHead.x, y - parentHead.y, -this.restWorldRotation(parent));
   }
 
   // ---- Mutations ---------------------------------------------------------
@@ -247,7 +291,7 @@ class BonesStore {
       name: name || `Bone_${nextBoneNumber++}`,
       parentId: parent ? parent.id : null,
       localHead: this.toParentSpace(parent, head.x, head.y),
-      rotation: parent ? worldAngle - this.worldRotation(parent) : worldAngle,
+      rotation: parent ? worldAngle - this.restWorldRotation(parent) : worldAngle,
       length: Math.hypot(dx, dy),
     });
 
@@ -273,20 +317,27 @@ class BonesStore {
   // head to a different attachment point on its parent re-aims the bone
   // rather than dragging the whole chain along.
   setWorldHead(bone, x, y) {
-    const tail = this.worldTail(bone);
+    // The bone's REST tail, not the swinging one it is drawn at: dragging
+    // a head re-aims the bone's rest pose, and the spring then animates
+    // toward it. Reading the live tail here would fold the current jiggle
+    // into the stored rotation and move the bone permanently.
+    const tail = this.restWorldTail(bone);
     bone.localHead = this.toParentSpace(this.parentOf(bone), x, y);
     this.setWorldTail(bone, tail.x, tail.y);
   }
 
   // Moves the tail, which is what defines the bone's rotation and length.
   setWorldTail(bone, x, y) {
-    const head = this.worldHead(bone);
+    const head = this.restWorldHead(bone);
     const dx = x - head.x;
     const dy = y - head.y;
     const parent = this.parentOf(bone);
 
     bone.length = Math.hypot(dx, dy);
-    bone.rotation = Math.atan2(dy, dx) - (parent ? this.worldRotation(parent) : 0);
+    // Relative to the parent's REST rotation. Against a simulated parent
+    // this would store "rest offset plus whatever the parent's swing
+    // happened to be", which never comes back to the right place.
+    bone.rotation = Math.atan2(dy, dx) - (parent ? this.restWorldRotation(parent) : 0);
     this._emit('transform');
   }
 
@@ -294,7 +345,7 @@ class BonesStore {
   // follows, so the whole bone (and its children) translate together.
   nudgePosition(bone, dx, dy) {
     const parent = this.parentOf(bone);
-    const head = this.worldHead(bone);
+    const head = this.restWorldHead(bone);
     bone.localHead = this.toParentSpace(parent, head.x + dx, head.y + dy);
     this._emit('transform');
   }
@@ -319,8 +370,8 @@ class BonesStore {
     for (const child of this.childrenOf(id)) {
       // Capture where the child sits now, re-parent, then restore it, so
       // the child does not jump when its frame of reference changes.
-      const head = this.worldHead(child);
-      const tail = this.worldTail(child);
+      const head = this.restWorldHead(child);
+      const tail = this.restWorldTail(child);
 
       child.parentId = newParent ? newParent.id : null;
       child.localHead = this.toParentSpace(newParent, head.x, head.y);
@@ -409,10 +460,14 @@ class BonesStore {
       bone.angularVelocity += acceleration * h;
       bone.simWorldRotation += bone.angularVelocity * h;
 
-      if (
-        Math.abs(bone.angularVelocity) > SETTLE_VELOCITY ||
-        Math.abs(acceleration) > SETTLE_ACCELERATION
-      ) {
+      // How far the bone still is from where it will end up, in radians.
+      // Dividing by stiffness is what makes this hold for a limp spring as
+      // well as a tight one.
+      const stiffness = Math.max(bone.stiffness, 1e-6);
+      const distanceFromRest =
+        (Math.abs(acceleration) + bone.damping * Math.abs(bone.angularVelocity)) / stiffness;
+
+      if (distanceFromRest > SETTLE_ANGLE || Math.abs(bone.angularVelocity) > SETTLE_VELOCITY) {
         active = true;
       }
     }
