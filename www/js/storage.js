@@ -14,6 +14,10 @@ const DB_VERSION = 1;
 const PROJECTS = 'projects';
 const RECOVERY = 'recovery';
 const RECOVERY_KEY = 'autosave';
+// A state the user deliberately marked as the one to come back to. Kept
+// beside the auto-save rather than among the named projects: it is not a
+// project you open, it is an undo rope for the current one.
+const RESTORE_KEY = 'restore-point';
 
 let dbPromise = null;
 
@@ -104,6 +108,25 @@ export function loadRecovery() {
 export function clearRecovery() {
   return runTransaction(RECOVERY, 'readwrite', (store) => {
     store.delete(RECOVERY_KEY);
+    return true;
+  });
+}
+
+export function saveRestorePoint(data, label = null) {
+  const record = { key: RESTORE_KEY, savedAt: Date.now(), label, data };
+  return runTransaction(RECOVERY, 'readwrite', (store) => {
+    store.put(record);
+    return record;
+  });
+}
+
+export function loadRestorePoint() {
+  return runTransaction(RECOVERY, 'readonly', (store) => wrap(store.get(RESTORE_KEY)));
+}
+
+export function clearRestorePoint() {
+  return runTransaction(RECOVERY, 'readwrite', (store) => {
+    store.delete(RESTORE_KEY);
     return true;
   });
 }

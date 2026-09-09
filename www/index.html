@@ -181,6 +181,17 @@
         <button id="stopBtn" class="btn btn--flourish" type="button" disabled>Stop</button>
       </div>
 
+      <div id="stateRow" class="control-row state-row" hidden>
+        <button id="stateMenuBtn" class="btn btn--round" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Saved state menu" title="Saved state">&#8801;</button>
+        <span class="state-row__label">Saved state</span>
+      </div>
+
+      <div id="stateMenu" class="state-menu" hidden>
+        <button id="stateSaveBtn" class="state-menu__item" type="button">Save</button>
+        <button id="stateReverseBtn" class="state-menu__item" type="button">Reverse</button>
+        <button id="stateDiscardBtn" class="state-menu__item state-menu__item--danger" type="button">Discard</button>
+      </div>
+
       <div id="movePad" class="move-pad" role="application" aria-label="Drag to move the character" hidden>
         <span class="move-pad__glyph" aria-hidden="true">&#10021;</span>
         <span class="move-pad__label">Drag here — keeps your finger off the character</span>
@@ -257,6 +268,17 @@
         <div class="modal__actions">
           <button id="restoreRecoveryBtn" class="btn btn--flourish" type="button">Restore</button>
           <button id="discardRecoveryBtn" class="btn btn--cancel" type="button">Discard</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stateConfirmModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="stateConfirmTitle">
+        <h2 id="stateConfirmTitle" class="modal__title">Save this state?</h2>
+        <p id="stateConfirmMessage" class="modal__text"></p>
+        <div class="modal__actions">
+          <button id="stateConfirmOkBtn" class="btn btn--flourish" type="button">Save</button>
+          <button id="stateConfirmCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
         </div>
       </div>
     </div>

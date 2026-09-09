@@ -840,3 +840,68 @@ button.physics-toggle.is-active {
   letter-spacing: 0.03em;
   opacity: 0.85;
 }
+
+/* ---------- Saved-state menu ---------- */
+
+.state-row {
+  margin-top: 12px;
+  gap: 10px;
+}
+
+.state-row__label {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  opacity: 0.8;
+}
+
+/* A circle, so it reads as a menu affordance rather than another action
+   button in the row above it. */
+.btn--round {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.state-menu {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  border: 2px solid var(--color-accent);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.state-menu__item {
+  padding: 14px 18px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 46, 147, 0.35);
+  background: var(--color-bg);
+  color: var(--color-accent);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.state-menu__item:last-child {
+  border-bottom: 0;
+}
+
+.state-menu__item:active {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.state-menu__item:disabled {
+  opacity: 0.4;
+}
+
+.state-menu__item--danger {
+  color: var(--color-danger, #FF7A2E);
+}

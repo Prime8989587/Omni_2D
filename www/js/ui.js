@@ -36,6 +36,9 @@ let bindListTab = 'parts'; // which list the Bind panel is showing
 let densitySyncedFor = null; // part id the density slider currently reflects
 let pendingDeletePartId = null;
 let currentProjectName = null; // the named project this session is editing
+let stateMenuOpen = false;
+let restorePoint = null; // the state "Reverse" comes back to
+let pendingStateAction = null;
 
 function cacheElements() {
   els.canvas = document.getElementById('canvas');
@@ -159,6 +162,17 @@ function cacheElements() {
   els.inertiaValue = document.getElementById('inertiaValue');
   els.animateHint = document.getElementById('animateHint');
   els.movePad = document.getElementById('movePad');
+  els.stateRow = document.getElementById('stateRow');
+  els.stateMenuBtn = document.getElementById('stateMenuBtn');
+  els.stateMenu = document.getElementById('stateMenu');
+  els.stateSaveBtn = document.getElementById('stateSaveBtn');
+  els.stateReverseBtn = document.getElementById('stateReverseBtn');
+  els.stateDiscardBtn = document.getElementById('stateDiscardBtn');
+  els.stateConfirmModal = document.getElementById('stateConfirmModal');
+  els.stateConfirmTitle = document.getElementById('stateConfirmTitle');
+  els.stateConfirmMessage = document.getElementById('stateConfirmMessage');
+  els.stateConfirmOkBtn = document.getElementById('stateConfirmOkBtn');
+  els.stateConfirmCancelBtn = document.getElementById('stateConfirmCancelBtn');
 
   els.confirmModal = document.getElementById('confirmModal');
   els.confirmMessage = document.getElementById('confirmMessage');
@@ -212,7 +226,12 @@ async function handleFilesPicked(event) {
   history.commitCapture(importToken, result.imported > 0);
   // Importing artwork is the most expensive thing to lose, so it does not
   // wait for the debounce.
-  if (result.imported > 0) autoSaveNow('import');
+  if (result.imported > 0) {
+    autoSaveNow('import');
+    // The first import IS the original state, so Reverse works without
+    // anyone having thought to press Save beforehand.
+    if (!restorePoint) writeRestorePoint('as imported');
+  }
 
   // Reset so picking the same file again still fires a change event.
   els.fileInput.value = '';
@@ -934,6 +953,7 @@ function renderChrome() {
 
   renderRigChrome();
   renderBindChrome();
+  renderStateChrome();
 }
 
 // ---- Undo / redo -------------------------------------------------------
@@ -1143,6 +1163,122 @@ async function discardRecovery() {
   }
 }
 
+// ---- Saved state: Save / Reverse / Discard ----------------------------
+//
+// One state the user can come back to. It is captured automatically the
+// first time artwork is imported, so "Reverse" means "how it was when I
+// uploaded it" without anyone having to think about it in advance, and a
+// deliberate Save overwrites it with whatever they like better.
+
+function renderStateChrome() {
+  const isAnimating = currentState === AppState.ANIMATING;
+  els.stateRow.hidden = !isAnimating;
+  if (!isAnimating) stateMenuOpen = false;
+  els.stateMenu.hidden = !stateMenuOpen;
+  els.stateMenuBtn.setAttribute('aria-expanded', String(stateMenuOpen));
+  els.stateReverseBtn.disabled = !restorePoint;
+  els.stateReverseBtn.textContent = restorePoint ? 'Reverse' : 'Reverse (nothing saved yet)';
+  els.stateDiscardBtn.disabled = partsStore.isEmpty && bonesStore.isEmpty;
+}
+
+function toggleStateMenu() {
+  stateMenuOpen = !stateMenuOpen;
+  renderStateChrome();
+}
+
+function askState({ title, message, confirmLabel, danger, onConfirm }) {
+  pendingStateAction = onConfirm;
+  els.stateConfirmTitle.textContent = title;
+  els.stateConfirmMessage.textContent = message;
+  els.stateConfirmOkBtn.textContent = confirmLabel;
+  els.stateConfirmOkBtn.classList.toggle('btn--danger', Boolean(danger));
+  els.stateConfirmOkBtn.classList.toggle('btn--flourish', !danger);
+  els.stateConfirmModal.hidden = false;
+}
+
+function closeStateConfirm() {
+  pendingStateAction = null;
+  els.stateConfirmModal.hidden = true;
+}
+
+function runStateAction() {
+  const action = pendingStateAction;
+  closeStateConfirm();
+  if (action) action();
+}
+
+// Keeps the in-memory copy and the stored one together, so the state
+// survives closing the app.
+async function writeRestorePoint(label) {
+  const data = serializeProject({ copyPixels: true });
+  restorePoint = { label, savedAt: Date.now(), data };
+  renderStateChrome();
+  try {
+    await storage.saveRestorePoint(data, label);
+  } catch (error) {
+    console.warn('Could not store the restore point', error);
+  }
+}
+
+function handleStateSave() {
+  stateMenuOpen = false;
+  askState({
+    title: 'Save this state?',
+    message: restorePoint
+      ? 'This replaces the state Reverse comes back to. The one you saved before is gone.'
+      : 'Reverse will bring the character back to exactly this arrangement.',
+    confirmLabel: 'Save',
+    onConfirm: async () => {
+      await writeRestorePoint('saved');
+      showToast('Saved. Reverse comes back here.');
+    },
+  });
+  renderStateChrome();
+}
+
+function handleStateReverse() {
+  stateMenuOpen = false;
+  renderStateChrome();
+  if (!restorePoint) {
+    showToast('Nothing saved yet — use Save first.');
+    return;
+  }
+  history.run('Reverse to saved state', () => applyProject(restorePoint.data));
+  view.fit();
+  showToast('Back to the saved state. Press ↶ to undo.');
+}
+
+function handleStateDiscard() {
+  stateMenuOpen = false;
+  renderStateChrome();
+  askState({
+    title: 'Discard everything?',
+    message:
+      'This removes every layer and every bone, leaving an empty canvas. ' +
+      'Your saved projects are not touched, and ↶ undoes it — but nothing else will bring it back.',
+    confirmLabel: 'Discard everything',
+    danger: true,
+    onConfirm: () => {
+      history.run('Discard everything', () => {
+        partsStore.replaceAll([], null);
+        bonesStore.replaceAll([], null);
+      });
+      appState.exitAnimateMode(); // nothing left to move; back to Home
+      showToast('Everything discarded. Press ↶ to undo.');
+    },
+  });
+}
+
+async function loadRestorePointFromStorage() {
+  try {
+    const record = await storage.loadRestorePoint();
+    if (record && record.data) restorePoint = record;
+  } catch (error) {
+    console.warn('Could not read the restore point', error);
+  }
+  renderStateChrome();
+}
+
 function bindEvents() {
   // FIRST, before the handlers that actually mutate: listeners on one
   // element fire in registration order, so the snapshot has to be taken
@@ -1222,6 +1358,13 @@ function bindEvents() {
   els.deletePartWithBonesBtn.addEventListener('click', () => completeDeletePart(true));
   els.deletePartCancelBtn.addEventListener('click', cancelDeletePart);
 
+  els.stateMenuBtn.addEventListener('click', toggleStateMenu);
+  els.stateSaveBtn.addEventListener('click', handleStateSave);
+  els.stateReverseBtn.addEventListener('click', handleStateReverse);
+  els.stateDiscardBtn.addEventListener('click', handleStateDiscard);
+  els.stateConfirmOkBtn.addEventListener('click', runStateAction);
+  els.stateConfirmCancelBtn.addEventListener('click', closeStateConfirm);
+
   els.undoBtn.addEventListener('click', handleUndo);
   els.redoBtn.addEventListener('click', handleRedo);
   els.boneLayerSelect.addEventListener('change', handleBoneLayerChange);
@@ -1296,4 +1439,5 @@ export function initUI() {
 
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();
+  loadRestorePointFromStorage();
 }

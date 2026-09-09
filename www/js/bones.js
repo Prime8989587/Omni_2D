@@ -374,6 +374,20 @@ class BonesStore {
     this._emit('transform');
   }
 
+  // Shifts every ROOT bone by the same amount, which carries the entire
+  // skeleton: each root's children are stored relative to it, so they come
+  // along for free. Moving the character means moving all of it, and a rig
+  // can legitimately have more than one parentless bone -- a stray root,
+  // or children orphaned by deleting a root -- which would otherwise be
+  // left standing where they were while the rest of the body walked off.
+  translateRoots(dx, dy) {
+    if (dx === 0 && dy === 0) return;
+    for (const bone of this.roots) {
+      bone.localHead = { x: bone.localHead.x + dx, y: bone.localHead.y + dy };
+    }
+    this._emit('transform');
+  }
+
   // Places the bone's head at a world point, keeping its rotation and
   // length -- so the bone and everything under it translate together while
   // its parent chain stays exactly where it is. This is what a live drag

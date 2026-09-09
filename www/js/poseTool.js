@@ -10,14 +10,25 @@
 // It does exactly the same thing, and exists so the character can be
 // thrown about and watched jiggling without a thumb parked on top of it.
 //
-// WHAT A DRAG WRITES
+// WHAT A DRAG MOVES
 //
-// The ROOT BONE'S OWN position, directly. moveWorldHead() writes
-// bone.localHead, and for a root -- which has no parent to be relative to
-// -- that IS its world position. No delta is passed downstream to anyone.
+// The whole character, which means three things and not just one:
 //
-// Every other bone then DERIVES its position from that, every frame, by
-// the forward kinematics the app already uses:
+//   * EVERY root bone's own position, written directly (a root's stored
+//     offset IS its world position, having no parent to be relative to).
+//     Not one chosen root: a rig can have several parentless bones, and
+//     the ones that were not chosen used to stand still while the rest of
+//     the body walked away from them.
+//   * Everything under those roots, which follows for free.
+//   * Every layer NOT bound to the skeleton. A bound layer follows its
+//     bones through skinning, but an unbound one is drawn at its own
+//     coordinates, so it used to sit pinned in place -- which looked for
+//     all the world like something invisible holding it there. Plenty of
+//     pieces are meant to be carried along exactly as drawn rather than
+//     bent or bounced, and this is what carries them.
+//
+// Everything under a root DERIVES its position, every frame, from the
+// forward kinematics the app already uses:
 //
 //   world head = parent's current world transform  x  stored rest offset
 //
@@ -28,6 +39,7 @@
 // trailing behind, carrying on after the finger lifts.
 
 import { bonesStore } from './bones.js';
+import { partsStore } from './parts.js';
 import { view } from './view.js';
 import { history } from './history.js';
 import { appState, AppState } from './state.js';
@@ -64,14 +76,17 @@ function snapToCell(point) {
 }
 
 export function beginPoseDrag(bone, scenePoint) {
-  if (drag || !bone) return;
-  // Offset from wherever the finger went down, so the character moves
-  // WITH the finger instead of snapping its root under it.
-  const head = bonesStore.restWorldHead(bone);
+  if (drag) return;
+  // A reference point the finger carries. It is a root bone's own
+  // position when there is a rig, so the drag still writes root data;
+  // with no bones at all it is just the finger, so unbound artwork can
+  // still be pushed around.
+  const anchor = bone ? bonesStore.restWorldHead(bone) : snapToCell(scenePoint);
   drag = {
-    bone,
-    offsetX: head.x - scenePoint.x,
-    offsetY: head.y - scenePoint.y,
+    offsetX: anchor.x - scenePoint.x,
+    offsetY: anchor.y - scenePoint.y,
+    lastX: anchor.x,
+    lastY: anchor.y,
     token: history.capture('Move character'),
     moved: false,
   };
@@ -83,11 +98,16 @@ export function updatePoseDrag(scenePoint) {
     x: scenePoint.x + drag.offsetX,
     y: scenePoint.y + drag.offsetY,
   });
-  const head = bonesStore.restWorldHead(drag.bone);
-  if (head.x === target.x && head.y === target.y) return;
+  const dx = target.x - drag.lastX;
+  const dy = target.y - drag.lastY;
+  if (dx === 0 && dy === 0) return;
+  drag.lastX = target.x;
+  drag.lastY = target.y;
 
-  // Writes the root bone's own position. Everything else derives from it.
-  bonesStore.moveWorldHead(drag.bone, target.x, target.y);
+  // Whole numbers of grid cells, applied to everything the character is
+  // made of.
+  bonesStore.translateRoots(dx, dy);
+  partsStore.translateUnbound(dx, dy);
   drag.moved = true;
 }
 

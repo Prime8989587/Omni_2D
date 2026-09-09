@@ -1121,12 +1121,29 @@ thing:
 
 Two fingers pinch to zoom and pan the view; **⤢** re-fits.
 
+### What moves
+
+**All of it.** A drag shifts three things by the same whole number of
+grid cells:
+
+- **Every root bone's own position** (a root has no parent, so its stored
+  offset *is* its world position). Every root, not one — a rig can have
+  several parentless bones, and the others used to stand still while the
+  rest of the body walked off.
+- **Everything hanging under those roots**, which follows for free.
+- **Every layer that is not bound to the skeleton.** A bound layer follows
+  its bones through skinning; an unbound one is drawn at its own
+  coordinates, so it used to sit pinned in place while the rest of the
+  character left without it. Plenty of pieces are meant to be carried
+  along exactly as drawn rather than bent or bounced, and this carries
+  them.
+
+None of this needs physics switched on anywhere. Physics only decides
+whether a piece *trails* as it travels.
+
 ### What follows what
 
-The drag writes **the root bone's own position** — the root is the bone
-with no parent, and for a bone with no parent its stored offset *is* its
-world position. Nothing is passed downstream as a delta. Every other bone
-derives its own position from that, every frame:
+Every bone under a root derives its own position from it, every frame:
 
 - **Bones without physics** move in perfect lockstep. Not "very quickly":
   their positions are not simulated at all, they are recomputed from the
@@ -1142,16 +1159,38 @@ derives its own position from that, every frame:
 Two spring bones on the same parent stay independent — a left one and a
 right one keep their own separate offsets and never drift together.
 
-Which bone the drag moves depends on **one thing only**: being the bone
-with no parent. Not its rotation, not its length, not which of its two
-ends is called the head. Draw the root upside down and it is still the
-root.
+**A spring bone dragged along its own length barely swings, and that is
+correct.** A pendulum shoved straight along the direction it points gets
+almost no turning force; push it sideways and it swings properly. So a
+bone can look inert for one direction of travel and lively for another.
+If a piece never moves *at all*, in any direction, it isn't physics —
+it's an unbound layer, which now travels with the character anyway.
 
 ### Nothing on screen but the character
 
 Free Move draws no skeleton and no controls over the artwork: no bone
 bodies, no handles, no parent links, not even a selection outline on a
 layer. The canvas shows the character and the checkerboard, full stop.
+
+### Saved state: Save, Reverse, Discard
+
+The round **≡** button under the Start/Stop row opens a small menu with
+one job: getting back to a state you liked.
+
+- **Save** — marks the current arrangement as the one to come back to. It
+  asks first, so a mispress costs nothing.
+- **Reverse** — puts the character back to that saved arrangement. It is
+  available immediately after importing without saving anything, because
+  **the moment you import artwork is captured automatically** — so
+  Reverse means "how it was when I uploaded it" until you save something
+  you prefer.
+- **Discard** — removes every layer and every bone, leaving an empty
+  canvas. It warns first, and it does not touch your saved projects.
+
+All three are ordinary undoable actions, so **↶** takes back a Reverse or
+a Discard. The saved state is stored on the device alongside the
+auto-save, so it survives closing the app, and it is separate from the
+named projects in **Open**.
 
 ### Sway: how much a bone minds being moved
 

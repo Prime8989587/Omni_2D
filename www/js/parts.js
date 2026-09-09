@@ -274,6 +274,24 @@ class PartsStore {
     return `${base}_${n}`;
   }
 
+  // Shifts every layer that is NOT bound to the skeleton. A bound layer
+  // already follows its bones through skinning; an unbound one is drawn
+  // at its own coordinates and would otherwise sit pinned in place while
+  // the rest of the character moved away from it. Not every piece is
+  // meant to bend or bounce -- plenty are meant to be carried along
+  // exactly as drawn -- and this is what carries them.
+  translateUnbound(dx, dy) {
+    if (dx === 0 && dy === 0) return;
+    let moved = false;
+    for (const part of this._parts) {
+      if (part.mesh && part.mesh.isBound) continue;
+      part.x += dx;
+      part.y += dy;
+      moved = true;
+    }
+    if (moved) this._emit('transform');
+  }
+
   setVisible(id, visible) {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part || part.visible === visible) return;
