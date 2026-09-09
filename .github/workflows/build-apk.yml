@@ -58,6 +58,12 @@ jobs:
           path: android/app/build/outputs/apk/debug/Omni_2D.apk
           retention-days: 30
 
+      - name: Remove stale asset name from a previous release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete-asset latest-debug-build app-debug.apk --repo ${{ github.repository }} -y || true
+
       - name: Publish/update "latest debug build" release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
