@@ -64,6 +64,28 @@
             <button id="rotateCcwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone counter-clockwise">&#8634;</button>
             <button id="rotateCwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone clockwise">&#8635;</button>
           </div>
+
+          <label class="slider-field slider-field--wide">
+            <span>Debug: rotate <b id="rigDebugValue">0°</b></span>
+            <input id="rigDebugSlider" class="slider" type="range" min="-180" max="180" step="1" />
+          </label>
+
+          <button id="physicsToggle" class="segmented__btn physics-toggle" type="button" aria-pressed="false">Enable Physics</button>
+
+          <div id="physicsParams" hidden>
+            <label class="slider-field slider-field--wide">
+              <span>Stiffness <b id="stiffnessValue">180</b></span>
+              <input id="stiffnessSlider" class="slider" type="range" />
+            </label>
+            <label class="slider-field slider-field--wide">
+              <span>Damping <b id="dampingValue">8</b></span>
+              <input id="dampingSlider" class="slider" type="range" />
+            </label>
+            <label class="slider-field slider-field--wide">
+              <span>Gravity <b id="gravityValue">0</b></span>
+              <input id="gravitySlider" class="slider" type="range" />
+            </label>
+          </div>
         </div>
 
         <button id="skeletonToggle" class="scene-panel__header" type="button" aria-expanded="true" aria-controls="boneList">

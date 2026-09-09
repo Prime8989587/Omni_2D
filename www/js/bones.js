@@ -19,6 +19,37 @@
 let nextId = 1;
 let nextBoneNumber = 1;
 
+// Spring defaults chosen so switching physics on looks obviously springy
+// straight away rather than either dead or unstable. Stiffness 180 gives a
+// natural frequency of sqrt(180) ~ 13 rad/s (about 2 Hz); damping 8 against
+// a critical damping of 2*sqrt(180) ~ 26.8 is a damping ratio near 0.3, so
+// it visibly overshoots a couple of times and settles in about a second.
+export const DEFAULT_STIFFNESS = 180;
+export const DEFAULT_DAMPING = 8;
+export const DEFAULT_GRAVITY = 0;
+
+export const PHYSICS_RANGES = Object.freeze({
+  stiffness: { min: 10, max: 600, step: 5 },
+  damping: { min: 0.5, max: 40, step: 0.5 },
+  gravityInfluence: { min: 0, max: 60, step: 1 },
+});
+
+// A long stall (backgrounded app) must not be integrated as one huge step,
+// and each substep stays small enough for the integrator to stay stable
+// even at maximum stiffness.
+const MAX_FRAME_DT = 1 / 30;
+const MAX_SUBSTEP = 1 / 120;
+
+// Below these the bone counts as at rest and the frame loop may stop.
+// Set at the threshold of visibility rather than at true numerical zero:
+// a spring approaches its target exponentially, so waiting for machine
+// precision would keep a phone redrawing for seconds after the motion
+// became imperceptible. 0.02 rad/s is about 1 degree per second, and the
+// acceleration bound keeps the bone within a small fraction of a degree
+// of where it was heading.
+const SETTLE_VELOCITY = 0.02;
+const SETTLE_ACCELERATION = 0.05;
+
 export class Bone {
   constructor({ name, parentId = null, localHead, rotation = 0, length = 0 }) {
     this.id = `bone_${nextId++}`;
@@ -28,14 +59,32 @@ export class Bone {
     this.rotation = rotation; // radians, relative to the parent's world rotation
     this.length = length;
 
-    // FUTURE HOOK: mesh binding (Part 4) will reference bones by id to
-    // build vertex weight associations. Nothing here assumes a bone maps
-    // to exactly one Part.
+    // Optional spring physics. Off by default -- a head or torso should
+    // move rigidly with its parent; only loose things (hair, chest, cloth)
+    // want to lag and jiggle.
+    this.physicsEnabled = false;
+    this.stiffness = DEFAULT_STIFFNESS;
+    this.damping = DEFAULT_DAMPING;
+    this.gravityInfluence = DEFAULT_GRAVITY;
+
+    // Simulation state. simWorldRotation is the angle the bone is actually
+    // drawn at, which trails the target that forward kinematics asks for.
+    // null means "not yet initialized"; it is seeded from the target the
+    // moment physics is switched on.
+    this.simWorldRotation = null;
+    this.angularVelocity = 0;
   }
 
   get isRoot() {
     return this.parentId === null;
   }
+}
+
+function normalizeAngle(angle) {
+  let result = angle;
+  while (result > Math.PI) result -= 2 * Math.PI;
+  while (result < -Math.PI) result += 2 * Math.PI;
+  return result;
 }
 
 function rotatePoint(x, y, angle) {
@@ -102,9 +151,26 @@ class BonesStore {
   // dozen bones deep at most, so this stays far cheaper than maintaining
   // and invalidating a cache.
 
-  worldRotation(bone) {
+  // Where forward kinematics says this bone should be: the parent's
+  // current world rotation plus this bone's own local rotation. Physics
+  // never changes the target -- only how quickly the bone reaches it.
+  targetWorldRotation(bone) {
     const parent = this.parentOf(bone);
     return parent ? this.worldRotation(parent) + bone.rotation : bone.rotation;
+  }
+
+  // Where the bone actually is. For a physics bone that is the simulated
+  // angle trailing the target; for everything else the two are identical.
+  //
+  // Every consumer goes through here -- child head positions, the bone
+  // gizmos, hit testing, and snapshotTransforms() feeding mesh skinning --
+  // so the lag propagates through the whole chain and into the deformed
+  // artwork without any of those callers knowing physics exists.
+  worldRotation(bone) {
+    if (bone.physicsEnabled && bone.simWorldRotation !== null) {
+      return bone.simWorldRotation;
+    }
+    return this.targetWorldRotation(bone);
   }
 
   worldHead(bone) {
@@ -244,6 +310,94 @@ class BonesStore {
     this._bones = this._bones.filter((candidate) => candidate.id !== id);
     if (this._selectedId === id) this._selectedId = null;
     this._emit('structure');
+  }
+
+  // ---- Spring physics ----------------------------------------------------
+
+  setPhysicsEnabled(id, enabled) {
+    const bone = this.byId(id);
+    if (!bone) return;
+
+    bone.physicsEnabled = enabled;
+    // Seed the simulation at the target so switching physics on never
+    // makes the bone jump; switching it off returns it to rigid FK.
+    bone.simWorldRotation = enabled ? this.targetWorldRotation(bone) : null;
+    bone.angularVelocity = 0;
+    this._emit('structure');
+  }
+
+  setPhysicsParam(id, key, value) {
+    const bone = this.byId(id);
+    if (!bone) return;
+    bone[key] = value;
+    this._emit('structure');
+  }
+
+  get hasPhysicsBones() {
+    return this._bones.some((bone) => bone.physicsEnabled);
+  }
+
+  // Advances every physics bone by dt seconds. Returns true while anything
+  // is still moving, so the caller's frame loop knows when it may stop.
+  //
+  // Part 6 only has to keep writing new targets (bone.rotation) each frame
+  // from touch input and call this -- no other coupling to the simulation.
+  stepPhysics(dt) {
+    const clamped = Math.min(Math.max(dt, 0), MAX_FRAME_DT);
+    const steps = Math.max(1, Math.ceil(clamped / MAX_SUBSTEP));
+    const h = clamped / steps;
+
+    let active = false;
+    for (let i = 0; i < steps; i++) {
+      if (this._integrate(h)) active = true;
+    }
+    return active;
+  }
+
+  // One step of a damped mass-spring toward the FK target, integrated with
+  // semi-implicit (symplectic) Euler -- velocity first, then position --
+  // which stays stable at stiffnesses where plain explicit Euler blows up.
+  //
+  //   angular acceleration = stiffness * (target - current)      spring
+  //                        - damping   * angularVelocity         damping
+  //                        + gravity   * cos(current)            gravity
+  //
+  // The gravity term is the standard pendulum torque: it is zero when the
+  // bone already points straight down (cos(pi/2) = 0) and strongest when
+  // it is horizontal, so a heavy bone sags toward hanging.
+  _integrate(h) {
+    let active = false;
+
+    // Parents before children: a child's target is built from its parent's
+    // simulated rotation, so the parent must be updated first this step.
+    for (const { bone } of this.toTreeList()) {
+      if (!bone.physicsEnabled) continue;
+
+      if (bone.simWorldRotation === null) {
+        bone.simWorldRotation = this.targetWorldRotation(bone);
+        bone.angularVelocity = 0;
+      }
+
+      // Normalized so the bone always springs the short way round rather
+      // than unwinding the long way through a full turn.
+      const error = normalizeAngle(this.targetWorldRotation(bone) - bone.simWorldRotation);
+      const acceleration =
+        bone.stiffness * error -
+        bone.damping * bone.angularVelocity +
+        bone.gravityInfluence * Math.cos(bone.simWorldRotation);
+
+      bone.angularVelocity += acceleration * h;
+      bone.simWorldRotation += bone.angularVelocity * h;
+
+      if (
+        Math.abs(bone.angularVelocity) > SETTLE_VELOCITY ||
+        Math.abs(acceleration) > SETTLE_ACCELERATION
+      ) {
+        active = true;
+      }
+    }
+
+    return active;
   }
 
   // ---- Queries used by the UI -------------------------------------------

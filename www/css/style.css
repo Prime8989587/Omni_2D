@@ -418,6 +418,20 @@ button {
   margin-bottom: 0;
 }
 
+.physics-toggle {
+  width: 100%;
+  margin: 8px 0;
+}
+
+/* Qualified with the element name so this beats .segmented__btn.is-active,
+   which has equal specificity but is defined further down and would
+   otherwise repaint the label pink on a pink fill -- invisible. */
+button.physics-toggle.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #000000;
+}
+
 .bone-readout {
   margin: 8px 0;
   color: rgba(255, 255, 255, 0.55);

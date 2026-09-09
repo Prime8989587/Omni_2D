@@ -5,7 +5,8 @@
 
 import { appState, AppState } from './state.js';
 import { partsStore } from './parts.js';
-import { bonesStore } from './bones.js';
+import { bonesStore, PHYSICS_RANGES } from './bones.js';
+import { initPhysics } from './physics.js';
 import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
@@ -96,6 +97,17 @@ function cacheElements() {
   els.debugBoneName = document.getElementById('debugBoneName');
   els.showPartsTab = document.getElementById('showPartsTab');
   els.showBonesTab = document.getElementById('showBonesTab');
+
+  els.rigDebugSlider = document.getElementById('rigDebugSlider');
+  els.rigDebugValue = document.getElementById('rigDebugValue');
+  els.physicsToggle = document.getElementById('physicsToggle');
+  els.physicsParams = document.getElementById('physicsParams');
+  els.stiffnessSlider = document.getElementById('stiffnessSlider');
+  els.stiffnessValue = document.getElementById('stiffnessValue');
+  els.dampingSlider = document.getElementById('dampingSlider');
+  els.dampingValue = document.getElementById('dampingValue');
+  els.gravitySlider = document.getElementById('gravitySlider');
+  els.gravityValue = document.getElementById('gravityValue');
 
   els.confirmModal = document.getElementById('confirmModal');
   els.confirmMessage = document.getElementById('confirmMessage');
@@ -264,6 +276,11 @@ function renderRigChrome() {
     const degrees = Math.round((bonesStore.worldRotation(bone) * 180) / Math.PI);
     els.boneReadout.textContent =
       `x ${Math.round(head.x)} · y ${Math.round(head.y)} · ${degrees}° · length ${Math.round(bone.length)}`;
+
+    const localDegrees = Math.round((bone.rotation * 180) / Math.PI);
+    els.rigDebugSlider.value = String(localDegrees);
+    els.rigDebugValue.textContent = `${localDegrees}°`;
+    renderPhysicsControls(bone);
   }
 
   els.rigHint.textContent = rigHintText(status);
@@ -279,6 +296,55 @@ function rigHintText(status) {
   if (bonesStore.isEmpty) return 'Tap Add Bone to place the root bone.';
   if (!bonesStore.selected) return 'Tap a bone to select it as the parent for the next bone.';
   return `Add Bone will attach to "${bonesStore.selected.name}". Drag the handles to adjust.`;
+}
+
+// ---- Bone physics ------------------------------------------------------
+
+function handlePhysicsToggle() {
+  const bone = bonesStore.selected;
+  if (!bone) return;
+  bonesStore.setPhysicsEnabled(bone.id, !bone.physicsEnabled);
+}
+
+function handlePhysicsParam(key, slider, readout, decimals = 0) {
+  const bone = bonesStore.selected;
+  if (!bone) return;
+  const value = Number(slider.value);
+  readout.textContent = value.toFixed(decimals);
+  bonesStore.setPhysicsParam(bone.id, key, value);
+}
+
+// Drives the selected bone's rotation directly, so a parent can be swung
+// back and forth to watch its physics children lag behind and settle.
+// Temporary scaffolding until Part 6 brings real touch-drag posing.
+function handleRigDebugRotate() {
+  const bone = bonesStore.selected;
+  if (!bone) return;
+  const degrees = Number(els.rigDebugSlider.value);
+  bone.rotation = (degrees * Math.PI) / 180;
+  els.rigDebugValue.textContent = `${degrees}°`;
+  bonesStore.notifyTransformed();
+}
+
+function applySliderRange(slider, range) {
+  slider.min = String(range.min);
+  slider.max = String(range.max);
+  slider.step = String(range.step);
+}
+
+function renderPhysicsControls(bone) {
+  els.physicsToggle.classList.toggle('is-active', bone.physicsEnabled);
+  els.physicsToggle.setAttribute('aria-pressed', String(bone.physicsEnabled));
+  els.physicsToggle.textContent = bone.physicsEnabled ? 'Physics On' : 'Enable Physics';
+  els.physicsParams.hidden = !bone.physicsEnabled;
+
+  if (!bone.physicsEnabled) return;
+  els.stiffnessSlider.value = String(bone.stiffness);
+  els.stiffnessValue.textContent = String(bone.stiffness);
+  els.dampingSlider.value = String(bone.damping);
+  els.dampingValue.textContent = bone.damping.toFixed(1);
+  els.gravitySlider.value = String(bone.gravityInfluence);
+  els.gravityValue.textContent = String(bone.gravityInfluence);
 }
 
 // ---- Bind mode ---------------------------------------------------------
@@ -576,6 +642,15 @@ function bindEvents() {
   els.rotateCcwBtn.addEventListener('click', () => rotateSelectedBone(-NUDGE_STEP_RADIANS));
   els.rotateCwBtn.addEventListener('click', () => rotateSelectedBone(NUDGE_STEP_RADIANS));
 
+  els.rigDebugSlider.addEventListener('input', handleRigDebugRotate);
+  els.physicsToggle.addEventListener('click', handlePhysicsToggle);
+  els.stiffnessSlider.addEventListener('input', () =>
+    handlePhysicsParam('stiffness', els.stiffnessSlider, els.stiffnessValue));
+  els.dampingSlider.addEventListener('input', () =>
+    handlePhysicsParam('damping', els.dampingSlider, els.dampingValue, 1));
+  els.gravitySlider.addEventListener('input', () =>
+    handlePhysicsParam('gravityInfluence', els.gravitySlider, els.gravityValue));
+
   els.scenePanelToggle.addEventListener('click', toggleScenePanel);
   els.toFrontBtn.addEventListener('click', () => partsStore.bringToFront(partsStore.selectedId));
   els.toBackBtn.addEventListener('click', () => partsStore.sendToBack(partsStore.selectedId));
@@ -592,6 +667,11 @@ export function initUI() {
   initRigTool(els.canvas);
   initBindTool(els.canvas);
   bindEvents();
+  initPhysics();
+
+  applySliderRange(els.stiffnessSlider, PHYSICS_RANGES.stiffness);
+  applySliderRange(els.dampingSlider, PHYSICS_RANGES.damping);
+  applySliderRange(els.gravitySlider, PHYSICS_RANGES.gravityInfluence);
 
   const brush = getBrush();
   els.brushSlider.value = String(brush.radius);

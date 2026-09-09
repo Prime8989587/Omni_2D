@@ -14,12 +14,15 @@ a real, installable Android APK.
 - **Part 3** added **Rig mode**: place bones over the assembled character
   and build a parent/child skeleton. Rotating a bone carries its whole
   chain of children with it. See "Building a skeleton (Rig mode)" below.
-- **Part 4** (current) adds **Bind mode**: generate a deformable mesh over
-  each Part, bind its vertices to nearby bones with weights, and paint
-  those weights by hand. **Rotating a bone now actually warps the pixel
-  art.** See "Binding artwork to bones (Bind mode)" below. Drag-driven
-  animation and real GIF/MP4 export are still to come; export remains a
-  placeholder that only logs.
+- **Part 4** added **Bind mode**: generate a deformable mesh over each
+  Part, bind its vertices to nearby bones with weights, and paint those
+  weights by hand. **Rotating a bone now actually warps the pixel art.**
+  See "Binding artwork to bones (Bind mode)" below.
+- **Part 5** (current) adds **optional spring physics per bone**, so hair,
+  chest or loose clothing lags behind its parent, overshoots, and settles
+  instead of snapping rigidly into place. See "Spring physics on a bone"
+  below. Drag-driven animation and real GIF/MP4 export are still to come;
+  export remains a placeholder that only logs.
 
 ## What's in this repo
 
@@ -36,6 +39,8 @@ www/js/importer.js      Picked files -> Parts (PNG validation, decode, placement
 www/js/gestures.js      Touch handling for Parts: drag, pinch-scale, two-finger rotate
 www/js/rigTool.js       Touch handling for Bones: two-tap placement, handle dragging
 www/js/bindTool.js      Touch handling for weights: the paint brush
+www/js/physics.js       The frame loop that keeps spring bones settling after
+                         the input that disturbed them has stopped
 www/js/canvas.js        Renderer — draws parts with smoothing off so pixel art stays
                          crisp, plus the skeleton overlay in Rig mode
 www/js/ui.js            DOM wiring: buttons, Scene Parts panel, the export modal
@@ -580,6 +585,113 @@ first.
 
 ---
 
+## Spring physics on a bone
+
+By default every bone moves rigidly: when its parent turns, it turns with
+it instantly. Spring physics makes a bone *lag* behind that motion,
+overshoot slightly, and wobble to a stop — the difference between a head
+(which should be rigid) and a ponytail (which shouldn't).
+
+### Turning it on
+
+In **Rig mode**, select a bone and tap **Enable Physics**. It's off by
+default on every bone, which is the right default — most of a character
+should not jiggle.
+
+Switching it on never makes the bone jump: the simulation starts exactly
+where the bone already is.
+
+### The three parameters
+
+**Stiffness — how hard it is pulled back toward where it should be.**
+Higher snaps back faster and feels tighter; lower feels loose and floaty
+and takes longer to catch up.
+
+**Damping — how quickly the wobble dies out.** Higher settles sooner with
+less bouncing; lower keeps oscillating and feels jellier. Push it high
+enough and the bone glides to its target without overshooting at all.
+
+**Gravity Influence — how strongly the bone is pulled toward hanging
+straight down.** At 0 the bone rests exactly where the skeleton says it
+should. Above 0 it sags below that, coming to rest wherever the pull and
+the spring balance out. Long hair that should hang wants some; a strand
+that should stay put wants none.
+
+### Suggested starting points
+
+| Feel | Stiffness | Damping | Gravity |
+|---|---|---|---|
+| **Hair-like** — light, whippy, doesn't sag | 180–260 | 6–10 | 0 |
+| **Cloth-like** — heavier, swings and hangs | 80–140 | 10–16 | 20–40 |
+| **Stiff / barely any jiggle** | 400–600 | 25–40 | 0 |
+| **Rigid** | *leave physics off* | | |
+
+The defaults (stiffness 180, damping 8, gravity 0) are deliberately in the
+hair-like range so the effect is obvious the first time you switch it on,
+before you tune anything.
+
+### Testing it with the debug slider
+
+The bone editor in Rig mode has a **Debug: rotate** slider that drives the
+selected bone's rotation directly. It's temporary scaffolding — Part 6
+replaces it with real touch-drag posing — but it's how you test physics
+right now.
+
+Build a rig where the contrast is visible side by side:
+
+1. Place a **parent** bone.
+2. Place a **child** off it, then re-select the parent and place a
+   **second child** so the two are siblings, angled apart so you can tell
+   them apart.
+3. Select **one** child and tap **Enable Physics**. Leave the other alone.
+4. Select the **parent** and swing the **Debug: rotate** slider back and
+   forth.
+
+The rigid child snaps to its new position the instant the slider moves.
+The physics child trails behind it, swings past, and wobbles to a stop
+about a second later. That contrast is the whole feature.
+
+Bind a Part to the skeleton first (Bind mode) and the artwork itself lags
+too — the deformed pixel art follows the bone's *simulated* position, not
+where the skeleton says it ought to be.
+
+### How it works
+
+A textbook damped spring, integrated every frame:
+
+```
+angular acceleration = stiffness × (target − current)     spring
+                     − damping   × angular velocity       damping
+                     + gravity   × cos(current)           gravity
+```
+
+Physics never changes *what* the target is — that's still ordinary forward
+kinematics from the parent. It only changes how fast the bone is allowed
+to get there. The gravity term is the standard pendulum torque: zero when
+the bone already points straight down, strongest when it's horizontal.
+
+Chains work too: a spring bone hanging off another spring bone lags
+further behind still, which is what makes a long ponytail ripple rather
+than swing as one rigid stick.
+
+The simulation runs continuously in its own frame loop, so a bone keeps
+settling after the input stops. Once everything has come to rest the loop
+sleeps, and any change wakes it again — an idle character costs nothing.
+
+### Suggested test on your phone
+
+1. Build the two-sibling rig above and enable physics on one child.
+2. Swing the parent's Debug slider quickly and let go — watch one child
+   snap and the other trail and wobble.
+3. Drop **Damping** to ~2 and repeat: it should wobble much longer.
+4. Raise **Damping** to ~35: the wobble should almost disappear.
+5. Raise **Gravity** to ~40 and watch the bone sag below where the
+   skeleton puts it, then hold there.
+6. Bind a Part (Bind mode) and repeat — the artwork should lag with the
+   bone rather than with the skeleton.
+
+---
+
 ## App states & how to navigate (manual test flow)
 
 Import and part assembly are real (see the section above). Everything
@@ -643,7 +755,8 @@ The code is arranged for that already:
   with its own id, image, position, scale, rotation, and z-index.
 - `www/js/bones.js` holds the skeleton — each `Bone` has an id, name,
   parent id, head/tail, rotation, and length, stored *relative to its
-  parent* so forward kinematics comes for free.
+  parent* so forward kinematics comes for free, plus its optional spring
+  settings and simulation state.
 - `www/js/mesh.js` holds the binding — each Part's mesh has a vertex list
   (rest position, UV, and a `{boneId: weight}` map per vertex), a triangle
   index list, and the bone bind poses.
@@ -655,10 +768,12 @@ The code is arranged for that already:
 Animation needs exactly one call per frame:
 
 ```js
+bonesStore.stepPhysics(dt)                      // settle any spring bones
 bonesStore.snapshotTransforms()                 // live bone transforms
 deformVertices(part.mesh, part, transforms)     // -> deformed positions
 ```
 
-No binding data has to be touched to drive it. Rendering lives in
+Touch posing only has to write new targets into `bone.rotation`; neither
+the binding data nor the simulation needs touching to drive it. Rendering lives in
 `www/js/canvas.js`, separate from the state machine (`state.js`) and the
 DOM wiring (`ui.js`).
