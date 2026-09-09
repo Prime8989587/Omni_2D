@@ -524,6 +524,29 @@ button.physics-toggle.is-active {
   font-size: 13px;
 }
 
+/* ---------- Canvas size ---------- */
+
+.canvas-size-btn {
+  flex: 1;
+}
+
+/* Breathing room before the Bind / Rig / Animate row, whose corner
+   flourishes otherwise sit right on this button's bottom edge. */
+#homeCanvasRow {
+  margin-bottom: 10px;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.preset-grid .segmented__btn {
+  font-size: 13px;
+}
+
 /* ---------- Toast ---------- */
 
 .toast {

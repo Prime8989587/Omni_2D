@@ -7,34 +7,25 @@
 //
 // Vertices are hit-tested against their DEFORMED positions, not their rest
 // positions, so the brush lands where the user actually sees the mesh even
-// when a bone has already been rotated.
+// when a bone has already been rotated. The brush size is a screen-pixel
+// radius -- it feels the same at every zoom -- and is converted to grid
+// cells for the distance test.
 
 import { appState, AppState } from './state.js';
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { applyWeightDelta, deformVertices } from './mesh.js';
+import { view } from './view.js';
 
 export const MIN_BRUSH = 10;
 export const MAX_BRUSH = 120;
 
-let brushRadius = 45;
+let brushRadius = 45; // screen pixels
 let brushStrength = 0.35;
 let painting = false;
-let lastBrush = null; // world position of the brush, for the cursor ring
-
-const listeners = new Set();
-
-export function subscribeBind(listener) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function emit() {
-  listeners.forEach((listener) => listener());
-}
 
 export function getBrush() {
-  return { radius: brushRadius, strength: brushStrength, position: painting ? lastBrush : null };
+  return { radius: brushRadius, strength: brushStrength };
 }
 
 export function setBrushRadius(value) {
@@ -45,25 +36,26 @@ export function setBrushStrength(value) {
   brushStrength = value;
 }
 
-function pointFromEvent(canvasEl, event) {
+function sceneFromEvent(canvasEl, event) {
   const rect = canvasEl.getBoundingClientRect();
-  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  return view.toScene(event.clientX - rect.left, event.clientY - rect.top);
 }
 
-function paintAt(point) {
+function paintAt(scenePoint) {
   const part = partsStore.selected;
   const boneId = bonesStore.selectedId;
   if (!part || !part.mesh || !part.mesh.isBound || !boneId) return;
 
+  const radiusCells = brushRadius / view.zoom;
   const deformed = deformVertices(part.mesh, part, bonesStore.snapshotTransforms());
   let changed = false;
 
   for (let i = 0; i < part.mesh.vertices.length; i++) {
-    const distance = Math.hypot(deformed[i].x - point.x, deformed[i].y - point.y);
-    if (distance > brushRadius) continue;
+    const distance = Math.hypot(deformed[i].x - scenePoint.x, deformed[i].y - scenePoint.y);
+    if (distance > radiusCells) continue;
 
     // Linear falloff: full strength at the brush centre, nothing at its rim.
-    const falloff = 1 - distance / brushRadius;
+    const falloff = 1 - distance / radiusCells;
     applyWeightDelta(part.mesh.vertices[i], boneId, brushStrength * falloff);
     changed = true;
   }
@@ -74,29 +66,30 @@ function paintAt(point) {
 export function initBindTool(canvasEl) {
   canvasEl.addEventListener('pointerdown', (event) => {
     if (appState.state !== AppState.BIND) return;
+    // A second finger means a pinch, which viewGestures owns.
+    if (view.activePointerCount > 1) {
+      painting = false;
+      return;
+    }
     event.preventDefault();
     canvasEl.setPointerCapture(event.pointerId);
 
     painting = true;
-    lastBrush = pointFromEvent(canvasEl, event);
-    paintAt(lastBrush);
-    emit();
+    paintAt(sceneFromEvent(canvasEl, event));
   });
 
   canvasEl.addEventListener('pointermove', (event) => {
     if (appState.state !== AppState.BIND || !painting) return;
+    if (view.activePointerCount > 1) {
+      painting = false;
+      return;
+    }
     event.preventDefault();
-
-    lastBrush = pointFromEvent(canvasEl, event);
-    paintAt(lastBrush);
-    emit();
+    paintAt(sceneFromEvent(canvasEl, event));
   });
 
   const endPointer = () => {
-    if (!painting) return;
     painting = false;
-    lastBrush = null;
-    emit();
   };
 
   canvasEl.addEventListener('pointerup', endPointer);

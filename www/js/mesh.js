@@ -38,12 +38,15 @@ export function defaultDensity(part) {
   return Math.min(10, Math.max(6, Math.round(longest / 12)));
 }
 
+// Local image space (centre at the origin, one unit per source pixel) to
+// scene pixels. With the part's integer top-left and integer scale, an
+// unrotated local point lands on exact integers.
 export function localToWorld(part, local) {
   const cos = Math.cos(part.rotation);
   const sin = Math.sin(part.rotation);
   const sx = local.x * part.scale;
   const sy = local.y * part.scale;
-  return { x: part.x + sx * cos - sy * sin, y: part.y + sx * sin + sy * cos };
+  return { x: part.centerX + sx * cos - sy * sin, y: part.centerY + sx * sin + sy * cos };
 }
 
 export class MeshVertex {
@@ -261,4 +264,37 @@ export function deformVertices(mesh, part, boneTransforms) {
   }
 
   return out;
+}
+
+// The grid snap. Skinning above is left exactly as it was -- continuous
+// maths producing continuous answers -- and this rounds each answer to
+// the nearest scene pixel before anything is drawn. That is the whole
+// difference between a sprite that smears between pixels as it bends and
+// one that moves in crisp whole-pixel steps.
+export function snapToGrid(positions) {
+  return positions.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }));
+}
+
+export function deformVerticesSnapped(mesh, part, boneTransforms) {
+  return snapToGrid(deformVertices(mesh, part, boneTransforms));
+}
+
+// An unbound part drawn as a plain quad: its four corners in scene space,
+// snapped, with the UVs and triangle order the rasterizer wants. At rest
+// the corners are already integers, so snapping changes nothing.
+export function partQuad(part) {
+  const w = part.naturalWidth;
+  const h = part.naturalHeight;
+  const corners = [
+    { x: -w / 2, y: -h / 2 },
+    { x: w / 2, y: -h / 2 },
+    { x: w / 2, y: h / 2 },
+    { x: -w / 2, y: h / 2 },
+  ].map((local) => localToWorld(part, local));
+
+  return {
+    positions: snapToGrid(corners),
+    uvs: [{ u: 0, v: 0 }, { u: w, v: 0 }, { u: w, v: h }, { u: 0, v: h }],
+    triangles: [0, 1, 3, 1, 2, 3],
+  };
 }

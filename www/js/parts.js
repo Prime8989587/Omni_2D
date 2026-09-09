@@ -1,21 +1,41 @@
 // Scene model: the imported Parts and which one is selected.
 //
 // Pure data and geometry -- no DOM, no rendering, no gesture handling.
-// A Part is the unit that later gets bones bound to it, so per-part state
-// lives on the Part object itself rather than in parallel lookup tables.
+// A Part is the unit that gets bones bound to it, so per-part state lives
+// on the Part object itself rather than in parallel lookup tables.
+//
+// GRID ALIGNMENT IS A DATA INVARIANT
+//
+// A part sits on the pixel grid by its TOP-LEFT corner, stored as integer
+// scene pixels, and an INTEGER scale (scene pixels per source pixel). With
+// both whole numbers, source pixel (u, v) lands exactly on scene pixel
+// (x + u*scale, y + v*scale) -- no sub-pixel offset can exist, and no
+// scaling can ever call for interpolation between source pixels.
+//
+// Rotation stays continuous. A rotated sprite cannot align to the grid by
+// construction, so its output is snapped by the rasterizer instead, the
+// same way a deformed mesh is.
 
 let nextId = 1;
 
+export const MIN_PART_SCALE = 1;
+export const MAX_PART_SCALE = 16;
+
+export function clampScale(value) {
+  return Math.min(MAX_PART_SCALE, Math.max(MIN_PART_SCALE, Math.round(value)));
+}
+
 export class Part {
-  constructor({ name, image, objectUrl, x, y, scale = 1, rotation = 0 }) {
+  constructor({ name, image, pixels, objectUrl, x, y, scale = 1, rotation = 0 }) {
     this.id = `part_${nextId++}`;
     this.name = name;
     this.image = image;
+    this.pixels = pixels; // RGBA bytes, naturalWidth x naturalHeight, read once at import
     this.objectUrl = objectUrl; // kept alive for the session; the image re-reads it
-    this.x = x; // canvas-space position of the part's center, in CSS px
-    this.y = y;
-    this.scale = scale; // uniform; 1 = one image pixel per CSS px
-    this.rotation = rotation; // radians
+    this.x = Math.round(x); // top-left corner, in scene pixels
+    this.y = Math.round(y);
+    this.scale = clampScale(scale); // scene pixels per source pixel, whole numbers only
+    this.rotation = rotation; // radians, about the part's centre
     this.zIndex = 0; // assigned by the store on add
 
     // The deformable mesh bound to the skeleton, or null while unbound.
@@ -32,12 +52,30 @@ export class Part {
     return this.image.naturalHeight;
   }
 
-  // Converts a canvas-space point into this part's local image space,
-  // where the image's center sits at the origin and one unit is one
+  // Footprint on the grid, before rotation.
+  get sceneWidth() {
+    return this.naturalWidth * this.scale;
+  }
+
+  get sceneHeight() {
+    return this.naturalHeight * this.scale;
+  }
+
+  // Rotation pivot and the origin of the part's local space.
+  get centerX() {
+    return this.x + this.sceneWidth / 2;
+  }
+
+  get centerY() {
+    return this.y + this.sceneHeight / 2;
+  }
+
+  // Converts a scene-space point into this part's local image space,
+  // where the image's centre sits at the origin and one unit is one
   // source pixel. Inverts translate -> rotate -> scale.
   toLocal(px, py) {
-    const dx = px - this.x;
-    const dy = py - this.y;
+    const dx = px - this.centerX;
+    const dy = py - this.centerY;
     const cos = Math.cos(-this.rotation);
     const sin = Math.sin(-this.rotation);
     return {
@@ -138,13 +176,13 @@ class PartsStore {
     this._emit('structure');
   }
 
-  // Topmost part whose bounds contain the point, or null.
+  // Topmost part whose bounds contain the scene-space point, or null.
   hitTest(x, y) {
     return this.partsTopFirst.find((part) => part.containsPoint(x, y)) || null;
   }
 }
 
 // Session-scoped singleton: the assembled character survives switching
-// between Home and Animate mode because nothing clears this on state
-// change. Saving to disk is a later concern.
+// between modes because nothing clears this on state change. Saving to
+// disk is a later concern.
 export const partsStore = new PartsStore();

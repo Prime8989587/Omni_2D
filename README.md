@@ -18,11 +18,18 @@ a real, installable Android APK.
   Part, bind its vertices to nearby bones with weights, and paint those
   weights by hand. **Rotating a bone now actually warps the pixel art.**
   See "Binding artwork to bones (Bind mode)" below.
-- **Part 5** (current) adds **optional spring physics per bone**, so hair,
-  chest or loose clothing lags behind its parent, overshoots, and settles
+- **Part 5** added **optional spring physics per bone**, so hair, chest
+  or loose clothing lags behind its parent, overshoots, and settles
   instead of snapping rigidly into place. See "Spring physics on a bone"
-  below. Drag-driven animation and real GIF/MP4 export are still to come;
-  export remains a placeholder that only logs.
+  below.
+- **Grid revision** (current) turns the canvas into an explicit **pixel
+  grid**: you choose a canvas size in pixels, every grid cell is exactly
+  one pixel, and everything — imported art, drags, scales, bone endpoints,
+  and the deformed artwork itself — sits on whole pixels. Pinch to zoom in
+  on the grid. See "The pixel grid" below, which also lists what was
+  re-verified from Parts 2–5 and the one gesture that changed. Drag-driven
+  animation and real GIF/MP4 export are still to come; export remains a
+  placeholder that only logs.
 
 ## What's in this repo
 
@@ -30,19 +37,28 @@ a real, installable Android APK.
 www/index.html          App shell markup (screens, buttons, panels, export modal)
 www/css/style.css       The black/pink theme, layout, and button states
 www/js/state.js         The app's state machine (home/rig/animating/recording) — no DOM
-www/js/parts.js         The scene model: the Part object and the store holding them
+www/js/scene.js         The canvas itself: its size in pixels (8–3072 per side) and presets
+www/js/view.js          The camera: zoom and pan between the pixel grid and the screen
+www/js/raster.js        Software rasterizer that draws (deformed) triangles straight onto
+                         the pixel grid one whole pixel at a time — no gaps, no blur
+www/js/parts.js         The scene model: the Part object (whole-pixel position and scale,
+                         plus its decoded pixels) and the store holding them
 www/js/bones.js         The skeleton: Bone objects, the parent/child tree, and the
                          forward-kinematics math. Kept separate from parts.js
 www/js/mesh.js          Mesh generation, auto-weighting, weight painting maths, and
                          the linear blend skinning that deforms the artwork
-www/js/importer.js      Picked files -> Parts (PNG validation, decode, placement)
-www/js/gestures.js      Touch handling for Parts: drag, pinch-scale, two-finger rotate
+www/js/importer.js      Picked files -> Parts (PNG validation, size limits, decode,
+                         whole-pixel placement)
+www/js/gestures.js      Home-screen touch handling: drag / pinch-scale / twist a Part, or
+                         pan / zoom the grid when the first finger lands on empty cells
+www/js/viewGestures.js  Two-finger pinch-zoom of the grid in Rig and Bind mode
 www/js/rigTool.js       Touch handling for Bones: two-tap placement, handle dragging
 www/js/bindTool.js      Touch handling for weights: the paint brush
 www/js/physics.js       The frame loop that keeps spring bones settling after
                          the input that disturbed them has stopped
-www/js/canvas.js        Renderer — draws parts with smoothing off so pixel art stays
-                         crisp, plus the skeleton overlay in Rig mode
+www/js/canvas.js        Renderer — rasterizes every Part into a pixel-grid bitmap, blits
+                         it at the current zoom, and draws the checkerboard, bones, mesh
+                         heatmap, snap highlight and selection outline on top
 www/js/ui.js            DOM wiring: buttons, Scene Parts panel, the export modal
 www/js/app.js           Thin entry point that boots ui.js once the page loads
 capacitor.config.json   Tells Capacitor the app's name, ID, and where the web files live
@@ -249,6 +265,211 @@ below — that confirms the entire pipeline works end to end.
 
 ---
 
+## The pixel grid: canvas size, zoom, and snapping
+
+Omni 2D is for pixel art, so the canvas is an explicit grid of whole
+pixels rather than a free-floating drawing area. **One grid cell is one
+pixel of the final artwork.** Nothing in the app can sit between two
+cells: imported art is placed on cells, drags move by whole cells,
+scaling is by whole multiples, bone endpoints sit on pixel centres, and
+even the deformed artwork is snapped back onto cells before it is drawn.
+
+### Choosing the canvas size
+
+On the Home screen, below the Scene Parts panel, a button reads
+**Canvas 512 × 512 px** (the default). Tap it to open the size dialog:
+
+- **Presets** — 256 × 256, 512 × 512, 1024 × 1024, 1024 × 3072 (a tall
+  sheet), and 3072 × 3072.
+- **Custom** — type any width and height. Each side is clamped to the
+  allowed range: **at least 8, at most 3072** pixels. (8 × 8 is also the
+  smallest image the app accepts, so a canvas can never be too small to
+  hold one.)
+
+Tap **Apply** and the grid resizes and re-fits itself on screen. Parts and
+bones keep their pixel coordinates when the canvas changes size, so a
+character sitting at pixel (200, 200) stays there. Shrink the canvas
+below the character and the portion outside the grid is simply not drawn
+until you move it back in or enlarge the canvas again — nothing is lost.
+
+### What you see
+
+The grid is a **checkerboard of black and dark-grey cells**, one cell per
+pixel, drawn *behind* the artwork — transparent pixels show the
+checkerboard through them, the way a paint program shows transparency.
+
+Pixel cells are usually far smaller than a fingertip, so the grid is
+zoomable:
+
+- **Two fingers on empty grid, pinch** — zoom in or out around your
+  fingers, from the whole canvas down to a handful of cells. Pinch works
+  in every mode (Home, Rig, Bind).
+- **One finger on empty grid, drag** — pan.
+- **⤢ (Fit)** in the top bar — fit the whole canvas on screen again.
+
+When you let go after a pinch, the zoom snaps to a whole number of screen
+pixels per cell, so every cell is exactly the same size and the
+checkerboard stays even. Below 3 screen pixels per cell the checkerboard
+would be a moiré blur, so at that distance it is drawn as a flat dark
+panel; pinch in and the cells reappear.
+
+### What's snapped, and what isn't
+
+| Thing | Stored as | Snapped? |
+|---|---|---|
+| Part position | top-left corner, whole pixels | yes — drags move by whole cells |
+| Part scale | whole-number factor, 1×–16× | yes — a 16 px sprite is 16, 32, 48… px wide, never 20 |
+| Part rotation | any angle | no — the angle is continuous; the *drawing* of it is snapped (below) |
+| Bone head / tail | pixel centres, e.g. (10.5, 10.5) | yes — a tap lands on the centre of the cell it is in |
+| Bone rotation | any angle | no — forward kinematics and spring physics stay continuous |
+| Mesh vertices after skinning | whole pixels | yes — snapped at the very last step, before drawing |
+
+Bone endpoints snap to pixel *centres* rather than corners so that "a
+bone in a pixel" means exactly that: the readout shows the cell's integer
+coordinates (x 11 · y 11 for a head at 10.5, 10.5), and the cell itself
+**lights up in pink** while you place or drag a handle, so you can see
+where the snap landed before you lift your finger.
+
+### How the artwork is drawn onto the grid
+
+Parts are no longer drawn by the browser as scaled, rotated images (that
+puts fractional edges between cells and, on rotation, blends colours).
+Instead every Part is **rasterized into a pixel-grid bitmap** by the app's
+own small renderer (`www/js/raster.js`):
+
+1. Each Part is a mesh of triangles — the same mesh Bind mode uses; an
+   unbound Part is just two triangles covering its rectangle.
+2. The triangle corners — after scaling, rotation, and skinning — are
+   **snapped to whole pixels**.
+3. For every grid cell whose *centre* falls inside a triangle, the
+   renderer looks up the one source pixel that maps there (nearest
+   neighbour, no blending) and writes it to that cell.
+4. Parts are rasterized back-to-front, so a later Part overwrites an
+   earlier one — the same z-order behaviour as before.
+
+Step 3 is what rules out the classic failure modes of snapping. Snap each
+triangle independently and draw it as a block, and two neighbouring
+triangles can leave a one-pixel **gap** between them or **overlap** and
+paint a pixel twice. Testing cell centres against the *shared* edges
+instead means every cell belongs to exactly one triangle (or none): no
+gaps, no overlaps, no cell painted twice — by construction rather than by
+tuning. The rasterizer's unit test checks exactly this on adjacent
+triangles.
+
+**The tradeoff, stated plainly.** The skinning maths is unchanged and
+still continuous; snapping is applied only to its *output*. So:
+
+- A rotated or bent Part is drawn as a **staircase** of whole pixels —
+  hard edges, no anti-aliasing, no smeared in-between colours. That is the
+  intended pixel-art look.
+- Where a bone **stretches** the mesh, some source pixels are **drawn
+  twice** side by side; where it **compresses** the mesh, some source
+  pixels are **dropped**. That is unavoidable when the output must be
+  whole pixels, and it is exactly what happens when you scale pixel art by
+  a non-integer factor in any editor.
+- Motions smaller than half a pixel produce **no visible change**,
+  because nothing crosses a cell boundary. A spring bone's final tiny
+  wobbles are therefore invisible; its swing is not.
+
+### Why two-finger gestures changed on the Home screen
+
+This revision makes one deliberate behaviour change to Part 2, because
+two features now compete for the same gesture. Part 2 used two fingers
+*anywhere* on the canvas to scale and rotate the selected Part; the grid
+needs two fingers for zoom. The rule is now decided by **where your first
+finger lands**:
+
+- **First finger on a Part** → that Part is selected and dragged; a second
+  finger then **scales and rotates the Part**, exactly as in Part 2.
+- **First finger on empty grid** → one finger pans; a second finger
+  **zooms the grid**.
+
+Lift one finger mid-gesture and it degrades gracefully: a Part transform
+goes back to dragging that Part, a zoom goes back to panning. This is the
+one place the grid could not be added without touching an existing
+interaction; the Part 2 gesture itself is unchanged once it starts. Tip:
+on a big canvas a small sprite is tiny at the fitted zoom, so pinch in on
+empty grid first, then put your first finger on the sprite.
+
+### Re-verified after the grid revision
+
+The revision touches the model behind Parts 2, 3 and 4, so each earlier
+feature was re-tested on the snapped model. The checks are automated
+browser tests that drive the real app with touch events on a 64 × 64
+canvas (cells large enough to assert on individual screen pixels), plus
+unit tests on the maths modules.
+
+**(a) Part 2 — import, drag, scale, rotate: intact.**
+- A 16 × 16 PNG imports at 1× on whole-pixel coordinates, centred on the
+  grid, and its source pixel (4, 4) lands on exactly the expected cell —
+  pixel-for-pixel alignment, no resampling.
+- A drag of 2.6 cells right and 1.2 down moves the Part by exactly
+  (3, 1) cells, and the artwork moves with it cell-for-cell.
+- Pinching the Part to three times the finger spread gives scale exactly
+  3, every source pixel becomes an exact 3 × 3 block, and the top-left is
+  still on whole pixels.
+- Twisting rotates it by about 45°, and the rotated sprite is drawn using
+  only the checkerboard's two colours and the sprite's own colours — not a
+  single interpolated shade.
+- Panning does not move the Part; zooming does not change its scale; Fit
+  restores the fitted view. Files that are too small or larger than the
+  canvas are rejected and named in the message.
+
+**(b) Part 3 — bone hierarchy and editing: intact.**
+- Head and tail taps snap to pixel centres, the tapped cell is highlighted
+  in pink, and the readout shows the integer pixel.
+- A child added with the root selected attaches to the root's tail, and
+  the Skeleton list indents it under its parent.
+- Dragging a handle snaps to the cell under the finger; a nudge moves
+  exactly one cell.
+- Forward kinematics is untouched — the unit test rotating a parent by
+  90° still moves the child by exactly 90° — as are rename and delete
+  with re-parenting; those code paths did not change.
+
+**(c) Part 4 — auto-weight and painting: intact.**
+- A freshly bound Part at rest renders **byte-identical** to the unbound
+  sprite (the whole canvas is hashed and compared).
+- With a bone rotated, the deformed art is drawn and again contains only
+  the sprite's own colours: snapped, never smeared.
+- Painting the root bone over the sprite raises the root's total weight
+  across the mesh and makes *less* of the art follow the child afterwards
+  — painting still decides which bone owns which pixels, and weights still
+  sum to 1 (unit-tested).
+
+**(d) Part 5 — physics, now grid-snapped: intact.**
+- Kicking the parent with the debug rotation still makes the spring child
+  lag tens of degrees behind its target and settle to within 2° — the
+  continuous spring maths is untouched.
+- In every one of the ~70 frames sampled during the jiggle, the artwork's
+  edges lie exactly on cell boundaries, and the art visibly passes through
+  many distinct whole-pixel positions on the way to rest.
+
+Two behaviours changed *on purpose* and are worth knowing about:
+
+- **Rig and Bind mode: dragging on empty grid pans.** Parts still cannot
+  be moved in these modes (their pixel coordinates do not change), but the
+  view does, so the character moves *on screen*. Tap ⤢ to re-fit.
+- **Imports are no longer auto-upscaled.** Part 2 scaled small sprites up
+  2×–3× so they were easy to grab. On the grid an imported image is placed
+  at exactly 1× so that its pixels *are* canvas pixels; zoom in to work on
+  it, and pinch the Part if you actually want it larger.
+
+### Known limits
+
+- **Bones may be placed outside the canvas.** The grid extends
+  conceptually past its edge, so a root head just off the artwork is
+  allowed, and the snap highlight is drawn there too. Artwork outside the
+  canvas is not drawn.
+- **Big canvases cost memory.** The grid bitmap is width × height × 4
+  bytes, held twice (working buffer plus the drawable copy): roughly
+  75 MB at 3072 × 3072, 2 MB at 512 × 512. Each redraw re-rasterizes every
+  Part, so drawing cost scales with the total sprite area, not the canvas
+  size; a big canvas with small sprites is cheap, a canvas-sized sprite
+  bound to spring bones is not.
+- **A moved Part still needs re-binding**, exactly as in Part 4.
+
+---
+
 ## Importing and assembling a character
 
 ### Importing PNGs (multi-select)
@@ -271,27 +492,36 @@ carry pixel-art cutouts. If you select any, they're skipped and a message
 appears at the top naming which files were ignored — the PNGs in the same
 selection still import normally.
 
-Newly imported parts land near the middle of the canvas, each nudged
-slightly down-right from the last so a batch of eight doesn't arrive as
-one unseparable stack. Small sprites are scaled up by a whole-number
-factor (2x, 3x…) so they're big enough to grab without going blurry.
+Newly imported parts land centred on the canvas, each nudged 8 pixels
+down-right from the last so a batch doesn't arrive as one unseparable
+stack. Every image is placed at exactly **1×** on whole-pixel coordinates,
+so each of its pixels is one canvas cell — nothing is resampled. Two size
+rules apply, and any file breaking them is skipped and named in the
+message at the top: an image must be **at least 8 × 8**, and it must
+**fit within the current canvas** (enlarge the canvas first if it
+doesn't).
 
 ### Assembling: drag, scale, rotate
 
-On the canvas:
+On the canvas (pinch in on empty grid first if the sprite is small):
 
-- **One finger, drag** — moves the part you touched. Touching a part also
-  selects it.
-- **Two fingers, pinch** — scales the selected part up or down.
-- **Two fingers, twist** — rotates the selected part.
+- **One finger on a part, drag** — moves it in **whole cells**. Touching a
+  part also selects it.
+- **Second finger down while holding a part, pinch** — scales it. Scale
+  is always a whole multiple (1×–16×), so the part steps 1× → 2× → 3× as
+  you spread your fingers; each source pixel stays an exact n × n block.
+- **Second finger down while holding a part, twist** — rotates it. The
+  angle itself is free; the drawing is snapped to the grid, so a rotated
+  sprite shows a staircase edge rather than a blurred one.
 - Two-finger gestures also slide the part around, so you can scale,
   rotate, and reposition in one continuous motion (e.g. sizing hair to
   sit correctly on a head).
-- **Tap empty space** — deselects.
+- **One finger on empty grid** — pans; **two fingers on empty grid** —
+  zooms. **Tap empty space** — deselects.
 
 The selected part is outlined in pink so you always know which piece
-you're about to move. Pixel art is drawn with image smoothing turned off,
-so scaling and rotating keep hard pixel edges instead of going blurry.
+you're about to move. See "The pixel grid" above for why the *first*
+finger decides between moving the part and moving the view.
 
 ### Reordering (which piece draws on top)
 
@@ -326,9 +556,9 @@ the arrangement. Saving/loading is a later step.
    into the selection too, to confirm it's rejected while the PNGs still
    import).
 2. Drag each piece apart so you can see them all.
-3. Pinch one piece bigger, and check the edges stay blocky rather than
-   blurry.
-4. Twist a piece to rotate it.
+3. With one finger already on a piece, pinch it bigger: it should jump
+   1× → 2× → 3× with blocky edges, never in-between sizes or blur.
+4. Twist a piece to rotate it — the edge becomes a pixel staircase.
 5. Assemble the character — then use **To Front** / **To Back** to fix
    any piece stacking wrongly.
 6. Tap a name in **Scene Parts** and confirm the pink outline jumps to
@@ -354,8 +584,9 @@ On the Home screen, tap **Rig** (next to Animate). The canvas border turns
 pink, the top bar reads "RIG MODE", and your assembled character is dimmed
 slightly so the bright pink bones stay readable on top of it.
 
-**Parts are locked in Rig mode** — dragging on the canvas no longer moves
-your character, because the canvas now belongs to the bone tool. Tap **✕**
+**Parts are locked in Rig mode** — the canvas belongs to the bone tool,
+so your character's pixel position cannot change here. Dragging on empty
+grid **pans the view** and pinching zooms it (tap ⤢ to re-fit). Tap **✕**
 to return Home if you need to re-position artwork.
 
 ### Placing the root bone
@@ -367,6 +598,12 @@ to return Home if you need to re-position artwork.
 
 Placement is two taps rather than a drag, because tapping two points is
 much more forgiving with a fingertip than dragging a precise line.
+
+Each tap **snaps to the centre of the pixel cell you touched**, and that
+cell lights up in pink so you can see where the snap landed; the readout
+then reports the bone in whole pixels. Zoom in for precision — at a high
+zoom each cell is a comfortable fingertip target. Handle drags snap the
+same way, live, with the cell under your finger highlighted as you go.
 
 The first bone you place automatically becomes the **root**.
 
@@ -413,10 +650,11 @@ Selecting a bone opens an editor above the list:
 - **Rename** — type in the name field. Defaults are `Bone_1`, `Bone_2`…,
   but naming them `head_bone`, `hair_bone` and so on pays off quickly once
   you're managing 15+ bones.
-- **Readout** — shows the bone's world position, angle, and length.
-- **Nudge controls** — `←` `↑` `↓` `→` move the bone by 2px per tap and
-  `↺` `↻` rotate it by 2° per tap, for precision that fingertip dragging
-  can't give you.
+- **Readout** — shows the bone's head as a whole-pixel grid coordinate,
+  plus its angle and length in pixels.
+- **Nudge controls** — `←` `↑` `↓` `→` move the bone by **exactly one
+  grid cell** per tap and `↺` `↻` rotate it by 2° per tap, for precision
+  that fingertip dragging can't give you.
 - **Delete** — see below.
 
 **Rotating a bone rotates all of its descendants with it**, pivoting
@@ -443,8 +681,10 @@ a root, its children simply become roots themselves.
 
 1. Import and assemble a character (see the previous section), then tap
    **Rig**.
-2. Confirm dragging no longer moves the artwork.
-3. **Add Bone**, tap twice to lay a root bone down the character's spine.
+2. Confirm dragging on empty grid pans the view but leaves the
+   character's pixel position alone (⤢ re-fits).
+3. **Add Bone**, tap twice to lay a root bone down the character's spine;
+   watch each tap light up the cell it snapped to.
 4. **Add Bone**, tap once — a child chains off the root's tail. Repeat to
    build root → spine → head → hair.
 5. Rename them as you go so the list is readable.
@@ -517,8 +757,9 @@ mesh**. That raises the selected bone's weight on the vertices under the
 brush, and every other bone's weight on those same vertices is scaled
 down to compensate, so each vertex's weights always still sum to 1.
 
-- **Brush** — the radius of the brush in pixels. Influence falls off
-  linearly from the centre to the rim.
+- **Brush** — the radius of the brush in *screen* pixels, so it feels the
+  same at any zoom; zoom in to paint finer detail in grid cells. Influence
+  falls off linearly from the centre to the rim.
 - **Strength** — how fast each pass pushes weight toward this bone.
 
 To take influence *away* from a bone, select a different bone and paint
@@ -554,6 +795,14 @@ deformed = Σ  w_bone × ( R(θ_now − θ_bind) × (rest − head_bind) + head_
 With no bone moved, every term collapses back to the rest position, which
 is exactly why a bound Part looks untouched until you rotate something.
 
+That formula is unchanged by the grid revision and still produces
+fractional positions. The grid comes in **after** it: each deformed
+vertex is rounded to the nearest whole pixel and the triangles are
+rasterized cell by cell (see "The pixel grid" above), so the warped
+artwork is always a clean arrangement of whole pixels — a staircase, not
+a blur — with some source pixels doubled where the mesh stretches and
+some dropped where it compresses.
+
 ### A caveat worth knowing
 
 Bone bind poses are recorded in world space at the moment you bind. If you
@@ -578,10 +827,12 @@ re-bind the model.
 
 ### Performance note
 
-Each triangle is drawn as a separate clipped draw call, so a very high
-density on many Parts will cost frame rate on a phone. The 6–10 default
-keeps it modest. If live animation later feels sluggish, lower the density
-first.
+Every redraw rasterizes each Part's triangles into the grid bitmap in
+JavaScript, so cost scales with the on-canvas area of the artwork (at 3×
+scale a sprite covers nine times the cells). Mesh density barely matters
+now — it changes how many triangles cover the same cells, not how many
+cells get written. If live animation later feels sluggish, the lever is
+smaller or fewer Parts, not a coarser mesh.
 
 ---
 
@@ -653,7 +904,10 @@ about a second later. That contrast is the whole feature.
 
 Bind a Part to the skeleton first (Bind mode) and the artwork itself lags
 too — the deformed pixel art follows the bone's *simulated* position, not
-where the skeleton says it ought to be.
+where the skeleton says it ought to be. On the pixel grid that jiggle is
+drawn in whole pixels: the art hops from cell to cell as the bone swings,
+and the last sub-pixel wobbles before rest are invisible (the bone still
+simulates them; nothing crosses a cell boundary).
 
 ### How it works
 
@@ -751,8 +1005,13 @@ GIF/MP4 files instead of logging placeholders.
 
 The code is arranged for that already:
 
+- `www/js/scene.js` is the canvas: its size in pixels. `www/js/view.js`
+  is the camera between that grid and the screen. Model code works in
+  grid pixels only; input goes through `view.toScene`, output through
+  `view.toScreen`.
 - `www/js/parts.js` holds the artwork — each imported piece is a `Part`
-  with its own id, image, position, scale, rotation, and z-index.
+  with its own id, decoded pixels, whole-pixel position and scale,
+  rotation, and z-index.
 - `www/js/bones.js` holds the skeleton — each `Bone` has an id, name,
   parent id, head/tail, rotation, and length, stored *relative to its
   parent* so forward kinematics comes for free, plus its optional spring
@@ -768,10 +1027,14 @@ The code is arranged for that already:
 Animation needs exactly one call per frame:
 
 ```js
-bonesStore.stepPhysics(dt)                      // settle any spring bones
-bonesStore.snapshotTransforms()                 // live bone transforms
-deformVertices(part.mesh, part, transforms)     // -> deformed positions
+bonesStore.stepPhysics(dt)                          // settle any spring bones
+bonesStore.snapshotTransforms()                     // live bone transforms
+deformVerticesSnapped(part.mesh, part, transforms)  // -> whole-pixel positions
 ```
+
+(`deformVertices` still returns the continuous positions if something
+needs them — the paint brush does — and `www/js/raster.js` turns the
+snapped triangles into grid pixels.)
 
 Touch posing only has to write new targets into `bone.rotation`; neither
 the binding data nor the simulation needs touching to drive it. Rendering lives in

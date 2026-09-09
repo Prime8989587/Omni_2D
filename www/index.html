@@ -10,6 +10,7 @@
   <div id="app" class="app">
     <header class="topbar">
       <button id="importBtn" class="btn btn--flourish" type="button">Import</button>
+      <button id="fitViewBtn" class="btn btn--icon" type="button" aria-label="Fit the whole canvas on screen" title="Fit">&#10530;</button>
       <div id="logo" class="logo">&#8734;omni-2D</div>
       <div id="modeLabel" class="mode-label" hidden>
         <span class="mode-label__dot" aria-hidden="true"></span>
@@ -141,6 +142,10 @@
         <span id="bindStatus" class="bind-status"></span>
       </div>
 
+      <div id="homeCanvasRow" class="control-row">
+        <button id="canvasSizeBtn" class="btn btn--sm canvas-size-btn" type="button">Canvas 512 × 512 px</button>
+      </div>
+
       <div id="homeControls" class="control-row">
         <button id="bindBtn" class="btn btn--lg btn--flourish" type="button">Bind</button>
         <button id="rigBtn" class="btn btn--lg btn--flourish" type="button">Rig</button>
@@ -183,6 +188,28 @@
         <div class="modal__actions">
           <button id="confirmDeleteBtn" class="btn btn--danger" type="button">Delete</button>
           <button id="confirmCancelBtn" class="btn" type="button">Keep</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="canvasSizeModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="canvasSizeTitle">
+        <h2 id="canvasSizeTitle" class="modal__title">Canvas size</h2>
+        <p class="modal__text">In pixels — every grid cell is one pixel. Each side can be 8 to 3072.</p>
+        <div id="canvasPresets" class="preset-grid"></div>
+        <div class="bind-row">
+          <label class="slider-field">
+            <span>Width</span>
+            <input id="canvasWidthInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
+          </label>
+          <label class="slider-field">
+            <span>Height</span>
+            <input id="canvasHeightInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
+          </label>
+        </div>
+        <div class="modal__actions">
+          <button id="applyCanvasSizeBtn" class="btn btn--flourish" type="button">Apply</button>
+          <button id="cancelCanvasSizeBtn" class="btn" type="button">Cancel</button>
         </div>
       </div>
     </div>

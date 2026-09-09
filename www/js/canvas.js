@@ -1,17 +1,24 @@
-// Canvas renderer.
+// Canvas renderer for the pixel grid.
 //
-// Draws the scene's Parts back-to-front with image smoothing disabled, so
-// pixel art stays blocky at any scale instead of being blurred by the
-// browser's default bilinear interpolation.
+// The scene is an integer W x H bitmap. Every frame the parts are
+// rasterized INTO that bitmap by raster.js -- one decision per scene
+// pixel, nearest-neighbour, no antialiasing -- and the bitmap is then
+// blown up onto the screen through the camera with smoothing off. The
+// result is that the artwork is composed only of whole grid cells, at any
+// zoom, in any pose.
 //
-// This is also where the bone/skeleton renderer and animation playback
-// will live in a later part -- see the FUTURE HOOK notes below.
+// Everything that is not artwork (bones, handles, the selection outline,
+// the weight heatmap) is drawn straight onto the screen in CSS pixels, so
+// it keeps a constant size however far the user zooms in.
 
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
-import { getPlacement, subscribeRig } from './rigTool.js';
-import { deformVertices } from './mesh.js';
+import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
+import { deformVerticesSnapped, partQuad } from './mesh.js';
+import { sceneStore } from './scene.js';
+import { view, MIN_VISIBLE_CELL_PX } from './view.js';
+import { rasterizeTriangle, clearRegion } from './raster.js';
 
 const ACCENT = '#FF2E93';
 const SELECTION_OUTLINE_PX = 2;
@@ -23,132 +30,210 @@ const CHILD_STROKE = '#FF8FC4';
 const ROOT_FILL = 'rgba(255, 46, 147, 0.35)';
 const CHILD_FILL = 'rgba(255, 143, 196, 0.28)';
 
-// Rig mode veils the character art so bright pink bones stay readable on
-// top of colorful pixel art.
-const RIG_VEIL = 'rgba(0, 0, 0, 0.45)';
+// The grid: alternating black and dark grey cells, one per scene pixel.
+const CHECKER_DARK = '#000000';
+const CHECKER_LIGHT = '#262626';
+// When cells are too small to resolve, the grid is a flat tone instead of
+// a moiré pattern.
+const GRID_FLAT = '#161616';
+const GRID_EDGE = 'rgba(255, 255, 255, 0.28)';
 
-// How far each triangle's corners are pushed outward to hide the seams
-// between independently-clipped neighbours. Tuned by measurement: at 0.5
-// the antialiased clip edges still left ~1px seam lines about 2% darker
-// than the flat sprite; 1.2 closes them completely.
-const SEAM_EXPAND_PX = 1.2;
+// Rig mode veils the character art so bright pink bones stay readable on
+// top of colourful pixel art.
+const RIG_VEIL = 'rgba(0, 0, 0, 0.45)';
 const MESH_WIRE = 'rgba(255, 143, 196, 0.4)';
+const SNAP_CELL_FILL = 'rgba(255, 46, 147, 0.45)';
 
 let canvasEl = null;
 let ctx = null;
 let viewWidth = 0;
 let viewHeight = 0;
+let dpr = 1;
 let frameRequested = false;
 
-export function getViewSize() {
-  return { width: viewWidth, height: viewHeight };
+// The scene bitmap and the region of it that currently holds pixels.
+let sceneCanvas = null;
+let sceneCtx = null;
+let sceneImage = null;
+let sceneWidth = 0;
+let sceneHeight = 0;
+let dirty = null; // { x0, y0, x1, y1 } written last frame, cleared next frame
+
+// The checkerboard tile, rebuilt only when the zoom changes.
+let checkerTile = null;
+let checkerTileZoom = 0;
+
+// ---------------------------------------------------------------------------
+// Scene bitmap
+
+function ensureSceneBuffer() {
+  if (sceneCanvas && sceneWidth === sceneStore.width && sceneHeight === sceneStore.height) return;
+
+  sceneWidth = sceneStore.width;
+  sceneHeight = sceneStore.height;
+  sceneCanvas = document.createElement('canvas');
+  sceneCanvas.width = sceneWidth;
+  sceneCanvas.height = sceneHeight;
+  sceneCtx = sceneCanvas.getContext('2d');
+  sceneImage = sceneCtx.createImageData(sceneWidth, sceneHeight);
+  dirty = null;
 }
 
-// Canvas2D cannot draw a textured triangle directly, so each triangle is
-// clipped and then filled with the image under the unique affine map that
-// carries the triangle's three UVs onto its three deformed positions.
-// Solving for that map is standard: it is the 2x3 matrix satisfying
-// M*(u,v,1) = (x,y) at all three corners.
-function drawTexturedTriangle(image, a, b, c, pa, pb, pc) {
-  // Adjacent triangles are clipped independently, and the antialiased
-  // clip edges would otherwise leave hairline seams between them. Pushing
-  // each corner very slightly outward makes neighbours overlap instead.
-  // The image itself is not enlarged: past its edge drawImage produces
-  // nothing, so the sprite's outer boundary stays exact.
-  const cx = (pa.x + pb.x + pc.x) / 3;
-  const cy = (pa.y + pb.y + pc.y) / 3;
-  const expand = (p) => {
-    const dx = p.x - cx;
-    const dy = p.y - cy;
-    const length = Math.hypot(dx, dy) || 1;
-    return { x: p.x + (dx / length) * SEAM_EXPAND_PX, y: p.y + (dy / length) * SEAM_EXPAND_PX };
+function boundsOf(positions) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const p of positions) {
+    if (p.x < x0) x0 = p.x;
+    if (p.y < y0) y0 = p.y;
+    if (p.x > x1) x1 = p.x;
+    if (p.y > y1) y1 = p.y;
+  }
+  return { x0: Math.floor(x0) - 1, y0: Math.floor(y0) - 1, x1: Math.ceil(x1) + 1, y1: Math.ceil(y1) + 1 };
+}
+
+function unionBounds(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    x0: Math.min(a.x0, b.x0),
+    y0: Math.min(a.y0, b.y0),
+    x1: Math.max(a.x1, b.x1),
+    y1: Math.max(a.y1, b.y1),
   };
-
-  const u1 = b.u - a.u;
-  const v1 = b.v - a.v;
-  const u2 = c.u - a.u;
-  const v2 = c.v - a.v;
-  const det = u1 * v2 - u2 * v1;
-  if (det === 0) return; // degenerate triangle in UV space
-
-  const x1 = pb.x - pa.x;
-  const y1 = pb.y - pa.y;
-  const x2 = pc.x - pa.x;
-  const y2 = pc.y - pa.y;
-
-  const m11 = (x1 * v2 - x2 * v1) / det;
-  const m12 = (y1 * v2 - y2 * v1) / det;
-  const m21 = (x2 * u1 - x1 * u2) / det;
-  const m22 = (y2 * u1 - y1 * u2) / det;
-  const dx = pa.x - m11 * a.u - m21 * a.v;
-  const dy = pa.y - m12 * a.u - m22 * a.v;
-
-  const ea = expand(pa);
-  const eb = expand(pb);
-  const ec = expand(pc);
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(ea.x, ea.y);
-  ctx.lineTo(eb.x, eb.y);
-  ctx.lineTo(ec.x, ec.y);
-  ctx.closePath();
-  ctx.clip();
-  // transform(), not setTransform(), so the device-pixel-ratio base
-  // transform is preserved rather than replaced.
-  ctx.transform(m11, m12, m21, m22, dx, dy);
-  ctx.drawImage(image, 0, 0);
-  ctx.restore();
 }
 
-function drawMeshedPart(part, deformed) {
-  const { vertices, triangles } = part.mesh;
-  for (let i = 0; i < triangles.length; i += 3) {
-    const ia = triangles[i];
-    const ib = triangles[i + 1];
-    const ic = triangles[i + 2];
-    drawTexturedTriangle(
-      part.image,
-      vertices[ia], vertices[ib], vertices[ic],
-      deformed[ia], deformed[ib], deformed[ic]
-    );
-  }
-}
-
-function drawPart(part, isSelected, boneTransforms) {
-  // A bound part is drawn through its mesh so bone movement deforms it.
-  // At rest the skinning collapses to the part's own transform, so this
-  // produces the same pixels as the flat path below.
+// A part's geometry for this frame: snapped vertex positions, the UVs
+// they carry, and the triangle list. Bound parts come from the mesh and
+// the skinning; unbound ones are a plain quad. Either way the positions
+// are already whole grid coordinates.
+function partGeometry(part, boneTransforms) {
   if (part.mesh && part.mesh.isBound && boneTransforms) {
-    drawMeshedPart(part, deformVertices(part.mesh, part, boneTransforms));
-  } else {
-    ctx.save();
-    ctx.translate(part.x, part.y);
-    ctx.rotate(part.rotation);
-    ctx.scale(part.scale, part.scale);
-    ctx.drawImage(part.image, -part.naturalWidth / 2, -part.naturalHeight / 2, part.naturalWidth, part.naturalHeight);
-    ctx.restore();
+    return {
+      positions: deformVerticesSnapped(part.mesh, part, boneTransforms),
+      uvs: part.mesh.vertices,
+      triangles: part.mesh.triangles,
+    };
+  }
+  return partQuad(part);
+}
+
+// Rasterizes every part into the scene bitmap, bottom-first so a higher
+// part overwrites a lower one -- z-order IS the collision rule between
+// parts. Only the region that changed is cleared and re-uploaded.
+function renderScene(boneTransforms) {
+  ensureSceneBuffer();
+  const buffer = sceneImage.data;
+
+  const drawList = partsStore.partsBottomFirst.map((part) => {
+    const geometry = partGeometry(part, boneTransforms);
+    return { part, geometry, bounds: boundsOf(geometry.positions) };
+  });
+
+  let touched = dirty;
+  for (const entry of drawList) touched = unionBounds(touched, entry.bounds);
+  if (!touched) return;
+
+  clearRegion(buffer, sceneWidth, sceneHeight, touched.x0, touched.y0, touched.x1, touched.y1);
+
+  for (const { part, geometry } of drawList) {
+    const { positions, uvs, triangles } = geometry;
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = triangles[i];
+      const b = triangles[i + 1];
+      const c = triangles[i + 2];
+      rasterizeTriangle(
+        buffer, sceneWidth, sceneHeight,
+        part.pixels, part.naturalWidth, part.naturalHeight,
+        positions[a], positions[b], positions[c],
+        uvs[a], uvs[b], uvs[c]
+      );
+    }
   }
 
-  if (!isSelected) return;
+  dirty = null;
+  for (const entry of drawList) dirty = unionBounds(dirty, entry.bounds);
 
-  ctx.save();
-  ctx.translate(part.x, part.y);
-  ctx.rotate(part.rotation);
-  ctx.scale(part.scale, part.scale);
-  // Divided by the part's scale so the outline is always the same
-  // thickness on screen, however far the part is zoomed in or out.
-  ctx.lineWidth = SELECTION_OUTLINE_PX / part.scale;
+  const x0 = Math.max(0, touched.x0);
+  const y0 = Math.max(0, touched.y0);
+  const x1 = Math.min(sceneWidth, touched.x1);
+  const y1 = Math.min(sceneHeight, touched.y1);
+  if (x1 > x0 && y1 > y0) sceneCtx.putImageData(sceneImage, 0, 0, x0, y0, x1 - x0, y1 - y0);
+}
+
+// ---------------------------------------------------------------------------
+// Grid
+
+// A 2x2-cell tile at the current zoom, in whole device pixels so the
+// pattern tiles with no seams and no resampling.
+function checkerPattern() {
+  const zoom = view.zoom;
+  if (!checkerTile || checkerTileZoom !== zoom) {
+    const cell = Math.max(1, Math.round(zoom * dpr));
+    checkerTile = document.createElement('canvas');
+    checkerTile.width = cell * 2;
+    checkerTile.height = cell * 2;
+    const tileCtx = checkerTile.getContext('2d');
+    tileCtx.fillStyle = CHECKER_DARK;
+    tileCtx.fillRect(0, 0, cell * 2, cell * 2);
+    tileCtx.fillStyle = CHECKER_LIGHT;
+    tileCtx.fillRect(cell, 0, cell, cell);
+    tileCtx.fillRect(0, cell, cell, cell);
+    checkerTileZoom = zoom;
+  }
+
+  const pattern = ctx.createPattern(checkerTile, 'repeat');
+  // The tile is in device pixels; the context draws in CSS pixels. Scaling
+  // by 1/dpr lands each tile pixel on exactly one device pixel.
+  const cell = Math.max(1, Math.round(zoom * dpr));
+  pattern.setTransform(new DOMMatrix([1 / dpr, 0, 0, 1 / dpr, view.panX, view.panY]).scale(zoom * dpr / cell));
+  return pattern;
+}
+
+function drawGrid() {
+  const origin = view.toScreen(0, 0);
+  const width = sceneStore.width * view.zoom;
+  const height = sceneStore.height * view.zoom;
+
+  ctx.fillStyle = view.zoom >= MIN_VISIBLE_CELL_PX ? checkerPattern() : GRID_FLAT;
+  ctx.fillRect(origin.x, origin.y, width, height);
+
+  ctx.strokeStyle = GRID_EDGE;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(origin.x - 0.5, origin.y - 0.5, width + 1, height + 1);
+}
+
+// Highlights one grid cell -- the pixel a bone endpoint is snapped to --
+// so it is unmistakable that snapping happened.
+function drawSnapCell(cell) {
+  const p = view.toScreen(cell.x, cell.y);
+  ctx.fillStyle = SNAP_CELL_FILL;
+  ctx.fillRect(p.x, p.y, view.zoom, view.zoom);
   ctx.strokeStyle = ACCENT;
-  ctx.strokeRect(-part.naturalWidth / 2, -part.naturalHeight / 2, part.naturalWidth, part.naturalHeight);
-  ctx.restore();
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(p.x, p.y, view.zoom, view.zoom);
+}
+
+// ---------------------------------------------------------------------------
+// Screen-space overlays
+
+function drawPartOutline(part) {
+  const corners = partQuad(part).positions.map((p) => view.toScreen(p.x, p.y));
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
+  ctx.closePath();
+  ctx.lineWidth = SELECTION_OUTLINE_PX;
+  ctx.strokeStyle = ACCENT;
+  ctx.stroke();
 }
 
 // A bone is drawn as a tapered wedge: widest just past the head, tapering
 // to a point at the tail, so its direction is obvious at a glance.
 function drawBone(bone, isSelected) {
-  const head = bonesStore.worldHead(bone);
-  const tail = bonesStore.worldTail(bone);
+  const head = view.toScreen(...Object.values(bonesStore.worldHead(bone)));
+  const tail = view.toScreen(...Object.values(bonesStore.worldTail(bone)));
   const length = Math.hypot(tail.x - head.x, tail.y - head.y);
   if (length < 0.5) return;
 
@@ -159,7 +244,6 @@ function drawBone(bone, isSelected) {
 
   const shoulderX = head.x + dirX * shoulder;
   const shoulderY = head.y + dirY * shoulder;
-  // Perpendicular to the bone direction.
   const perpX = -dirY * width;
   const perpY = dirX * width;
 
@@ -177,8 +261,6 @@ function drawBone(bone, isSelected) {
   ctx.stroke();
 
   if (isSelected) {
-    // Handles are only shown for the selected bone -- they are what the
-    // head/tail drags grab.
     for (const [point, radius] of [[head, 7], [tail, 5]]) {
       ctx.beginPath();
       ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
@@ -196,13 +278,15 @@ function drawParentLink(bone) {
 
   const parentTail = bonesStore.worldTail(parent);
   const head = bonesStore.worldHead(bone);
-  if (Math.hypot(head.x - parentTail.x, head.y - parentTail.y) < 2) return;
+  if (Math.hypot(head.x - parentTail.x, head.y - parentTail.y) < 0.5) return;
 
+  const from = view.toScreen(parentTail.x, parentTail.y);
+  const to = view.toScreen(head.x, head.y);
   ctx.save();
   ctx.beginPath();
   ctx.setLineDash([4, 4]);
-  ctx.moveTo(parentTail.x, parentTail.y);
-  ctx.lineTo(head.x, head.y);
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
   ctx.strokeStyle = CHILD_STROKE;
   ctx.lineWidth = 1;
   ctx.stroke();
@@ -210,20 +294,24 @@ function drawParentLink(bone) {
 }
 
 function drawSkeleton() {
+  const origin = view.toScreen(0, 0);
   ctx.fillStyle = RIG_VEIL;
-  ctx.fillRect(0, 0, viewWidth, viewHeight);
+  ctx.fillRect(origin.x, origin.y, sceneStore.width * view.zoom, sceneStore.height * view.zoom);
 
   for (const bone of bonesStore.bones) drawParentLink(bone);
 
   const selectedId = bonesStore.selectedId;
   for (const bone of bonesStore.bones) drawBone(bone, bone.id === selectedId);
 
-  // A bone mid-placement: mark where its head landed while we wait for
-  // the tap that sets the tail.
+  const cell = getSnapCell();
+  if (cell) drawSnapCell(cell);
+
+  // A bone mid-placement: ring the head while we wait for the tail tap.
   const placement = getPlacement();
   if (placement && placement.head) {
+    const p = view.toScreen(placement.head.x, placement.head.y);
     ctx.beginPath();
-    ctx.arc(placement.head.x, placement.head.y, 8, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
     ctx.strokeStyle = ACCENT;
     ctx.lineWidth = 2;
     ctx.stroke();
@@ -232,15 +320,16 @@ function drawSkeleton() {
 
 // Bind mode overlay: the mesh wireframe plus a per-vertex heatmap of how
 // strongly the selected bone influences each vertex.
-function drawMeshOverlay(part, deformed, boneId) {
+function drawMeshOverlay(part, boneTransforms, boneId) {
   const { vertices, triangles } = part.mesh;
+  const points = deformVerticesSnapped(part.mesh, part, boneTransforms).map((p) => view.toScreen(p.x, p.y));
 
   ctx.save();
   ctx.beginPath();
   for (let i = 0; i < triangles.length; i += 3) {
-    const a = deformed[triangles[i]];
-    const b = deformed[triangles[i + 1]];
-    const c = deformed[triangles[i + 2]];
+    const a = points[triangles[i]];
+    const b = points[triangles[i + 1]];
+    const c = points[triangles[i + 2]];
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.lineTo(c.x, c.y);
@@ -260,42 +349,55 @@ function drawMeshOverlay(part, deformed, boneId) {
     if (weight <= 0.01) continue;
 
     ctx.beginPath();
-    ctx.arc(deformed[i].x, deformed[i].y, 2 + weight * 3, 0, Math.PI * 2);
+    ctx.arc(points[i].x, points[i].y, 2 + weight * 3, 0, Math.PI * 2);
     ctx.fillStyle = `rgba(255, 46, 147, ${0.15 + weight * 0.85})`;
     ctx.fill();
   }
 }
 
+// ---------------------------------------------------------------------------
+// Frame
+
 function render() {
   if (!ctx || !canvasEl) return;
 
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // Reset per frame: setting canvas.width during a resize clears this.
   ctx.imageSmoothingEnabled = false;
 
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, viewWidth, viewHeight);
 
+  drawGrid();
+
   const isRig = appState.state === AppState.RIG;
   const isBind = appState.state === AppState.BIND;
-  // Parts are not selectable in Rig mode, so their outline would be noise.
-  const selectedId = isRig ? null : partsStore.selectedId;
   // One snapshot per frame drives every bound part's skinning.
   const boneTransforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
 
-  for (const part of partsStore.partsBottomFirst) {
-    drawPart(part, !isBind && part.id === selectedId, boneTransforms);
+  renderScene(boneTransforms);
+  if (sceneCanvas) {
+    ctx.drawImage(
+      sceneCanvas,
+      0, 0, sceneWidth, sceneHeight,
+      view.panX, view.panY, sceneWidth * view.zoom, sceneHeight * view.zoom
+    );
   }
 
   if (isRig) drawSkeleton();
 
   if (isBind) {
     const part = partsStore.selected;
-    if (part && part.mesh && boneTransforms) {
-      drawMeshOverlay(part, deformVertices(part.mesh, part, boneTransforms), bonesStore.selectedId);
+    if (part && part.mesh && part.mesh.isBound && boneTransforms) {
+      drawMeshOverlay(part, boneTransforms, bonesStore.selectedId);
     }
     // Bones draw on top so the user can see what they are painting toward.
     for (const bone of bonesStore.bones) drawBone(bone, bone.id === bonesStore.selectedId);
   }
+
+  // Parts are not selectable in Rig or Bind mode, so no outline there.
+  const selected = !isRig && !isBind ? partsStore.selected : null;
+  if (selected) drawPartOutline(selected);
 
   // FUTURE HOOK: animation playback draws here.
 }
@@ -311,7 +413,7 @@ export function requestRender() {
 
 function resize() {
   if (!canvasEl) return;
-  const dpr = window.devicePixelRatio || 1;
+  dpr = window.devicePixelRatio || 1;
   // The canvas's own box, not the wrapper's: the wrapper's rect includes
   // its border, which would leave the backing store a few pixels larger
   // than the element and skew every touch coordinate.
@@ -322,8 +424,7 @@ function resize() {
   canvasEl.width = Math.round(rect.width * dpr);
   canvasEl.height = Math.round(rect.height * dpr);
 
-  // Draw in CSS pixels; the backing store carries the extra device pixels.
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  view.setViewport(viewWidth, viewHeight, dpr);
   render();
 }
 
@@ -340,6 +441,8 @@ export function initCanvas(canvas) {
   partsStore.subscribe(requestRender);
   bonesStore.subscribe(requestRender);
   appState.subscribe(requestRender);
+  sceneStore.subscribe(requestRender);
+  view.subscribe(requestRender);
   // Placing a bone's head changes what to draw without touching a store.
   subscribeRig(requestRender);
   resize();

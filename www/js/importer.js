@@ -3,18 +3,16 @@
 // The picker itself is a plain <input type="file" accept="image/png"
 // multiple>, which Capacitor's Android bridge surfaces as the native file
 // chooser (and which supports selecting many files at once). Everything
-// here is format validation, decoding, and choosing a sensible starting
-// position/scale.
+// here is validation, decoding, and placing the image on the pixel grid.
 
 import { Part, partsStore } from './parts.js';
+import { sceneStore } from './scene.js';
 
-// Fraction of the canvas's shorter side a freshly imported part should
-// roughly occupy, so a 32x32 sprite isn't a speck on a phone screen.
-const TARGET_SIZE_FRACTION = 0.35;
+export const MIN_IMAGE_SIZE = 8;
 
-// Each new part is nudged down-right from the last so a batch import
-// doesn't leave eight parts perfectly stacked and impossible to separate.
-const CASCADE_STEP = 14;
+// Each new part is nudged down-right from the last by whole grid cells,
+// so a batch import doesn't leave eight parts perfectly stacked.
+const CASCADE_STEP = 8;
 const CASCADE_WRAP = 6;
 
 function isPng(file) {
@@ -38,48 +36,70 @@ function loadImage(file) {
   });
 }
 
-// Pixel art wants whole-number magnification, so upscaling snaps to an
-// integer factor. Shrinking an oversized source has to stay fractional.
-function initialScale(image, viewSize) {
-  const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
-  if (longestSide === 0) return 1;
-
-  const target = Math.min(viewSize.width, viewSize.height) * TARGET_SIZE_FRACTION;
-  const fitted = target / longestSide;
-  return fitted >= 1 ? Math.floor(fitted) : fitted;
+// The rasterizer samples texels straight from memory, so decode the PNG
+// into raw RGBA bytes once here rather than on every frame.
+function readPixels(image) {
+  const scratch = document.createElement('canvas');
+  scratch.width = image.naturalWidth;
+  scratch.height = image.naturalHeight;
+  const ctx = scratch.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  return ctx.getImageData(0, 0, scratch.width, scratch.height).data;
 }
 
-function initialPosition(viewSize, cascadeIndex) {
+function sizeProblem(image) {
+  const { naturalWidth: w, naturalHeight: h } = image;
+  if (w < MIN_IMAGE_SIZE || h < MIN_IMAGE_SIZE) {
+    return `is ${w}×${h}, smaller than the ${MIN_IMAGE_SIZE}×${MIN_IMAGE_SIZE} minimum`;
+  }
+  if (w > sceneStore.width || h > sceneStore.height) {
+    return `is ${w}×${h}, larger than the ${sceneStore.width}×${sceneStore.height} canvas`;
+  }
+  return null;
+}
+
+// Whole-cell placement: centred on the grid (rounded down to an integer),
+// then cascaded by whole cells. The scale is always 1 -- one image pixel
+// per grid cell -- because any other default would need interpolation.
+function initialPosition(image, cascadeIndex) {
   const offset = (cascadeIndex % CASCADE_WRAP) * CASCADE_STEP;
   return {
-    x: viewSize.width / 2 + offset,
-    y: viewSize.height / 2 + offset,
+    x: Math.floor((sceneStore.width - image.naturalWidth) / 2) + offset,
+    y: Math.floor((sceneStore.height - image.naturalHeight) / 2) + offset,
   };
 }
 
-// Imports every PNG in the list, adding one Part per file. Returns a
-// summary so the caller can tell the user what was skipped: non-PNG files
-// are rejected outright (JPG has no alpha channel, so it can't carry
-// pixel-art cutouts), and anything that fails to decode is reported too.
-export async function importFiles(fileList, viewSize) {
+// Imports every usable PNG, one Part per file. Returns what was skipped so
+// the caller can tell the user: non-PNGs (no alpha channel, so no pixel-art
+// cutouts), files that fail to decode, and images outside the size limits.
+export async function importFiles(fileList) {
   const files = Array.from(fileList);
   const rejected = files.filter((file) => !isPng(file)).map((file) => file.name);
   const failed = [];
+  const wrongSize = [];
   let imported = 0;
 
   for (const file of files.filter(isPng)) {
     try {
       const { image, objectUrl } = await loadImage(file);
-      const position = initialPosition(viewSize, partsStore.parts.length);
 
+      const problem = sizeProblem(image);
+      if (problem) {
+        URL.revokeObjectURL(objectUrl);
+        wrongSize.push(`${file.name} ${problem}`);
+        continue;
+      }
+
+      const position = initialPosition(image, partsStore.parts.length);
       const part = partsStore.add(
         new Part({
           name: displayName(file.name),
           image,
+          pixels: readPixels(image),
           objectUrl,
           x: position.x,
           y: position.y,
-          scale: initialScale(image, viewSize),
+          scale: 1,
         })
       );
       partsStore.select(part.id);
@@ -90,5 +110,5 @@ export async function importFiles(fileList, viewSize) {
     }
   }
 
-  return { imported, rejected, failed };
+  return { imported, rejected, failed, wrongSize };
 }

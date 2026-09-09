@@ -7,6 +7,9 @@ import { appState, AppState } from './state.js';
 import { partsStore } from './parts.js';
 import { bonesStore, PHYSICS_RANGES } from './bones.js';
 import { initPhysics } from './physics.js';
+import { sceneStore, SCENE_PRESETS } from './scene.js';
+import { view } from './view.js';
+import { initViewGestures } from './viewGestures.js';
 import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
@@ -15,7 +18,7 @@ import { bindPart, defaultDensity } from './mesh.js';
 import * as canvasEngine from './canvas.js';
 
 const TOAST_DURATION_MS = 4000;
-const NUDGE_STEP_PX = 2;
+const NUDGE_STEP_PX = 1; // one grid cell
 const NUDGE_STEP_RADIANS = (2 * Math.PI) / 180;
 
 const els = {};
@@ -42,6 +45,15 @@ function cacheElements() {
   els.modeLabel = document.getElementById('modeLabel');
   els.modeLabelText = document.getElementById('modeLabelText');
   els.logo = document.getElementById('logo');
+  els.fitViewBtn = document.getElementById('fitViewBtn');
+  els.homeCanvasRow = document.getElementById('homeCanvasRow');
+  els.canvasSizeBtn = document.getElementById('canvasSizeBtn');
+  els.canvasSizeModal = document.getElementById('canvasSizeModal');
+  els.canvasPresets = document.getElementById('canvasPresets');
+  els.canvasWidthInput = document.getElementById('canvasWidthInput');
+  els.canvasHeightInput = document.getElementById('canvasHeightInput');
+  els.applyCanvasSizeBtn = document.getElementById('applyCanvasSizeBtn');
+  els.cancelCanvasSizeBtn = document.getElementById('cancelCanvasSizeBtn');
   els.canvasEmptyHint = document.getElementById('canvasEmptyHint');
 
   els.fileInput = document.getElementById('fileInput');
@@ -156,14 +168,18 @@ async function handleFilesPicked(event) {
   const files = event.target.files;
   if (!files || files.length === 0) return;
 
-  const result = await importFiles(files, canvasEngine.getViewSize());
+  const result = await importFiles(files);
 
   // Reset so picking the same file again still fires a change event.
   els.fileInput.value = '';
 
-  const problems = [...result.rejected, ...result.failed];
+  const problems = [
+    ...result.rejected.map((name) => `${name} is not a PNG`),
+    ...result.failed.map((name) => `${name} could not be decoded`),
+    ...result.wrongSize,
+  ];
   if (problems.length > 0) {
-    showToast(`Skipped ${problems.length} file(s) -- PNG only: ${problems.join(', ')}`);
+    showToast(`Skipped ${problems.length} file(s): ${problems.join('; ')}`);
   }
 }
 
@@ -296,6 +312,49 @@ function rigHintText(status) {
   if (bonesStore.isEmpty) return 'Tap Add Bone to place the root bone.';
   if (!bonesStore.selected) return 'Tap a bone to select it as the parent for the next bone.';
   return `Add Bone will attach to "${bonesStore.selected.name}". Drag the handles to adjust.`;
+}
+
+// ---- Canvas size & view ------------------------------------------------
+
+function openCanvasSizeModal() {
+  els.canvasWidthInput.value = String(sceneStore.width);
+  els.canvasHeightInput.value = String(sceneStore.height);
+  renderCanvasPresets();
+  els.canvasSizeModal.hidden = false;
+}
+
+function closeCanvasSizeModal() {
+  els.canvasSizeModal.hidden = true;
+}
+
+// The store clamps to the 8..3072 limits; what the user typed is echoed
+// back as the size that was actually applied.
+function applyCanvasSize() {
+  sceneStore.setSize(els.canvasWidthInput.value, els.canvasHeightInput.value);
+  closeCanvasSizeModal();
+  showToast(`Canvas is ${sceneStore.width} × ${sceneStore.height} pixels.`);
+}
+
+// Preset buttons fill the width/height fields; Apply commits them. The
+// highlighted preset follows the fields, so a custom size shows none.
+function renderCanvasPresets() {
+  const width = Number(els.canvasWidthInput.value);
+  const height = Number(els.canvasHeightInput.value);
+  els.canvasPresets.replaceChildren();
+
+  for (const preset of SCENE_PRESETS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'segmented__btn';
+    button.textContent = preset.label;
+    button.classList.toggle('is-active', preset.width === width && preset.height === height);
+    button.addEventListener('click', () => {
+      els.canvasWidthInput.value = String(preset.width);
+      els.canvasHeightInput.value = String(preset.height);
+      renderCanvasPresets();
+    });
+    els.canvasPresets.appendChild(button);
+  }
 }
 
 // ---- Bone physics ------------------------------------------------------
@@ -577,6 +636,8 @@ function renderChrome() {
   els.modeLabel.classList.toggle('is-recording', isRecording);
   els.logo.hidden = !isHome;
   els.canvasEmptyHint.hidden = !isHome || !partsStore.isEmpty;
+  els.homeCanvasRow.hidden = !isHome;
+  els.canvasSizeBtn.textContent = `Canvas ${sceneStore.width} × ${sceneStore.height} px`;
 
   els.canvasWrap.classList.toggle('is-animate-mode', isAnimateMode);
   els.canvasWrap.classList.toggle('is-rig-mode', isRig || isBind);
@@ -606,6 +667,12 @@ function renderChrome() {
 
 function bindEvents() {
   els.importBtn.addEventListener('click', handleImport);
+  els.fitViewBtn.addEventListener('click', () => view.fit());
+  els.canvasSizeBtn.addEventListener('click', openCanvasSizeModal);
+  els.applyCanvasSizeBtn.addEventListener('click', applyCanvasSize);
+  els.cancelCanvasSizeBtn.addEventListener('click', closeCanvasSizeModal);
+  els.canvasWidthInput.addEventListener('input', renderCanvasPresets);
+  els.canvasHeightInput.addEventListener('input', renderCanvasPresets);
   els.fileInput.addEventListener('change', handleFilesPicked);
   els.animateBtn.addEventListener('click', handleAnimateTapped);
   els.exitBtn.addEventListener('click', handleExit);
@@ -663,6 +730,8 @@ function bindEvents() {
 export function initUI() {
   cacheElements();
   canvasEngine.initCanvas(els.canvas);
+  // First, so its pointer bookkeeping runs before any tool sees the event.
+  initViewGestures(els.canvas);
   initGestures(els.canvas);
   initRigTool(els.canvas);
   initBindTool(els.canvas);
@@ -706,4 +775,5 @@ export function initUI() {
   // Placement progresses without any store change (head placed, awaiting
   // the tail tap), so the hint line listens to the tool directly.
   subscribeRig(renderChrome);
+  sceneStore.subscribe(renderChrome);
 }

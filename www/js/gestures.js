@@ -1,18 +1,25 @@
-// Touch manipulation of Parts on the canvas.
+// Touch manipulation of Parts on the Home screen, and of the camera when
+// the fingers land on empty grid.
 //
-//   one finger   - drag the part under the finger (and select it)
-//   two fingers  - pinch to scale, twist to rotate, and slide to move the
-//                  selected part
+//   one finger on a part     - drag it, in whole grid cells
+//   two fingers on a part    - pinch to scale (whole-number steps), twist
+//                              to rotate, slide to move
+//   one finger on empty grid - pan the view
+//   two fingers on empty grid- pinch-zoom the view
+//
+// Which of those a gesture becomes is decided by where the FIRST finger
+// lands. That is how the camera and Part 2's part transform share the
+// same two-finger gesture without stepping on each other.
 //
 // Deltas are measured frame to frame rather than against the gesture's
 // start, so the rotation can cross the +/-180 degree boundary without the
-// part snapping around.
+// part snapping around. Position and scale, by contrast, accumulate as
+// exact floats and are ROUNDED onto the grid each frame -- the part only
+// ever occupies whole cells, but a slow finger still moves it eventually.
 
-import { partsStore } from './parts.js';
+import { partsStore, clampScale, MIN_PART_SCALE, MAX_PART_SCALE } from './parts.js';
 import { appState, AppState } from './state.js';
-
-const MIN_SCALE = 0.05;
-const MAX_SCALE = 40;
+import { view } from './view.js';
 
 const pointers = new Map();
 let gesture = null;
@@ -28,9 +35,6 @@ function normalizeAngle(angle) {
   return result;
 }
 
-// The canvas element's CSS size matches the coordinate space we draw in
-// (device pixel ratio only affects the backing store), so this is a plain
-// offset from the element's top-left corner.
 function pointFromEvent(canvasEl, event) {
   const rect = canvasEl.getBoundingClientRect();
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -48,12 +52,18 @@ function twoPointerMetrics() {
   };
 }
 
-function beginTransform() {
-  const part = partsStore.selected;
-  if (!part) {
-    gesture = null;
-    return;
-  }
+function beginDrag(part, screenPoint) {
+  gesture = {
+    type: 'drag',
+    part,
+    anchorX: screenPoint.x,
+    anchorY: screenPoint.y,
+    originX: part.x,
+    originY: part.y,
+  };
+}
+
+function beginTransform(part) {
   const metrics = twoPointerMetrics();
   gesture = {
     type: 'transform',
@@ -62,17 +72,19 @@ function beginTransform() {
     lastAngle: metrics.angle,
     lastCenterX: metrics.centerX,
     lastCenterY: metrics.centerY,
+    // Exact accumulators; the part gets the rounded versions.
+    pendingScale: part.scale,
+    centerX: part.centerX,
+    centerY: part.centerY,
   };
 }
 
-function beginDrag(part) {
-  const [pointer] = [...pointers.values()];
-  gesture = { type: 'drag', part, lastX: pointer.x, lastY: pointer.y };
+function beginPan(screenPoint) {
+  gesture = { type: 'pan', lastX: screenPoint.x, lastY: screenPoint.y };
 }
 
-// Parts are only manipulable on the Home screen. In Rig mode the canvas
-// belongs to the bone tool instead, so the character stays put while the
-// skeleton is built on top of it.
+// Parts are only manipulable on the Home screen. In the other modes the
+// canvas belongs to that mode's tool and the character stays put.
 function partsAreEditable() {
   return appState.state === AppState.HOME;
 }
@@ -82,36 +94,58 @@ export function initGestures(canvasEl) {
     if (!partsAreEditable()) return;
     event.preventDefault();
     canvasEl.setPointerCapture(event.pointerId);
-    pointers.set(event.pointerId, pointFromEvent(canvasEl, event));
+
+    const screenPoint = pointFromEvent(canvasEl, event);
+    pointers.set(event.pointerId, screenPoint);
 
     if (pointers.size === 1) {
-      const point = pointers.get(event.pointerId);
-      const hit = partsStore.hitTest(point.x, point.y);
+      const scenePoint = view.toScene(screenPoint.x, screenPoint.y);
+      const hit = partsStore.hitTest(scenePoint.x, scenePoint.y);
       partsStore.select(hit ? hit.id : null);
-      gesture = null;
-      if (hit) beginDrag(hit);
+      if (hit) beginDrag(hit, screenPoint);
+      else beginPan(screenPoint);
       return;
     }
 
     if (pointers.size === 2) {
-      beginTransform();
+      // A second finger joins whatever the first one started: a part
+      // gesture becomes a part transform, a camera gesture becomes a pinch.
+      const onPart = gesture && (gesture.type === 'drag' || gesture.type === 'transform');
+      if (onPart && partsStore.selected) beginTransform(partsStore.selected);
+      else gesture = { type: 'pinchView' };
     }
   });
 
   canvasEl.addEventListener('pointermove', (event) => {
     if (!partsAreEditable() || !pointers.has(event.pointerId)) return;
     event.preventDefault();
-    pointers.set(event.pointerId, pointFromEvent(canvasEl, event));
 
+    const previous = pointers.get(event.pointerId);
+    const current = pointFromEvent(canvasEl, event);
+    pointers.set(event.pointerId, current);
     if (!gesture) return;
 
     if (gesture.type === 'drag' && pointers.size === 1) {
-      const point = pointers.get(event.pointerId);
-      gesture.part.x += point.x - gesture.lastX;
-      gesture.part.y += point.y - gesture.lastY;
-      gesture.lastX = point.x;
-      gesture.lastY = point.y;
+      // Screen travel since the finger went down, converted to grid cells
+      // and rounded: the part hops cell to cell, never in between.
+      const dx = (current.x - gesture.anchorX) / view.zoom;
+      const dy = (current.y - gesture.anchorY) / view.zoom;
+      gesture.part.x = Math.round(gesture.originX + dx);
+      gesture.part.y = Math.round(gesture.originY + dy);
       partsStore.notifyTransformed();
+      return;
+    }
+
+    if (gesture.type === 'pan' && pointers.size === 1) {
+      view.panBy(current.x - gesture.lastX, current.y - gesture.lastY);
+      gesture.lastX = current.x;
+      gesture.lastY = current.y;
+      return;
+    }
+
+    if (gesture.type === 'pinchView' && pointers.size === 2) {
+      const other = [...pointers.entries()].find(([id]) => id !== event.pointerId)[1];
+      view.pinch(previous, other, current, other);
       return;
     }
 
@@ -120,12 +154,22 @@ export function initGestures(canvasEl) {
       const part = gesture.part;
 
       if (gesture.lastDistance > 0) {
-        const factor = metrics.distance / gesture.lastDistance;
-        part.scale = clamp(part.scale * factor, MIN_SCALE, MAX_SCALE);
+        gesture.pendingScale = clamp(
+          gesture.pendingScale * (metrics.distance / gesture.lastDistance),
+          MIN_PART_SCALE,
+          MAX_PART_SCALE
+        );
       }
       part.rotation += normalizeAngle(metrics.angle - gesture.lastAngle);
-      part.x += metrics.centerX - gesture.lastCenterX;
-      part.y += metrics.centerY - gesture.lastCenterY;
+      gesture.centerX += (metrics.centerX - gesture.lastCenterX) / view.zoom;
+      gesture.centerY += (metrics.centerY - gesture.lastCenterY) / view.zoom;
+
+      // Apply the scale first, then re-derive the top-left from the exact
+      // centre, so a scale step grows the part evenly around the fingers
+      // rather than from its corner.
+      part.scale = clampScale(gesture.pendingScale);
+      part.x = Math.round(gesture.centerX - part.sceneWidth / 2);
+      part.y = Math.round(gesture.centerY - part.sceneHeight / 2);
 
       gesture.lastDistance = metrics.distance;
       gesture.lastAngle = metrics.angle;
@@ -138,15 +182,22 @@ export function initGestures(canvasEl) {
   const endPointer = (event) => {
     if (!pointers.delete(event.pointerId)) return;
 
+    if (gesture && gesture.type === 'pinchView' && pointers.size < 2) {
+      view.snapToDevicePixels();
+    }
+
     if (pointers.size === 0) {
       gesture = null;
       return;
     }
 
-    // Lifting one finger mid-pinch hands the part back to a plain drag
-    // with whichever finger is still down, instead of ending the gesture.
+    // Lifting one finger mid-gesture hands over to the remaining finger
+    // instead of ending the gesture: a part pinch becomes a drag, a view
+    // pinch becomes a pan.
     if (pointers.size === 1 && gesture) {
-      beginDrag(gesture.part);
+      const [remaining] = [...pointers.values()];
+      if (gesture.type === 'transform') beginDrag(gesture.part, remaining);
+      else if (gesture.type === 'pinchView') beginPan(remaining);
     }
   };
 
