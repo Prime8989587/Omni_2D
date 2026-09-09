@@ -41,10 +41,23 @@ const TAP_SLOP_PX = 8;
 
 let drag = null;
 
-// The character's root bone. Always the target; there is no other.
+// The character's root bone: the bone with NO PARENT. That is the only
+// test. Nothing about a bone's rotation, its length, or which of its two
+// ends is labelled "head" has any bearing on it -- draw the root upside
+// down and it is still the root, because being the root is a fact about
+// the hierarchy, not about the drawing.
+//
+// A rig can end up with more than one parentless bone (deleting a root
+// re-parents its children to nothing), so when that happens the master
+// handle takes the one carrying the most of the character with it, which
+// is the body rather than some stray offcut.
 export function masterBone() {
-  const [root] = bonesStore.roots;
-  return root || null;
+  const roots = bonesStore.roots;
+  if (roots.length <= 1) return roots[0] || null;
+
+  const descendants = (bone) =>
+    bonesStore.childrenOf(bone.id).reduce((n, child) => n + 1 + descendants(child), 0);
+  return roots.reduce((best, bone) => (descendants(bone) > descendants(best) ? bone : best), roots[0]);
 }
 
 // Where the handle sits on screen: on the root bone, but kept inside the
@@ -54,8 +67,13 @@ export function masterHandlePosition() {
   const bone = masterBone();
   if (!bone) return null;
 
+  // The bone's MIDPOINT, not its head. The midpoint of a segment is the
+  // same place whichever end you call the head, so flipping or redrawing
+  // the root leaves the handle exactly where it was; anchoring to the
+  // head would make it jump to the other end of the bone.
   const head = bonesStore.worldHead(bone);
-  const point = view.toScreen(head.x, head.y);
+  const tail = bonesStore.worldTail(bone);
+  const point = view.toScreen((head.x + tail.x) / 2, (head.y + tail.y) / 2);
   const maxX = Math.max(EDGE_MARGIN_PX, view.viewWidth - EDGE_MARGIN_PX);
   const maxY = Math.max(EDGE_MARGIN_PX, view.viewHeight - EDGE_MARGIN_PX);
   const x = Math.min(Math.max(point.x, EDGE_MARGIN_PX), maxX);

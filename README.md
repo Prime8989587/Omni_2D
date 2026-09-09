@@ -719,8 +719,21 @@ Every bone after the root must be given a parent explicitly:
    Skeleton list.
 2. Tap **Add Bone**. (It stays greyed out until a parent is selected, and
    the hint line tells you what it's waiting for.)
-3. **Tap once** to set the tail. The new bone's head is already attached
-   to the parent's tail, so a child only needs one tap.
+3. **Tap where on the parent this bone should start.** Anywhere: partway
+   along it, at either end, or a little off it. That point becomes the new
+   bone's head.
+4. **Tap again** to set the tail.
+
+**A child can start anywhere on its parent, not just at the parent's far
+end.** A chest bone belongs on the middle of the torso, not hanging off
+the bottom of it, and an arm starts at a shoulder partway down the spine.
+Where the child attaches is simply where you tapped, stored as an offset
+from the parent, so forward kinematics carries it correctly however the
+parent later moves or rotates.
+
+This is independent of how the parent happens to be drawn. "Head" and
+"tail" are only labels for a bone's two ends; whether the torso was drawn
+top-down or bottom-up makes no difference to where a child may attach.
 
 Each newly placed bone becomes the selected one, so building a chain is
 just Add Bone → tap → Add Bone → tap: **root → spine → head → hair**
@@ -1107,8 +1120,12 @@ one is meant to be grabbed with a thumb, in motion, without looking — and
 its grab area is more generous still, so being 30 px off centre still
 catches it.
 
-The handle rides on the character's **root bone**, so it is always where
-the character is. Drag the character past the edge of the canvas and the
+The handle rides on the middle of the character's **root bone** — the
+bone with no parent. That is the only thing that decides it: not the
+bone's rotation, not its length, not which of its two ends is called the
+head. Draw the root upside down and it is still the root, and the handle
+does not move, because the midpoint of a bone is the same point whichever
+end you call the head. Drag the character past the edge of the canvas and the
 handle stays pinned just inside, drawn with a dashed ring to show it is
 waiting there rather than sitting on the character, so you can always grab
 it and bring the character back.

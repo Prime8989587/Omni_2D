@@ -98,11 +98,14 @@ export function beginPlaceBone() {
   const parent = bonesStore.selected;
   if (!parent) return; // the UI disables Add Bone in this case
 
-  // A child starts life attached to its parent's tail; it only needs a
-  // tail point. The head can be dragged elsewhere on the parent after.
-  // The parent's REST tail: this point becomes the new bone's stored
-  // offset, so taking it from a swinging parent would bake that swing in.
-  placement = { stage: 'tail', parentId: parent.id, head: bonesStore.restWorldTail(parent) };
+  // A child is placed with two taps, exactly like a root: the FIRST tap
+  // says where on the parent it starts. It used to be forced onto the
+  // parent's tail, which meant a chest bone could only ever hang off the
+  // far end of the torso, and which end that was depended on which way
+  // the torso happened to be drawn. Where a child attaches is a position
+  // the user picks; "head" and "tail" are just labels on the parent's
+  // two ends and must not decide it.
+  placement = { stage: 'head', parentId: parent.id, head: null };
   emit();
 }
 

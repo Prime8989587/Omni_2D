@@ -426,14 +426,18 @@ function handleBoneLayerChange() {
 
 function rigHintText(status) {
   if (status.placing) {
-    if (status.stage === 'head') return 'Tap the canvas to place the root bone’s head.';
+    if (status.stage === 'head') {
+      return status.parentName
+        ? `Tap where on "${status.parentName}" this bone should start.`
+        : 'Tap the canvas to place the root bone’s head.';
+    }
     return status.parentName
-      ? `Tap to set the tail. The head is attached to "${status.parentName}".`
+      ? `Now tap the far end of the new bone.`
       : 'Tap again to set the root bone’s tail.';
   }
   if (bonesStore.isEmpty) return 'Tap Add Bone to place the root bone.';
   if (!bonesStore.selected) return 'Tap a bone to select it as the parent for the next bone.';
-  return `Add Bone will attach to "${bonesStore.selected.name}". Drag the handles to adjust.`;
+  return `Add Bone will attach to "${bonesStore.selected.name}" wherever you tap on it.`;
 }
 
 // ---- Canvas size & view ------------------------------------------------
