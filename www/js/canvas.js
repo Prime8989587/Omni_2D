@@ -14,7 +14,6 @@
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
-import { masterHandlePosition, MASTER_HANDLE_RADIUS_PX, isPosing } from './poseTool.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
 import { deformVerticesSnapped, partQuad } from './mesh.js';
 import { sceneStore } from './scene.js';
@@ -42,8 +41,6 @@ const GRID_EDGE = 'rgba(255, 255, 255, 0.28)';
 // Rig mode veils the character art so bright pink bones stay readable on
 // top of colourful pixel art.
 const RIG_VEIL = 'rgba(0, 0, 0, 0.45)';
-const MASTER_FILL = 'rgba(255, 46, 147, 0.18)';
-const MASTER_FILL_ACTIVE = 'rgba(255, 46, 147, 0.34)';
 const MESH_WIRE = 'rgba(255, 143, 196, 0.4)';
 const SNAP_CELL_FILL = 'rgba(255, 46, 147, 0.45)';
 
@@ -299,53 +296,6 @@ function drawParentLink(bone) {
   ctx.restore();
 }
 
-// The single Free Move control: a thumb-sized ring on the root bone with
-// a four-way arrow inside, drawn in screen space so it stays the same
-// comfortable size at every zoom.
-function drawMasterHandle() {
-  const handle = masterHandlePosition();
-  if (!handle) return;
-
-  const r = MASTER_HANDLE_RADIUS_PX;
-  const grabbed = isPosing();
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(handle.x, handle.y, r, 0, Math.PI * 2);
-  ctx.fillStyle = grabbed ? MASTER_FILL_ACTIVE : MASTER_FILL;
-  ctx.fill();
-  ctx.lineWidth = grabbed ? 4 : 3;
-  ctx.strokeStyle = ACCENT;
-  // Dashed while tethered to the screen edge, so it is obvious the handle
-  // is not sitting on the character just now.
-  if (handle.tethered) ctx.setLineDash([6, 5]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Four-way arrow: "this moves things".
-  const arm = r * 0.52;
-  const tip = arm * 0.34;
-  ctx.strokeStyle = ACCENT;
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  ctx.moveTo(handle.x - arm, handle.y);
-  ctx.lineTo(handle.x + arm, handle.y);
-  ctx.moveTo(handle.x, handle.y - arm);
-  ctx.lineTo(handle.x, handle.y + arm);
-  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-    const ex = handle.x + dx * arm;
-    const ey = handle.y + dy * arm;
-    // Perpendicular offsets give each arm its arrowhead.
-    ctx.moveTo(ex - dx * tip - dy * tip, ey - dy * tip - dx * tip);
-    ctx.lineTo(ex, ey);
-    ctx.lineTo(ex - dx * tip + dy * tip, ey - dy * tip + dx * tip);
-  }
-  ctx.stroke();
-  ctx.restore();
-}
-
 function drawSkeleton() {
   const origin = view.toScreen(0, 0);
   ctx.fillStyle = RIG_VEIL;
@@ -442,10 +392,10 @@ function render() {
 
   if (isRig) drawSkeleton();
 
-  // Free Move draws NO skeleton -- no bone bodies, no per-bone handles,
-  // no parent links -- just the one master handle that moves the whole
-  // character. The user watches the character, not a diagram of its rig.
-  if (appState.state === AppState.ANIMATING) drawMasterHandle();
+  // Free Move draws NOTHING but the character: no bone bodies, no
+  // handles, no parent links, no gizmo of any kind. A drag anywhere moves
+  // it, so there is nothing to aim at and nothing to get in the way of
+  // watching it move.
 
   if (isBind) {
     const part = partsStore.selected;

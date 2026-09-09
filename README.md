@@ -31,10 +31,10 @@ a real, installable Android APK.
   "Re-assembling layers exported from another app").
   See "The pixel grid" below, which also lists what was
   re-verified from Parts 2–5 and the one gesture that changed.
-- **Part 6** (current) adds **Free Move**: one big handle on the
-  character moves the whole thing, live — rigid bones in lockstep, spring
-  bones trailing and settling. See "Free Move: moving the character"
-  below.
+- **Part 6** (current) adds **Free Move**: drag anywhere, or use the pad
+  below the buttons, to move the whole character live — rigid bones in
+  lockstep, spring bones trailing and settling. See "Free Move: moving the
+  character" below.
 - **Editor batch** makes it a tool you can actually work in:
   delete, reorder, duplicate, hide and lock layers; assign bones to layers
   and hide bone branches; **undo and redo everything**; and **save projects
@@ -69,8 +69,8 @@ www/js/rigTool.js       Touch handling for Bones: two-tap placement, handle drag
 www/js/bindTool.js      Touch handling for weights: the paint brush
 www/js/physics.js       The frame loop that keeps spring bones settling after
                          the input that disturbed them has stopped
-www/js/poseTool.js      Free Move: the master handle on the root bone, and the
-                         drag that moves the whole character
+www/js/poseTool.js      Free Move: the drag that moves the whole character, from
+                         the canvas or from the pad below the buttons
 www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
 www/js/project.js       The whole scene as plain data and back — used by both
                          undo/redo and save/load, so there is one serializer
@@ -1000,10 +1000,11 @@ before you tune anything.
 
 ### Testing it by hand
 
-Go to **Animate** and drag the ✥ handle around — the whole character
-follows and the spring bones trail behind it (see "Free Move: moving the
-character"). The **Debug: rotate** slider is still there in the bone
-editor when you want a precise angle rather than a fingertip.
+Go to **Animate** and drag — on the canvas, or on the pad below the
+buttons if you would rather watch the character than your thumb. The whole
+character follows and the spring bones trail behind it (see "Free Move:
+moving the character"). The **Debug: rotate** slider is still there in the
+bone editor when you want a precise angle rather than a fingertip.
 
 Build a rig where the contrast is visible side by side:
 
@@ -1109,36 +1110,23 @@ two poses are the same thing.
 
 ## Free Move: moving the character
 
-Tap **Animate**. One large round handle with a four-way arrow sits on the
-character. Drag it and the whole character moves.
+Tap **Animate**, then drag. Two places work, and they do exactly the same
+thing:
 
-That is the entire control surface. There is no bone list, no target to
-choose, no per-bone gizmos, and no hit-testing of layers or pixels. One
-handle, one meaning: *move the character*. It is roughly 60 pixels across,
-about four times the size of Rig mode's precision handles, because this
-one is meant to be grabbed with a thumb, in motion, without looking — and
-its grab area is more generous still, so being 30 px off centre still
-catches it.
+- **Anywhere on the canvas.** There is nothing to aim at — no handle, no
+  gizmo, no bone to hit. A drag anywhere moves the character.
+- **The pad below the buttons.** Same drag, but your finger is nowhere
+  near the artwork, so you can throw the character around and actually
+  watch it bounce and settle instead of watching your own thumb.
 
-The handle rides on the middle of the character's **root bone** — the
-bone with no parent. That is the only thing that decides it: not the
-bone's rotation, not its length, not which of its two ends is called the
-head. Draw the root upside down and it is still the root, and the handle
-does not move, because the midpoint of a bone is the same point whichever
-end you call the head. Drag the character past the edge of the canvas and the
-handle stays pinned just inside, drawn with a dashed ring to show it is
-waiting there rather than sitting on the character, so you can always grab
-it and bring the character back.
-
-Dragging anywhere **off** the handle pans the view instead, and two
-fingers still pinch to zoom. **⤢** re-fits.
+Two fingers pinch to zoom and pan the view; **⤢** re-fits.
 
 ### What follows what
 
-The drag writes **the root bone's own position** — for a root, which has
-no parent to be relative to, its stored offset *is* its world position.
-Nothing is passed downstream as a delta. Every other bone then derives its
-own position from that, every frame:
+The drag writes **the root bone's own position** — the root is the bone
+with no parent, and for a bone with no parent its stored offset *is* its
+world position. Nothing is passed downstream as a delta. Every other bone
+derives its own position from that, every frame:
 
 - **Bones without physics** move in perfect lockstep. Not "very quickly":
   their positions are not simulated at all, they are recomputed from the
@@ -1153,6 +1141,17 @@ own position from that, every frame:
 
 Two spring bones on the same parent stay independent — a left one and a
 right one keep their own separate offsets and never drift together.
+
+Which bone the drag moves depends on **one thing only**: being the bone
+with no parent. Not its rotation, not its length, not which of its two
+ends is called the head. Draw the root upside down and it is still the
+root.
+
+### Nothing on screen but the character
+
+Free Move draws no skeleton and no controls over the artwork: no bone
+bodies, no handles, no parent links, not even a selection outline on a
+layer. The canvas shows the character and the checkerboard, full stop.
 
 ### Sway: how much a bone minds being moved
 
@@ -1173,9 +1172,8 @@ to a constant downward pull; Sway is its response to being moved.
 
 Dragging in Rig mode does what it did in Part 3: the **handles** on a
 selected bone's head and tail author that bone's rest pose, and dragging
-empty grid pans. The master handle belongs to Free Move only. The
-**Debug: rotate** sliders remain in the bone editor for setting a precise
-angle.
+empty grid pans. Moving the character lives in Free Move. The **Debug:
+rotate** sliders remain in the bone editor for setting a precise angle.
 
 ### What it renders through
 

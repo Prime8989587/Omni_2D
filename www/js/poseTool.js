@@ -1,13 +1,14 @@
 // Free Move: moving the whole character.
 //
-// ONE HANDLE, ONE MEANING
+// NOTHING TO AIM AT
 //
-// Free Move has exactly one control: a big round handle riding on the
-// character's root bone. Drag it and the whole character moves. There is
-// nothing to choose and nothing to aim at -- no bone picker, no per-bone
-// gizmos, no hit-testing of layers or pixels. The handle is deliberately
-// far larger than Rig mode's precision handles, because this one is meant
-// to be grabbed with a thumb, mid-motion, without looking.
+// A drag anywhere on the canvas moves the character. No handle to hit, no
+// bone picker, no hit-testing of bones, layers or pixels -- there is only
+// one thing a drag can mean here, so it needs no target.
+//
+// There is also a drag pad BELOW the buttons, well clear of the canvas.
+// It does exactly the same thing, and exists so the character can be
+// thrown about and watched jiggling without a thumb parked on top of it.
 //
 // WHAT A DRAG WRITES
 //
@@ -31,14 +32,6 @@ import { view } from './view.js';
 import { history } from './history.js';
 import { appState, AppState } from './state.js';
 
-// Rig mode's handles are 5-7px drawn with a 26px grab radius, sized for
-// placing a bone precisely. This one is for a thumb, so it is roughly
-// twice that across and easier to hit than to miss.
-export const MASTER_HANDLE_RADIUS_PX = 30;
-const MASTER_HANDLE_HIT_PX = 40;
-const EDGE_MARGIN_PX = MASTER_HANDLE_RADIUS_PX + 8;
-const TAP_SLOP_PX = 8;
-
 let drag = null;
 
 // The character's root bone: the bone with NO PARENT. That is the only
@@ -58,33 +51,6 @@ export function masterBone() {
   const descendants = (bone) =>
     bonesStore.childrenOf(bone.id).reduce((n, child) => n + 1 + descendants(child), 0);
   return roots.reduce((best, bone) => (descendants(bone) > descendants(best) ? bone : best), roots[0]);
-}
-
-// Where the handle sits on screen: on the root bone, but kept inside the
-// canvas so that a character dragged off the edge can still be grabbed
-// and brought back.
-export function masterHandlePosition() {
-  const bone = masterBone();
-  if (!bone) return null;
-
-  // The bone's MIDPOINT, not its head. The midpoint of a segment is the
-  // same place whichever end you call the head, so flipping or redrawing
-  // the root leaves the handle exactly where it was; anchoring to the
-  // head would make it jump to the other end of the bone.
-  const head = bonesStore.worldHead(bone);
-  const tail = bonesStore.worldTail(bone);
-  const point = view.toScreen((head.x + tail.x) / 2, (head.y + tail.y) / 2);
-  const maxX = Math.max(EDGE_MARGIN_PX, view.viewWidth - EDGE_MARGIN_PX);
-  const maxY = Math.max(EDGE_MARGIN_PX, view.viewHeight - EDGE_MARGIN_PX);
-  const x = Math.min(Math.max(point.x, EDGE_MARGIN_PX), maxX);
-  const y = Math.min(Math.max(point.y, EDGE_MARGIN_PX), maxY);
-  return { x, y, tethered: x !== point.x || y !== point.y };
-}
-
-export function isOnMasterHandle(screenPoint) {
-  const handle = masterHandlePosition();
-  if (!handle) return false;
-  return Math.hypot(screenPoint.x - handle.x, screenPoint.y - handle.y) <= MASTER_HANDLE_HIT_PX;
 }
 
 export function isPosing() {
@@ -143,67 +109,49 @@ function sceneFromScreen(point) {
   return view.toScene(point.x, point.y);
 }
 
-export function initPoseTool(canvasEl) {
-  let pointerDownScreen = null;
-  let pan = null;
-
+// Both surfaces -- the canvas and the pad below the buttons -- run the
+// same drag. Only deltas matter (the grab offset is captured on the way
+// down), and view.toScene divides by the same zoom either way, so a
+// finger travelling N screen pixels moves the character N/zoom scene
+// pixels wherever it happens to be travelling.
+function attachDragSurface(element) {
   const active = () => appState.state === AppState.ANIMATING;
 
-  canvasEl.addEventListener('pointerdown', (event) => {
+  element.addEventListener('pointerdown', (event) => {
     if (!active()) return;
     // Two fingers belong to the camera (viewGestures pinches and pans).
     if (view.activePointerCount > 1) {
       endPoseDrag();
-      pointerDownScreen = null;
-      pan = null;
       return;
     }
     event.preventDefault();
-    canvasEl.setPointerCapture(event.pointerId);
-
-    const screenPoint = screenFromEvent(canvasEl, event);
-    pointerDownScreen = screenPoint;
-    pan = null;
-
-    if (isOnMasterHandle(screenPoint)) {
-      beginPoseDrag(masterBone(), sceneFromScreen(screenPoint));
-    }
+    element.setPointerCapture(event.pointerId);
+    beginPoseDrag(masterBone(), sceneFromScreen(screenFromEvent(element, event)));
   });
 
-  canvasEl.addEventListener('pointermove', (event) => {
-    if (!active() || !pointerDownScreen) return;
+  element.addEventListener('pointermove', (event) => {
+    if (!active() || !isPosing()) return;
     if (view.activePointerCount > 1) {
       endPoseDrag();
       return;
     }
     event.preventDefault();
-    const screenPoint = screenFromEvent(canvasEl, event);
-
-    if (isPosing()) {
-      updatePoseDrag(sceneFromScreen(screenPoint));
-      return;
-    }
-
-    // Anywhere off the handle, a finger pans the view -- the camera is
-    // not part of the rig, so this does not compete with the one control.
-    if (!pan) {
-      const moved = Math.hypot(screenPoint.x - pointerDownScreen.x, screenPoint.y - pointerDownScreen.y);
-      if (moved <= TAP_SLOP_PX) return;
-      pan = { lastX: pointerDownScreen.x, lastY: pointerDownScreen.y };
-    }
-    view.panBy(screenPoint.x - pan.lastX, screenPoint.y - pan.lastY);
-    pan.lastX = screenPoint.x;
-    pan.lastY = screenPoint.y;
+    updatePoseDrag(sceneFromScreen(screenFromEvent(element, event)));
   });
 
   const endPointer = () => {
     if (!active()) return;
     endPoseDrag();
-    if (pan) view.snapToDevicePixels();
-    pan = null;
-    pointerDownScreen = null;
   };
 
-  canvasEl.addEventListener('pointerup', endPointer);
-  canvasEl.addEventListener('pointercancel', endPointer);
+  element.addEventListener('pointerup', endPointer);
+  element.addEventListener('pointercancel', endPointer);
+}
+
+export function initPoseTool(canvasEl) {
+  attachDragSurface(canvasEl);
+}
+
+export function initMovePad(padEl) {
+  attachDragSurface(padEl);
 }

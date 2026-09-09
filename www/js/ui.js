@@ -14,7 +14,7 @@ import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import { initBindTool, setBrushRadius, setBrushStrength, getBrush } from './bindTool.js';
-import { initPoseTool } from './poseTool.js';
+import { initPoseTool, initMovePad } from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
 import { serializeProject, applyProject } from './project.js';
@@ -158,6 +158,7 @@ function cacheElements() {
   els.inertiaSlider = document.getElementById('inertiaSlider');
   els.inertiaValue = document.getElementById('inertiaValue');
   els.animateHint = document.getElementById('animateHint');
+  els.movePad = document.getElementById('movePad');
 
   els.confirmModal = document.getElementById('confirmModal');
   els.confirmMessage = document.getElementById('confirmMessage');
@@ -900,14 +901,17 @@ function renderChrome() {
   els.canvasWrap.classList.toggle('is-rig-mode', isRig || isBind);
   els.canvasWrap.classList.toggle('is-recording', isRecording);
 
-  // Free Move: one handle on the character, and it moves all of it.
+  // Free Move: drag the canvas, or the pad below, to move the character.
+  const canMove = isAnimating && !bonesStore.isEmpty && !partsStore.isEmpty;
   els.animateHint.hidden = !isAnimating;
+  els.movePad.hidden = !canMove;
   if (isAnimating) {
     els.animateHint.textContent = bonesStore.isEmpty
       ? 'Build a skeleton in Rig mode first — Free Move moves the character by its root bone.'
       : partsStore.isEmpty
         ? 'Import artwork first, then move it here.'
-        : 'Drag the ✥ handle to move the whole character. Spring bones trail behind and settle.';
+        : 'Drag anywhere on the canvas to move the whole character — or use the pad below to ' +
+          'keep your finger clear of it. Spring bones trail behind and settle.';
   }
 
   els.startBtn.disabled = !isAnimating;
@@ -1245,6 +1249,7 @@ export function initUI() {
   initRigTool(els.canvas);
   initBindTool(els.canvas);
   initPoseTool(els.canvas);
+  initMovePad(els.movePad);
   bindEvents();
   initPhysics();
 
