@@ -30,6 +30,7 @@ import { appState, AppState } from './state.js';
 import { bonesStore } from './bones.js';
 import { view } from './view.js';
 import { history } from './history.js';
+import { beginPoseDrag, updatePoseDrag, endPoseDrag, isPosing, boneAt } from './poseTool.js';
 
 // Touch tolerances are in SCREEN pixels, so a bone is as easy to grab
 // zoomed out as zoomed in.
@@ -43,6 +44,7 @@ let pan = null; // null | { lastX, lastY } screen-space finger position
 let pointerDownScreen = null;
 let dragCell = null; // the grid cell a dragged handle is currently snapped to
 let dragHistory = null; // undo snapshot taken when a handle drag begins
+let posePending = null; // a bone the finger is on, not yet dragged far enough
 
 const listeners = new Set();
 
@@ -187,6 +189,8 @@ export function initRigTool(canvasEl) {
     if (appState.state !== AppState.RIG) return;
     // A second finger means a pinch, which viewGestures owns.
     if (view.activePointerCount > 1) {
+      endPoseDrag();
+      posePending = null;
       drag = null;
       pan = null;
       pointerDownScreen = null;
@@ -204,6 +208,10 @@ export function initRigTool(canvasEl) {
     // One undo step per handle drag, not one per pointermove.
     dragHistory = drag ? history.capture('Move bone') : null;
     pan = null;
+    // Not a handle and not mid-placement: a finger on a bone's BODY poses
+    // it live, the same interaction as Free Move. Held until it has moved
+    // past the tap slop so that tapping a bone still just selects it.
+    posePending = !drag && !placement ? boneAt(sceneFromScreen(screenPoint)) : null;
   });
 
   canvasEl.addEventListener('pointermove', (event) => {
@@ -212,6 +220,24 @@ export function initRigTool(canvasEl) {
     event.preventDefault();
 
     const screenPoint = screenFromEvent(canvasEl, event);
+
+    if (isPosing()) {
+      updatePoseDrag(sceneFromScreen(screenPoint));
+      emit();
+      return;
+    }
+
+    if (posePending) {
+      const moved = Math.hypot(screenPoint.x - pointerDownScreen.x, screenPoint.y - pointerDownScreen.y);
+      if (moved > TAP_SLOP_PX) {
+        bonesStore.select(posePending.id);
+        beginPoseDrag(posePending, sceneFromScreen(pointerDownScreen));
+        updatePoseDrag(sceneFromScreen(screenPoint));
+        posePending = null;
+        emit();
+      }
+      return;
+    }
 
     if (drag) {
       const snapped = snapToCell(sceneFromScreen(screenPoint));
@@ -239,7 +265,12 @@ export function initRigTool(canvasEl) {
 
     const screenPoint = screenFromEvent(canvasEl, event);
     const moved = Math.hypot(screenPoint.x - pointerDownScreen.x, screenPoint.y - pointerDownScreen.y);
-    if (!drag && !pan && moved <= TAP_SLOP_PX && view.activePointerCount <= 1) handleTap(screenPoint);
+    const wasPosing = isPosing();
+    endPoseDrag();
+    posePending = null;
+    if (!drag && !pan && !wasPosing && moved <= TAP_SLOP_PX && view.activePointerCount <= 1) {
+      handleTap(screenPoint);
+    }
 
     if (pan) view.snapToDevicePixels();
     const wasDragging = drag !== null;

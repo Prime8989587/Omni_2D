@@ -95,6 +95,10 @@
               <span>Gravity <b id="gravityValue">0</b></span>
               <input id="gravitySlider" class="slider" type="range" />
             </label>
+            <label class="slider-field slider-field--wide">
+              <span>Sway when moved <b id="inertiaValue">1</b></span>
+              <input id="inertiaSlider" class="slider" type="range" />
+            </label>
           </div>
         </div>
 
@@ -168,6 +172,8 @@
           <span class="flourish flourish--br" aria-hidden="true">&#10047;</span>
         </button>
       </div>
+
+      <p id="animateHint" class="rig-hint" hidden></p>
 
       <div id="animateControls" class="control-row" hidden>
         <button id="exitBtn" class="btn btn--icon" type="button" aria-label="Exit animate mode">&#10005;</button>

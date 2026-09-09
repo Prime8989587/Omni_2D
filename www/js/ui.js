@@ -14,6 +14,7 @@ import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import { initBindTool, setBrushRadius, setBrushStrength, getBrush } from './bindTool.js';
+import { initPoseTool } from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
 import { serializeProject, applyProject } from './project.js';
@@ -154,6 +155,9 @@ function cacheElements() {
   els.dampingValue = document.getElementById('dampingValue');
   els.gravitySlider = document.getElementById('gravitySlider');
   els.gravityValue = document.getElementById('gravityValue');
+  els.inertiaSlider = document.getElementById('inertiaSlider');
+  els.inertiaValue = document.getElementById('inertiaValue');
+  els.animateHint = document.getElementById('animateHint');
 
   els.confirmModal = document.getElementById('confirmModal');
   els.confirmMessage = document.getElementById('confirmMessage');
@@ -524,6 +528,8 @@ function renderPhysicsControls(bone) {
   els.dampingValue.textContent = bone.damping.toFixed(1);
   els.gravitySlider.value = String(bone.gravityInfluence);
   els.gravityValue.textContent = String(bone.gravityInfluence);
+  els.inertiaSlider.value = String(bone.inertia);
+  els.inertiaValue.textContent = bone.inertia.toFixed(1);
 }
 
 // ---- Bind mode ---------------------------------------------------------
@@ -879,6 +885,9 @@ function renderChrome() {
     : isRig ? 'Rig Mode' : isBind ? 'Bind Mode' : 'Animate Mode';
   els.modeLabel.classList.toggle('is-recording', isRecording);
   els.logo.hidden = !isHome;
+  // Import belongs to the Home screen, and the other screens need the
+  // room in the top bar for their mode label.
+  els.importBtn.hidden = !isHome;
   els.canvasEmptyHint.hidden = !isHome || !partsStore.isEmpty;
   els.homeCanvasRow.hidden = !isHome;
   els.canvasSizeBtn.textContent = `Canvas ${sceneStore.width} × ${sceneStore.height} px`;
@@ -886,6 +895,14 @@ function renderChrome() {
   els.canvasWrap.classList.toggle('is-animate-mode', isAnimateMode);
   els.canvasWrap.classList.toggle('is-rig-mode', isRig || isBind);
   els.canvasWrap.classList.toggle('is-recording', isRecording);
+
+  // Free Move: the Animate screen is where the whole rig is posed by hand.
+  els.animateHint.hidden = !isAnimating;
+  if (isAnimating) {
+    els.animateHint.textContent = bonesStore.isEmpty
+      ? 'Build a skeleton in Rig mode first, then drag its bones here to pose the character.'
+      : 'Drag any bone to move it. Everything under it follows; spring bones trail behind and settle.';
+  }
 
   els.startBtn.disabled = !isAnimating;
   els.stopBtn.disabled = !isRecording;
@@ -1127,6 +1144,7 @@ function bindEvents() {
   attachContinuousHistory(els.stiffnessSlider, 'Change stiffness');
   attachContinuousHistory(els.dampingSlider, 'Change damping');
   attachContinuousHistory(els.gravitySlider, 'Change gravity');
+  attachContinuousHistory(els.inertiaSlider, 'Change sway');
   attachContinuousHistory(els.densitySlider, 'Change mesh density');
 
   els.importBtn.addEventListener('click', handleImport);
@@ -1180,6 +1198,8 @@ function bindEvents() {
     handlePhysicsParam('damping', els.dampingSlider, els.dampingValue, 1));
   els.gravitySlider.addEventListener('input', () =>
     handlePhysicsParam('gravityInfluence', els.gravitySlider, els.gravityValue));
+  els.inertiaSlider.addEventListener('input', () =>
+    handlePhysicsParam('inertia', els.inertiaSlider, els.inertiaValue, 1));
 
   els.scenePanelToggle.addEventListener('click', toggleScenePanel);
   els.toFrontBtn.addEventListener('click', () =>
@@ -1218,12 +1238,14 @@ export function initUI() {
   initGestures(els.canvas);
   initRigTool(els.canvas);
   initBindTool(els.canvas);
+  initPoseTool(els.canvas);
   bindEvents();
   initPhysics();
 
   applySliderRange(els.stiffnessSlider, PHYSICS_RANGES.stiffness);
   applySliderRange(els.dampingSlider, PHYSICS_RANGES.damping);
   applySliderRange(els.gravitySlider, PHYSICS_RANGES.gravityInfluence);
+  applySliderRange(els.inertiaSlider, PHYSICS_RANGES.inertia);
 
   const brush = getBrush();
   els.brushSlider.value = String(brush.radius);

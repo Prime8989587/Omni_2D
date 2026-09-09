@@ -392,6 +392,17 @@ function render() {
 
   if (isRig) drawSkeleton();
 
+  // Free Move: the bones are the handles, so they have to be visible --
+  // but without the rig veil, since this screen is for watching the
+  // character move rather than for building the skeleton.
+  if (appState.state === AppState.ANIMATING) {
+    for (const bone of bonesStore.bones) {
+      if (!bonesStore.isVisible(bone)) continue;
+      drawParentLink(bone);
+      drawBone(bone, bone.id === bonesStore.selectedId);
+    }
+  }
+
   if (isBind) {
     const part = partsStore.selected;
     if (part && part.mesh && part.mesh.isBound && boneTransforms) {
@@ -404,8 +415,10 @@ function render() {
     }
   }
 
-  // Parts are not selectable in Rig or Bind mode, so no outline there.
-  const selected = !isRig && !isBind ? partsStore.selected : null;
+  // The selection outline belongs to the Home screen, where layers are
+  // what you manipulate. Rig, Bind and Free Move are all about the
+  // skeleton, so the outline would just be noise over the artwork.
+  const selected = appState.state === AppState.HOME ? partsStore.selected : null;
   if (selected) drawPartOutline(selected);
 
   // FUTURE HOOK: animation playback draws here.

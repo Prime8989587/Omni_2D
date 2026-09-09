@@ -15,7 +15,7 @@
 // deep-copied, so a snapshot can never be mutated from underneath.
 
 import { Part, partsStore, reservePartId } from './parts.js';
-import { Bone, bonesStore, reserveBoneId } from './bones.js';
+import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA } from './bones.js';
 import { MeshVertex, PartMesh } from './mesh.js';
 import { sceneStore } from './scene.js';
 
@@ -123,6 +123,7 @@ function serializeBone(bone) {
     stiffness: bone.stiffness,
     damping: bone.damping,
     gravityInfluence: bone.gravityInfluence,
+    inertia: bone.inertia,
     simWorldRotation: bone.simWorldRotation,
     angularVelocity: bone.angularVelocity,
     attachedPartId: bone.attachedPartId,
@@ -144,6 +145,9 @@ function deserializeBone(data) {
   bone.stiffness = data.stiffness;
   bone.damping = data.damping;
   bone.gravityInfluence = data.gravityInfluence;
+  // Projects saved before Free Move existed have no sway value; those
+  // rigs were authored without it, so they keep the default.
+  bone.inertia = data.inertia ?? DEFAULT_INERTIA;
   bone.simWorldRotation = data.simWorldRotation ?? null;
   bone.angularVelocity = data.angularVelocity || 0;
   bone.attachedPartId = data.attachedPartId ?? null;
@@ -170,4 +174,7 @@ export function applyProject(data) {
   if (data.canvas) sceneStore.setSize(data.canvas.width, data.canvas.height);
   partsStore.replaceAll((data.parts || []).map(deserializePart), data.selectedPartId ?? null);
   bonesStore.replaceAll((data.bones || []).map(deserializeBone), data.selectedBoneId ?? null);
+  // Loading (or undoing) teleports the skeleton; that jump is not motion
+  // anyone applied, so the springs must not feel it as one.
+  bonesStore.resumePhysics();
 }

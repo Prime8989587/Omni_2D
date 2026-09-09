@@ -36,6 +36,10 @@ function tick(timestamp) {
 export function wakePhysics() {
   if (frameId !== null || !bonesStore.hasPhysicsBones) return;
   lastTimestamp = 0;
+  // The pivot history deliberately survives this: during a drag the loop
+  // sleeps and wakes every frame until a spring actually starts moving,
+  // and clearing it here would wipe the measurement each time. bones.js
+  // discards it on a real pause instead, by elapsed time.
   frameId = requestAnimationFrame(tick);
 }
 

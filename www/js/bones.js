@@ -36,12 +36,36 @@ export function reserveBoneId(id, name) {
 export const DEFAULT_STIFFNESS = 180;
 export const DEFAULT_DAMPING = 8;
 export const DEFAULT_GRAVITY = 0;
+// How strongly a bone resists having its pivot moved out from under it.
+// On by default: a spring bone that does not react when the character is
+// dragged around is not doing its job.
+export const DEFAULT_INERTIA = 1;
 
 export const PHYSICS_RANGES = Object.freeze({
   stiffness: { min: 10, max: 600, step: 5 },
   damping: { min: 0.5, max: 40, step: 0.5 },
   gravityInfluence: { min: 0, max: 60, step: 1 },
+  inertia: { min: 0, max: 3, step: 0.1 },
 });
+
+// A pivot that teleports (a bone dropped somewhere far away, a project
+// loaded) would otherwise hand the integrator an impulse big enough to
+// throw the bone into orbit. Fast finger flicks stay well under this.
+const MAX_PIVOT_ACCELERATION = 12000; // scene px / s^2
+
+// The pivot history is a frame-to-frame difference. The loop sleeps and
+// wakes constantly during a drag -- a spring that has not started moving
+// yet lets the loop stop, and the next finger movement starts it again --
+// so the history has to SURVIVE those gaps or the acceleration is never
+// measured at all. What it must not survive is a real pause, where the
+// difference would be across dead time rather than across a frame.
+const MAX_PIVOT_GAP_MS = 250;
+
+// A uniform rod of length L pivoted at one end: the torque a pivot
+// acceleration exerts about that end, divided by the rod's moment of
+// inertia, is 3/(2L) times the transverse component. Same shape as the
+// gravity term below, which is the same physics with a constant field.
+const ROD_PIVOT_FACTOR = 1.5;
 
 // A long stall (backgrounded app) must not be integrated as one huge step,
 // and each substep stays small enough for the integrator to stay stable
@@ -87,6 +111,14 @@ export class Bone {
     // moment physics is switched on.
     this.simWorldRotation = null;
     this.angularVelocity = 0;
+    this.inertia = DEFAULT_INERTIA;
+
+    // Where this bone's pivot was on the previous frame, and how fast it
+    // was travelling, so the simulation can tell that the bone is being
+    // carried somewhere. Transient: never serialized, cleared on resume.
+    this.pivotPrevHead = null;
+    this.pivotVelocity = null;
+    this.pivotAcceleration = { x: 0, y: 0 };
 
     // Which layer this bone is primarily associated with, chosen by the
     // user rather than inferred. null means "not assigned yet". Nothing
@@ -123,6 +155,7 @@ class BonesStore {
     this._bones = [];
     this._selectedId = null;
     this._listeners = new Set();
+    this._lastPivotAt = 0;
   }
 
   get bones() {
@@ -341,6 +374,16 @@ class BonesStore {
     this._emit('transform');
   }
 
+  // Places the bone's head at a world point, keeping its rotation and
+  // length -- so the bone and everything under it translate together while
+  // its parent chain stays exactly where it is. This is what a live drag
+  // writes: the ONE bone the finger holds, expressed as an offset from its
+  // parent's rest pose, with every other bone deriving from it as usual.
+  moveWorldHead(bone, x, y) {
+    bone.localHead = this.toParentSpace(this.parentOf(bone), x, y);
+    this._emit('transform');
+  }
+
   // Nudges the head in world space, keeping the bone's shape: the tail
   // follows, so the whole bone (and its children) translate together.
   nudgePosition(bone, dx, dy) {
@@ -408,6 +451,67 @@ class BonesStore {
     return this._bones.some((bone) => bone.physicsEnabled);
   }
 
+  // Called when the frame loop starts up again. The pivot history is a
+  // frame-to-frame difference, and the gap across a sleep is not a frame:
+  // differentiating across it would invent a huge acceleration and kick
+  // every spring bone the moment the rig was touched.
+  resumePhysics() {
+    this._lastPivotAt = 0;
+    for (const bone of this._bones) {
+      bone.pivotPrevHead = null;
+      bone.pivotVelocity = null;
+      bone.pivotAcceleration = { x: 0, y: 0 };
+    }
+  }
+
+  // How fast each physics bone's pivot is accelerating, measured once per
+  // frame (not per substep: the pivot only moves when the rig changes, so
+  // differentiating inside the frame would turn one move into a spike).
+  _measurePivots(dt) {
+    if (dt <= 0) return;
+
+    const now = Date.now();
+    const gap = this._lastPivotAt ? now - this._lastPivotAt : 0;
+    this._lastPivotAt = now;
+    if (gap > MAX_PIVOT_GAP_MS) {
+      // Too long to be one frame: differentiating across it would invent
+      // an acceleration nobody applied. Start the history again instead.
+      for (const bone of this._bones) {
+        bone.pivotPrevHead = null;
+        bone.pivotVelocity = null;
+        bone.pivotAcceleration = { x: 0, y: 0 };
+      }
+    }
+
+    for (const bone of this._bones) {
+      if (!bone.physicsEnabled) continue;
+
+      const head = this.worldHead(bone);
+      if (!bone.pivotPrevHead) {
+        bone.pivotPrevHead = { x: head.x, y: head.y };
+        bone.pivotVelocity = { x: 0, y: 0 };
+        bone.pivotAcceleration = { x: 0, y: 0 };
+        continue;
+      }
+
+      const vx = (head.x - bone.pivotPrevHead.x) / dt;
+      const vy = (head.y - bone.pivotPrevHead.y) / dt;
+      let ax = (vx - bone.pivotVelocity.x) / dt;
+      let ay = (vy - bone.pivotVelocity.y) / dt;
+
+      const magnitude = Math.hypot(ax, ay);
+      if (magnitude > MAX_PIVOT_ACCELERATION) {
+        const scale = MAX_PIVOT_ACCELERATION / magnitude;
+        ax *= scale;
+        ay *= scale;
+      }
+
+      bone.pivotAcceleration = { x: ax, y: ay };
+      bone.pivotVelocity = { x: vx, y: vy };
+      bone.pivotPrevHead = { x: head.x, y: head.y };
+    }
+  }
+
   // Advances every physics bone by dt seconds. Returns true while anything
   // is still moving, so the caller's frame loop knows when it may stop.
   //
@@ -417,6 +521,8 @@ class BonesStore {
     const clamped = Math.min(Math.max(dt, 0), MAX_FRAME_DT);
     const steps = Math.max(1, Math.ceil(clamped / MAX_SUBSTEP));
     const h = clamped / steps;
+
+    this._measurePivots(clamped);
 
     let active = false;
     for (let i = 0; i < steps; i++) {
@@ -452,10 +558,31 @@ class BonesStore {
       // Normalized so the bone always springs the short way round rather
       // than unwinding the long way through a full turn.
       const error = normalizeAngle(this.targetWorldRotation(bone) - bone.simWorldRotation);
+
+      // Carrying a bone around is felt as a torque about its own pivot:
+      // in the pivot's accelerating frame the bone's mass is pushed the
+      // other way, which is why a ponytail swings back when the head moves
+      // sideways. Without this a spring bone whose parent is DRAGGED --
+      // rather than rotated -- would follow in perfect lockstep and never
+      // jiggle at all, because the whole chain merely translates and no
+      // angle anywhere changes.
+      //
+      // The transverse component is what turns the bone; the same
+      // expression with a constant downward field gives the gravity term
+      // below, which is exactly what gravity is.
+      const sin = Math.sin(bone.simWorldRotation);
+      const cos = Math.cos(bone.simWorldRotation);
+      const pivotTorque = bone.inertia === 0 || bone.length < 1e-6
+        ? 0
+        : (bone.inertia * ROD_PIVOT_FACTOR *
+            (bone.pivotAcceleration.x * sin - bone.pivotAcceleration.y * cos)) /
+          Math.max(bone.length, 1);
+
       const acceleration =
         bone.stiffness * error -
         bone.damping * bone.angularVelocity +
-        bone.gravityInfluence * Math.cos(bone.simWorldRotation);
+        bone.gravityInfluence * cos +
+        pivotTorque;
 
       bone.angularVelocity += acceleration * h;
       bone.simWorldRotation += bone.angularVelocity * h;
