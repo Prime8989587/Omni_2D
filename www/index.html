@@ -47,7 +47,40 @@
         <ul id="scenePartsList" class="scene-parts"></ul>
       </div>
 
+      <p id="rigHint" class="rig-hint" hidden></p>
+
+      <div id="rigPanel" class="scene-panel" hidden>
+        <div id="boneEditor" class="bone-editor" hidden>
+          <div class="bone-editor__row">
+            <input id="boneNameInput" class="text-input text-input--inline" type="text" aria-label="Bone name" autocomplete="off" />
+            <button id="deleteBoneBtn" class="btn btn--sm btn--danger" type="button">Delete</button>
+          </div>
+          <p id="boneReadout" class="bone-readout"></p>
+          <div class="bone-editor__row bone-editor__nudges">
+            <button id="nudgeLeftBtn" class="btn btn--nudge" type="button" aria-label="Move bone left">&#8592;</button>
+            <button id="nudgeUpBtn" class="btn btn--nudge" type="button" aria-label="Move bone up">&#8593;</button>
+            <button id="nudgeDownBtn" class="btn btn--nudge" type="button" aria-label="Move bone down">&#8595;</button>
+            <button id="nudgeRightBtn" class="btn btn--nudge" type="button" aria-label="Move bone right">&#8594;</button>
+            <button id="rotateCcwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone counter-clockwise">&#8634;</button>
+            <button id="rotateCwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone clockwise">&#8635;</button>
+          </div>
+        </div>
+
+        <button id="skeletonToggle" class="scene-panel__header" type="button" aria-expanded="true" aria-controls="boneList">
+          <span>Skeleton (<span id="boneCount">0</span>)</span>
+          <span id="skeletonChevron" class="scene-panel__chevron" aria-hidden="true">&#9662;</span>
+        </button>
+
+        <ul id="boneList" class="scene-parts"></ul>
+      </div>
+
+      <div id="rigControls" class="control-row" hidden>
+        <button id="rigExitBtn" class="btn btn--icon" type="button" aria-label="Exit rig mode">&#10005;</button>
+        <button id="addBoneBtn" class="btn btn--flourish" type="button">Add Bone</button>
+      </div>
+
       <div id="homeControls" class="control-row">
+        <button id="rigBtn" class="btn btn--lg btn--flourish" type="button">Rig</button>
         <button id="animateBtn" class="btn btn--lg btn--flourish-4" type="button">
           <span class="flourish flourish--tl" aria-hidden="true">&#10047;</span>
           <span class="flourish flourish--tr" aria-hidden="true">&#10047;</span>
@@ -77,6 +110,17 @@
         </div>
 
         <button id="cancelExportBtn" class="btn btn--cancel" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <div id="confirmModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <h2 id="confirmTitle" class="modal__title">Delete bone?</h2>
+        <p id="confirmMessage" class="modal__text"></p>
+        <div class="modal__actions">
+          <button id="confirmDeleteBtn" class="btn btn--danger" type="button">Delete</button>
+          <button id="confirmCancelBtn" class="btn" type="button">Keep</button>
+        </div>
       </div>
     </div>
 

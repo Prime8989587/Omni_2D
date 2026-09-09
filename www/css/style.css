@@ -105,7 +105,8 @@ button {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.canvas-wrap.is-animate-mode {
+.canvas-wrap.is-animate-mode,
+.canvas-wrap.is-rig-mode {
   border-color: var(--color-accent);
 }
 
@@ -194,13 +195,25 @@ button {
   flex: 0 0 auto;
 }
 
-.btn--cancel {
-  width: 100%;
+.btn--nudge {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 4px;
+  font-size: 18px;
+}
+
+.btn--cancel,
+.btn--danger {
   border-color: var(--color-danger);
   color: var(--color-danger);
 }
 
-.btn--cancel:active:not(:disabled) {
+.btn--cancel {
+  width: 100%;
+}
+
+.btn--cancel:active:not(:disabled),
+.btn--danger:active:not(:disabled) {
   background: var(--color-danger);
   color: #000000;
 }
@@ -364,6 +377,56 @@ button {
 .scene-part:active {
   background: var(--color-accent);
   color: #000000;
+}
+
+/* ---------- Rig mode ---------- */
+
+.rig-hint {
+  margin: 0 0 10px;
+  color: var(--color-accent);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.bone-editor {
+  margin-bottom: 10px;
+}
+
+.bone-editor__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bone-editor__nudges {
+  gap: 6px;
+}
+
+.text-input--inline {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.bone-readout {
+  margin: 8px 0;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* Indent marker showing a bone's depth in the hierarchy list. */
+.scene-part__depth {
+  color: rgba(255, 143, 196, 0.7);
+  font-weight: 400;
+}
+
+.modal__text {
+  margin: 0 0 20px;
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 /* ---------- Toast ---------- */

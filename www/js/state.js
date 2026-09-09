@@ -5,6 +5,7 @@
 
 export const AppState = Object.freeze({
   HOME: 'home',
+  RIG: 'rig', // building the skeleton; parts are not draggable here
   ANIMATING: 'animating', // in Animate mode, before Start is pressed
   RECORDING: 'recording', // in Animate mode, after Start, before Stop
 });
@@ -31,6 +32,18 @@ class StateManager {
     if (next === this._state) return;
     this._state = next;
     this._listeners.forEach((listener) => listener(this._state));
+  }
+
+  enterRigMode() {
+    if (this._state === AppState.HOME) {
+      this._transition(AppState.RIG);
+    }
+  }
+
+  exitRigMode() {
+    if (this._state === AppState.RIG) {
+      this._transition(AppState.HOME);
+    }
   }
 
   enterAnimateMode() {

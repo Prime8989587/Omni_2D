@@ -9,6 +9,7 @@
 // part snapping around.
 
 import { partsStore } from './parts.js';
+import { appState, AppState } from './state.js';
 
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 40;
@@ -69,8 +70,16 @@ function beginDrag(part) {
   gesture = { type: 'drag', part, lastX: pointer.x, lastY: pointer.y };
 }
 
+// Parts are only manipulable on the Home screen. In Rig mode the canvas
+// belongs to the bone tool instead, so the character stays put while the
+// skeleton is built on top of it.
+function partsAreEditable() {
+  return appState.state === AppState.HOME;
+}
+
 export function initGestures(canvasEl) {
   canvasEl.addEventListener('pointerdown', (event) => {
+    if (!partsAreEditable()) return;
     event.preventDefault();
     canvasEl.setPointerCapture(event.pointerId);
     pointers.set(event.pointerId, pointFromEvent(canvasEl, event));
@@ -90,7 +99,7 @@ export function initGestures(canvasEl) {
   });
 
   canvasEl.addEventListener('pointermove', (event) => {
-    if (!pointers.has(event.pointerId)) return;
+    if (!partsAreEditable() || !pointers.has(event.pointerId)) return;
     event.preventDefault();
     pointers.set(event.pointerId, pointFromEvent(canvasEl, event));
 

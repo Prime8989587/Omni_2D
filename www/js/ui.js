@@ -5,16 +5,22 @@
 
 import { appState, AppState } from './state.js';
 import { partsStore } from './parts.js';
+import { bonesStore } from './bones.js';
 import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
+import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import * as canvasEngine from './canvas.js';
 
 const TOAST_DURATION_MS = 4000;
+const NUDGE_STEP_PX = 2;
+const NUDGE_STEP_RADIANS = (2 * Math.PI) / 180;
 
 const els = {};
 let currentState = AppState.HOME;
 let scenePanelOpen = true;
+let skeletonPanelOpen = true;
 let toastTimer = null;
+let pendingDeleteBoneId = null;
 
 function cacheElements() {
   els.canvas = document.getElementById('canvas');
@@ -44,6 +50,32 @@ function cacheElements() {
   els.toFrontBtn = document.getElementById('toFrontBtn');
   els.toBackBtn = document.getElementById('toBackBtn');
   els.toast = document.getElementById('toast');
+
+  els.rigBtn = document.getElementById('rigBtn');
+  els.rigControls = document.getElementById('rigControls');
+  els.rigExitBtn = document.getElementById('rigExitBtn');
+  els.addBoneBtn = document.getElementById('addBoneBtn');
+  els.rigHint = document.getElementById('rigHint');
+  els.rigPanel = document.getElementById('rigPanel');
+  els.skeletonToggle = document.getElementById('skeletonToggle');
+  els.skeletonChevron = document.getElementById('skeletonChevron');
+  els.boneList = document.getElementById('boneList');
+  els.boneCount = document.getElementById('boneCount');
+  els.boneEditor = document.getElementById('boneEditor');
+  els.boneNameInput = document.getElementById('boneNameInput');
+  els.boneReadout = document.getElementById('boneReadout');
+  els.deleteBoneBtn = document.getElementById('deleteBoneBtn');
+  els.nudgeLeftBtn = document.getElementById('nudgeLeftBtn');
+  els.nudgeRightBtn = document.getElementById('nudgeRightBtn');
+  els.nudgeUpBtn = document.getElementById('nudgeUpBtn');
+  els.nudgeDownBtn = document.getElementById('nudgeDownBtn');
+  els.rotateCcwBtn = document.getElementById('rotateCcwBtn');
+  els.rotateCwBtn = document.getElementById('rotateCwBtn');
+
+  els.confirmModal = document.getElementById('confirmModal');
+  els.confirmMessage = document.getElementById('confirmMessage');
+  els.confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+  els.confirmCancelBtn = document.getElementById('confirmCancelBtn');
 
   els.exportModal = document.getElementById('exportModal');
   els.filenameInput = document.getElementById('filenameInput');
@@ -96,6 +128,132 @@ async function handleFilesPicked(event) {
   if (problems.length > 0) {
     showToast(`Skipped ${problems.length} file(s) -- PNG only: ${problems.join(', ')}`);
   }
+}
+
+function handleRigTapped() {
+  appState.enterRigMode();
+}
+
+function handleRigExit() {
+  cancelPlacement();
+  bonesStore.select(null);
+  appState.exitRigMode();
+}
+
+// Deleting a bone that has children re-parents them rather than removing
+// them too, so the user is warned about what will happen but never loses
+// a whole limb to one tap.
+function handleDeleteBone() {
+  const bone = bonesStore.selected;
+  if (!bone) return;
+
+  const children = bonesStore.childrenOf(bone.id);
+  if (children.length === 0) {
+    bonesStore.deleteBone(bone.id);
+    return;
+  }
+
+  const parent = bonesStore.parentOf(bone);
+  const destination = parent ? `"${parent.name}"` : 'the top level';
+  pendingDeleteBoneId = bone.id;
+  els.confirmMessage.textContent =
+    `"${bone.name}" has ${children.length} child bone(s). They will be re-attached to ` +
+    `${destination} and keep their current positions on the canvas.`;
+  els.confirmModal.hidden = false;
+}
+
+function confirmDeleteBone() {
+  if (pendingDeleteBoneId) bonesStore.deleteBone(pendingDeleteBoneId);
+  pendingDeleteBoneId = null;
+  els.confirmModal.hidden = true;
+}
+
+function cancelDeleteBone() {
+  pendingDeleteBoneId = null;
+  els.confirmModal.hidden = true;
+}
+
+function nudgeSelectedBone(dx, dy) {
+  const bone = bonesStore.selected;
+  if (bone) bonesStore.nudgePosition(bone, dx, dy);
+}
+
+function rotateSelectedBone(delta) {
+  const bone = bonesStore.selected;
+  if (bone) bonesStore.nudgeRotation(bone, delta);
+}
+
+function handleBoneRename(event) {
+  const bone = bonesStore.selected;
+  if (bone) bonesStore.rename(bone.id, event.target.value);
+}
+
+// Indented depth-first list of the whole skeleton, so overlapping bones
+// are still selectable and the tree structure is legible.
+function renderBoneList() {
+  els.boneList.replaceChildren();
+
+  for (const { bone, depth } of bonesStore.toTreeList()) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'scene-part';
+    button.style.paddingLeft = `${14 + depth * 18}px`;
+    button.classList.toggle('is-selected', bone.id === bonesStore.selectedId);
+
+    if (depth > 0) {
+      const marker = document.createElement('span');
+      marker.className = 'scene-part__depth';
+      marker.textContent = '└ ';
+      button.appendChild(marker);
+    }
+    button.appendChild(document.createTextNode(bone.name));
+    button.addEventListener('click', () => bonesStore.select(bone.id));
+
+    item.appendChild(button);
+    els.boneList.appendChild(item);
+  }
+}
+
+function renderRigChrome() {
+  const isRig = currentState === AppState.RIG;
+  els.rigPanel.hidden = !isRig;
+  els.rigControls.hidden = !isRig;
+  els.rigHint.hidden = !isRig;
+  if (!isRig) return;
+
+  const status = getRigStatus();
+  const bone = bonesStore.selected;
+
+  els.boneCount.textContent = String(bonesStore.bones.length);
+  els.boneList.hidden = !skeletonPanelOpen;
+  els.skeletonToggle.setAttribute('aria-expanded', String(skeletonPanelOpen));
+  els.skeletonChevron.textContent = skeletonPanelOpen ? '▾' : '▴';
+
+  els.addBoneBtn.disabled = status.placing || !status.canAddBone;
+  els.boneEditor.hidden = !bone || status.placing;
+
+  if (bone && !status.placing) {
+    if (els.boneNameInput.value !== bone.name) els.boneNameInput.value = bone.name;
+    const head = bonesStore.worldHead(bone);
+    const degrees = Math.round((bonesStore.worldRotation(bone) * 180) / Math.PI);
+    els.boneReadout.textContent =
+      `x ${Math.round(head.x)} · y ${Math.round(head.y)} · ${degrees}° · length ${Math.round(bone.length)}`;
+  }
+
+  els.rigHint.textContent = rigHintText(status);
+}
+
+function rigHintText(status) {
+  if (status.placing) {
+    if (status.stage === 'head') return 'Tap the canvas to place the root bone’s head.';
+    return status.parentName
+      ? `Tap to set the tail. The head is attached to "${status.parentName}".`
+      : 'Tap again to set the root bone’s tail.';
+  }
+  if (bonesStore.isEmpty) return 'Tap Add Bone to place the root bone.';
+  if (!bonesStore.selected) return 'Tap a bone to select it as the parent for the next bone.';
+  return `Add Bone will attach to "${bonesStore.selected.name}". Drag the handles to adjust.`;
 }
 
 function handleAnimateTapped() {
@@ -159,20 +317,24 @@ function renderPartsList() {
 // visible, which buttons are enabled, the canvas border, and the panel.
 function renderChrome() {
   const isHome = currentState === AppState.HOME;
+  const isRig = currentState === AppState.RIG;
   const isAnimating = currentState === AppState.ANIMATING;
   const isRecording = currentState === AppState.RECORDING;
   const isAnimateMode = isAnimating || isRecording;
 
   els.homeControls.hidden = !isHome;
-  els.animateControls.hidden = isHome;
+  els.animateControls.hidden = !isAnimateMode;
 
-  els.modeLabel.hidden = !isAnimateMode;
-  els.modeLabelText.textContent = isRecording ? 'Recording...' : 'Animate Mode';
+  els.modeLabel.hidden = isHome;
+  els.modeLabelText.textContent = isRecording
+    ? 'Recording...'
+    : isRig ? 'Rig Mode' : 'Animate Mode';
   els.modeLabel.classList.toggle('is-recording', isRecording);
   els.logo.hidden = !isHome;
   els.canvasEmptyHint.hidden = !isHome || !partsStore.isEmpty;
 
   els.canvasWrap.classList.toggle('is-animate-mode', isAnimateMode);
+  els.canvasWrap.classList.toggle('is-rig-mode', isRig);
   els.canvasWrap.classList.toggle('is-recording', isRecording);
 
   els.startBtn.disabled = !isAnimating;
@@ -188,10 +350,12 @@ function renderChrome() {
   els.scenePanelChevron.textContent = scenePanelOpen ? '▾' : '▴';
 
   const selected = partsStore.selected;
-  els.selectionBar.hidden = !selected;
+  els.selectionBar.hidden = !showPanel || !selected;
   if (selected) {
     els.selectedPartName.textContent = selected.name;
   }
+
+  renderRigChrome();
 }
 
 function bindEvents() {
@@ -201,6 +365,25 @@ function bindEvents() {
   els.exitBtn.addEventListener('click', handleExit);
   els.startBtn.addEventListener('click', handleStart);
   els.stopBtn.addEventListener('click', handleStop);
+
+  els.rigBtn.addEventListener('click', handleRigTapped);
+  els.rigExitBtn.addEventListener('click', handleRigExit);
+  els.addBoneBtn.addEventListener('click', beginPlaceBone);
+  els.skeletonToggle.addEventListener('click', () => {
+    skeletonPanelOpen = !skeletonPanelOpen;
+    renderChrome();
+  });
+  els.boneNameInput.addEventListener('input', handleBoneRename);
+  els.deleteBoneBtn.addEventListener('click', handleDeleteBone);
+  els.confirmDeleteBtn.addEventListener('click', confirmDeleteBone);
+  els.confirmCancelBtn.addEventListener('click', cancelDeleteBone);
+
+  els.nudgeLeftBtn.addEventListener('click', () => nudgeSelectedBone(-NUDGE_STEP_PX, 0));
+  els.nudgeRightBtn.addEventListener('click', () => nudgeSelectedBone(NUDGE_STEP_PX, 0));
+  els.nudgeUpBtn.addEventListener('click', () => nudgeSelectedBone(0, -NUDGE_STEP_PX));
+  els.nudgeDownBtn.addEventListener('click', () => nudgeSelectedBone(0, NUDGE_STEP_PX));
+  els.rotateCcwBtn.addEventListener('click', () => rotateSelectedBone(-NUDGE_STEP_RADIANS));
+  els.rotateCwBtn.addEventListener('click', () => rotateSelectedBone(NUDGE_STEP_RADIANS));
 
   els.scenePanelToggle.addEventListener('click', toggleScenePanel);
   els.toFrontBtn.addEventListener('click', () => partsStore.bringToFront(partsStore.selectedId));
@@ -215,6 +398,7 @@ export function initUI() {
   cacheElements();
   canvasEngine.initCanvas(els.canvas);
   initGestures(els.canvas);
+  initRigTool(els.canvas);
   bindEvents();
 
   appState.subscribe((state) => {
@@ -227,4 +411,15 @@ export function initUI() {
     renderPartsList();
     renderChrome();
   });
+
+  bonesStore.subscribe((changeType) => {
+    // Nudges and handle drags change the readout but not the tree, so
+    // only rebuild the list when the structure or selection changed.
+    if (changeType !== 'transform') renderBoneList();
+    renderChrome();
+  });
+
+  // Placement progresses without any store change (head placed, awaiting
+  // the tail tap), so the hint line listens to the tool directly.
+  subscribeRig(renderChrome);
 }
