@@ -104,7 +104,7 @@ There are two ways to grab it from GitHub:
 1. **Releases page (recommended — stable link).** Go to the repo's
    **Releases** page (right-hand sidebar on GitHub, or
    `https://github.com/<owner>/<repo>/releases`) and open **"Latest Debug
-   APK."** Download `app-debug.apk` from the Assets list. This release is
+   APK."** Download `Omni_2D.apk` from the Assets list. This release is
    overwritten on every push, so the link never changes — bookmark it and
    it'll always have the newest build.
 2. **Actions artifacts (tied to one specific build).** Go to the
