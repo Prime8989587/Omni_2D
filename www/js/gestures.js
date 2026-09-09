@@ -100,7 +100,16 @@ export function initGestures(canvasEl) {
 
     if (pointers.size === 1) {
       const scenePoint = view.toScene(screenPoint.x, screenPoint.y);
-      const hit = partsStore.hitTest(scenePoint.x, scenePoint.y);
+      // The SELECTED part wins whenever the finger lands on it, even if
+      // another part is stacked on top. Otherwise a layer picked from the
+      // Scene Parts list could never be dragged out from under a newer
+      // one: the topmost hit would take over the touch and the selection.
+      // Only when the finger is off the selected part does the touch
+      // fall through to whatever is topmost there (tap-to-select).
+      const selected = partsStore.selected;
+      const hit = selected && selected.containsPoint(scenePoint.x, scenePoint.y)
+        ? selected
+        : partsStore.hitTest(scenePoint.x, scenePoint.y);
       partsStore.select(hit ? hit.id : null);
       if (hit) beginDrag(hit, screenPoint);
       else beginPan(screenPoint);

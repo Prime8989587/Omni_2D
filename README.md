@@ -506,7 +506,11 @@ doesn't).
 On the canvas (pinch in on empty grid first if the sprite is small):
 
 - **One finger on a part, drag** — moves it in **whole cells**. Touching a
-  part also selects it.
+  part also selects it. **The selected part always wins a touch that
+  lands on it**, even when newer layers are stacked on top: pick a buried
+  layer in the Scene Parts list, then drag on the stack and *that* layer
+  moves out from under the others. Touch a spot the selected part doesn't
+  cover and the topmost part there is selected and dragged instead.
 - **Second finger down while holding a part, pinch** — scales it. Scale
   is always a whole multiple (1×–16×), so the part steps 1× → 2× → 3× as
   you spread your fingers; each source pixel stays an exact n × n block.
