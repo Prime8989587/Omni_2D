@@ -392,16 +392,10 @@ function render() {
 
   if (isRig) drawSkeleton();
 
-  // Free Move: the bones are the handles, so they have to be visible --
-  // but without the rig veil, since this screen is for watching the
-  // character move rather than for building the skeleton.
-  if (appState.state === AppState.ANIMATING) {
-    for (const bone of bonesStore.bones) {
-      if (!bonesStore.isVisible(bone)) continue;
-      drawParentLink(bone);
-      drawBone(bone, bone.id === bonesStore.selectedId);
-    }
-  }
+  // Free Move deliberately draws NO skeleton: no bone bodies, no handles,
+  // no parent links. Which bone a drag moves is chosen from a list of
+  // names, so there is nothing on the canvas to aim at, and the user
+  // watches the character rather than a diagram of its rig.
 
   if (isBind) {
     const part = partsStore.selected;
