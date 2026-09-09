@@ -19,6 +19,15 @@
 let nextId = 1;
 let nextBoneNumber = 1;
 
+// Loading a project restores bones under their saved ids and names, so
+// neither generator may later hand out something that already exists.
+export function reserveBoneId(id, name) {
+  const match = /^bone_(\d+)$/.exec(String(id));
+  if (match) nextId = Math.max(nextId, Number(match[1]) + 1);
+  const named = /^Bone_(\d+)$/.exec(String(name || ''));
+  if (named) nextBoneNumber = Math.max(nextBoneNumber, Number(named[1]) + 1);
+}
+
 // Spring defaults chosen so switching physics on looks obviously springy
 // straight away rather than either dead or unstable. Stiffness 180 gives a
 // natural frequency of sqrt(180) ~ 13 rad/s (about 2 Hz); damping 8 against
@@ -73,6 +82,17 @@ export class Bone {
     // moment physics is switched on.
     this.simWorldRotation = null;
     this.angularVelocity = 0;
+
+    // Which layer this bone is primarily associated with, chosen by the
+    // user rather than inferred. null means "not assigned yet". Nothing
+    // is guessed from proximity: a bone over a torso may well be meant to
+    // drive the coat in front of it.
+    this.attachedPartId = null;
+
+    // Hidden bones stay in the skeleton and keep driving the artwork they
+    // are bound to; they are simply not drawn and not touchable, so a
+    // crowded rig can be thinned out while working on one area.
+    this.visible = true;
   }
 
   get isRoot() {
@@ -414,12 +434,68 @@ class BonesStore {
     return rows;
   }
 
-  // Nearest bone whose body is within `threshold` of the point, or null.
+  // ---- Layer attachment and visibility ----------------------------------
+
+  // The layer a bone is assigned to drive. Set explicitly by the user and
+  // editable at any time; passing null clears the assignment.
+  setAttachedPart(id, partId) {
+    const bone = this.byId(id);
+    if (!bone || bone.attachedPartId === partId) return;
+    bone.attachedPartId = partId;
+    this._emit('structure');
+  }
+
+  // Every bone assigned to a layer -- what the layer-delete warning counts.
+  bonesAttachedTo(partId) {
+    return this._bones.filter((bone) => bone.attachedPartId === partId);
+  }
+
+  // Clears the assignment on every bone pointing at a layer that is going
+  // away, so a deleted layer never leaves bones pointing at nothing.
+  detachPart(partId) {
+    let changed = false;
+    for (const bone of this._bones) {
+      if (bone.attachedPartId !== partId) continue;
+      bone.attachedPartId = null;
+      changed = true;
+    }
+    if (changed) this._emit('structure');
+    return changed;
+  }
+
+  setVisible(id, visible) {
+    const bone = this.byId(id);
+    if (!bone || bone.visible === visible) return;
+    bone.visible = visible;
+    this._emit('structure');
+  }
+
+  // Hiding a bone hides the branch under it: a hidden shoulder should take
+  // the whole arm off the screen, not leave its children floating loose.
+  isVisible(bone) {
+    let current = bone;
+    while (current) {
+      if (!current.visible) return false;
+      current = this.parentOf(current);
+    }
+    return true;
+  }
+
+  // Rebuilds the whole skeleton at once -- used by project load and undo.
+  replaceAll(bones, selectedId = null) {
+    this._bones = bones;
+    this._selectedId = bones.some((bone) => bone.id === selectedId) ? selectedId : null;
+    this._emit('structure');
+  }
+
+  // Nearest VISIBLE bone whose body is within `threshold` of the point,
+  // or null: a bone you cannot see must not steal your touch.
   hitTest(x, y, threshold) {
     let best = null;
     let bestDistance = threshold;
 
     for (const bone of this._bones) {
+      if (!this.isVisible(bone)) continue;
       const distance = this._distanceToBone(bone, x, y);
       if (distance <= bestDistance) {
         best = bone;

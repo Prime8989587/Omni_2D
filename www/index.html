@@ -11,6 +11,8 @@
     <header class="topbar">
       <button id="importBtn" class="btn btn--flourish" type="button">Import</button>
       <button id="fitViewBtn" class="btn btn--icon" type="button" aria-label="Fit the whole canvas on screen" title="Fit">&#10530;</button>
+      <button id="undoBtn" class="btn btn--icon" type="button" aria-label="Undo" title="Undo" disabled>&#8634;</button>
+      <button id="redoBtn" class="btn btn--icon" type="button" aria-label="Redo" title="Redo" disabled>&#8635;</button>
       <div id="logo" class="logo">&#8734;omni-2D</div>
       <div id="modeLabel" class="mode-label" hidden>
         <span class="mode-label__dot" aria-hidden="true"></span>
@@ -38,6 +40,8 @@
           <span id="selectedPartName" class="selection-bar__name"></span>
           <button id="toFrontBtn" class="btn btn--sm" type="button">To Front</button>
           <button id="toBackBtn" class="btn btn--sm" type="button">To Back</button>
+          <button id="duplicatePartBtn" class="btn btn--sm" type="button">Duplicate</button>
+          <button id="deletePartBtn" class="btn btn--sm btn--danger" type="button">Delete</button>
         </div>
 
         <button id="scenePanelToggle" class="scene-panel__header" type="button" aria-expanded="true" aria-controls="scenePartsList">
@@ -57,6 +61,11 @@
             <button id="deleteBoneBtn" class="btn btn--sm btn--danger" type="button">Delete</button>
           </div>
           <p id="boneReadout" class="bone-readout"></p>
+
+          <label class="field-inline">
+            <span>Controls layer</span>
+            <select id="boneLayerSelect" class="select-input"></select>
+          </label>
           <div class="bone-editor__row bone-editor__nudges">
             <button id="nudgeLeftBtn" class="btn btn--nudge" type="button" aria-label="Move bone left">&#8592;</button>
             <button id="nudgeUpBtn" class="btn btn--nudge" type="button" aria-label="Move bone up">&#8593;</button>
@@ -144,6 +153,8 @@
 
       <div id="homeCanvasRow" class="control-row">
         <button id="canvasSizeBtn" class="btn btn--sm canvas-size-btn" type="button">Canvas 512 × 512 px</button>
+        <button id="saveProjectBtn" class="btn btn--sm" type="button">Save</button>
+        <button id="openProjectBtn" class="btn btn--sm" type="button">Open</button>
       </div>
 
       <div id="homeControls" class="control-row">
@@ -188,6 +199,53 @@
         <div class="modal__actions">
           <button id="confirmDeleteBtn" class="btn btn--danger" type="button">Delete</button>
           <button id="confirmCancelBtn" class="btn" type="button">Keep</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="deletePartModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="deletePartTitle">
+        <h2 id="deletePartTitle" class="modal__title">Delete layer?</h2>
+        <p id="deletePartMessage" class="modal__text"></p>
+        <div class="modal__actions modal__actions--stack">
+          <button id="deletePartKeepBonesBtn" class="btn btn--flourish" type="button">Delete layer, keep bones</button>
+          <button id="deletePartWithBonesBtn" class="btn btn--danger" type="button">Delete layer and its bones</button>
+          <button id="deletePartCancelBtn" class="btn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="saveProjectModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="saveProjectTitle">
+        <h2 id="saveProjectTitle" class="modal__title">Save Project</h2>
+        <label for="projectNameInput" class="field-label">Project name</label>
+        <input id="projectNameInput" class="text-input" type="text" placeholder="my_character" autocomplete="off" />
+        <p id="saveProjectHint" class="modal__text"></p>
+        <div class="modal__actions">
+          <button id="confirmSaveProjectBtn" class="btn btn--flourish" type="button">Save</button>
+          <button id="cancelSaveProjectBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="openProjectModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="openProjectTitle">
+        <h2 id="openProjectTitle" class="modal__title">Open Project</h2>
+        <p id="openProjectEmpty" class="modal__text" hidden>No saved projects yet.</p>
+        <ul id="projectList" class="project-list"></ul>
+        <div class="modal__actions">
+          <button id="cancelOpenProjectBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="recoveryModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
+        <h2 id="recoveryTitle" class="modal__title">Restore unsaved work?</h2>
+        <p id="recoveryMessage" class="modal__text"></p>
+        <div class="modal__actions">
+          <button id="restoreRecoveryBtn" class="btn btn--flourish" type="button">Restore</button>
+          <button id="discardRecoveryBtn" class="btn btn--cancel" type="button">Discard</button>
         </div>
       </div>
     </div>

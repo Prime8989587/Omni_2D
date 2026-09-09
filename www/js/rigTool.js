@@ -29,6 +29,7 @@
 import { appState, AppState } from './state.js';
 import { bonesStore } from './bones.js';
 import { view } from './view.js';
+import { history } from './history.js';
 
 // Touch tolerances are in SCREEN pixels, so a bone is as easy to grab
 // zoomed out as zoomed in.
@@ -41,6 +42,7 @@ let drag = null; // null | { bone, handle: 'head' | 'tail' }
 let pan = null; // null | { lastX, lastY } screen-space finger position
 let pointerDownScreen = null;
 let dragCell = null; // the grid cell a dragged handle is currently snapped to
+let dragHistory = null; // undo snapshot taken when a handle drag begins
 
 const listeners = new Set();
 
@@ -155,13 +157,18 @@ function handleTap(screenPoint) {
     // invisible and unselectable, so ignore the second one.
     if (snapped.x === placement.head.x && snapped.y === placement.head.y) return;
 
-    const bone = bonesStore.addBone({
-      parentId: placement.parentId,
-      head: placement.head,
-      tail: snapped,
+    // Selecting the new bone is PART of the action: it has to be inside
+    // the history entry, or redoing the creation would leave the editor
+    // pointing at nothing.
+    history.run('Add bone', () => {
+      const bone = bonesStore.addBone({
+        parentId: placement.parentId,
+        head: placement.head,
+        tail: snapped,
+      });
+      bonesStore.select(bone.id);
     });
     placement = null;
-    bonesStore.select(bone.id);
     emit();
     return;
   }
@@ -192,6 +199,8 @@ export function initRigTool(canvasEl) {
     // Handles only grab while not mid-placement, so a placement tap that
     // lands on the selected bone's handle still places the bone.
     drag = placement ? null : handleAt(screenPoint);
+    // One undo step per handle drag, not one per pointermove.
+    dragHistory = drag ? history.capture('Move bone') : null;
     pan = null;
   });
 
@@ -232,6 +241,8 @@ export function initRigTool(canvasEl) {
 
     if (pan) view.snapToDevicePixels();
     const wasDragging = drag !== null;
+    if (wasDragging) history.commitCapture(dragHistory, true);
+    dragHistory = null;
     drag = null;
     pan = null;
     dragCell = null;

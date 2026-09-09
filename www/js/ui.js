@@ -15,6 +15,10 @@ import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import { initBindTool, setBrushRadius, setBrushStrength, getBrush } from './bindTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
+import { history } from './history.js';
+import { serializeProject, applyProject } from './project.js';
+import * as storage from './storage.js';
+import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 
 const TOAST_DURATION_MS = 4000;
@@ -29,6 +33,8 @@ let toastTimer = null;
 let pendingDeleteBoneId = null;
 let bindListTab = 'parts'; // which list the Bind panel is showing
 let densitySyncedFor = null; // part id the density slider currently reflects
+let pendingDeletePartId = null;
+let currentProjectName = null; // the named project this session is editing
 
 function cacheElements() {
   els.canvas = document.getElementById('canvas');
@@ -66,7 +72,34 @@ function cacheElements() {
   els.selectedPartName = document.getElementById('selectedPartName');
   els.toFrontBtn = document.getElementById('toFrontBtn');
   els.toBackBtn = document.getElementById('toBackBtn');
+  els.duplicatePartBtn = document.getElementById('duplicatePartBtn');
+  els.deletePartBtn = document.getElementById('deletePartBtn');
   els.toast = document.getElementById('toast');
+
+  els.undoBtn = document.getElementById('undoBtn');
+  els.redoBtn = document.getElementById('redoBtn');
+
+  els.deletePartModal = document.getElementById('deletePartModal');
+  els.deletePartMessage = document.getElementById('deletePartMessage');
+  els.deletePartKeepBonesBtn = document.getElementById('deletePartKeepBonesBtn');
+  els.deletePartWithBonesBtn = document.getElementById('deletePartWithBonesBtn');
+  els.deletePartCancelBtn = document.getElementById('deletePartCancelBtn');
+
+  els.saveProjectBtn = document.getElementById('saveProjectBtn');
+  els.openProjectBtn = document.getElementById('openProjectBtn');
+  els.saveProjectModal = document.getElementById('saveProjectModal');
+  els.projectNameInput = document.getElementById('projectNameInput');
+  els.saveProjectHint = document.getElementById('saveProjectHint');
+  els.confirmSaveProjectBtn = document.getElementById('confirmSaveProjectBtn');
+  els.cancelSaveProjectBtn = document.getElementById('cancelSaveProjectBtn');
+  els.openProjectModal = document.getElementById('openProjectModal');
+  els.projectList = document.getElementById('projectList');
+  els.openProjectEmpty = document.getElementById('openProjectEmpty');
+  els.cancelOpenProjectBtn = document.getElementById('cancelOpenProjectBtn');
+  els.recoveryModal = document.getElementById('recoveryModal');
+  els.recoveryMessage = document.getElementById('recoveryMessage');
+  els.restoreRecoveryBtn = document.getElementById('restoreRecoveryBtn');
+  els.discardRecoveryBtn = document.getElementById('discardRecoveryBtn');
 
   els.rigBtn = document.getElementById('rigBtn');
   els.rigControls = document.getElementById('rigControls');
@@ -81,6 +114,7 @@ function cacheElements() {
   els.boneEditor = document.getElementById('boneEditor');
   els.boneNameInput = document.getElementById('boneNameInput');
   els.boneReadout = document.getElementById('boneReadout');
+  els.boneLayerSelect = document.getElementById('boneLayerSelect');
   els.deleteBoneBtn = document.getElementById('deleteBoneBtn');
   els.nudgeLeftBtn = document.getElementById('nudgeLeftBtn');
   els.nudgeRightBtn = document.getElementById('nudgeRightBtn');
@@ -168,7 +202,12 @@ async function handleFilesPicked(event) {
   const files = event.target.files;
   if (!files || files.length === 0) return;
 
+  const importToken = history.capture('Import layers');
   const result = await importFiles(files);
+  history.commitCapture(importToken, result.imported > 0);
+  // Importing artwork is the most expensive thing to lose, so it does not
+  // wait for the debounce.
+  if (result.imported > 0) autoSaveNow('import');
 
   // Reset so picking the same file again still fires a change event.
   els.fileInput.value = '';
@@ -218,7 +257,7 @@ function handleDeleteBone() {
 
   const children = bonesStore.childrenOf(bone.id);
   if (children.length === 0) {
-    bonesStore.deleteBone(bone.id);
+    history.run('Delete bone', () => bonesStore.deleteBone(bone.id));
     return;
   }
 
@@ -232,7 +271,10 @@ function handleDeleteBone() {
 }
 
 function confirmDeleteBone() {
-  if (pendingDeleteBoneId) bonesStore.deleteBone(pendingDeleteBoneId);
+  if (pendingDeleteBoneId) {
+    const id = pendingDeleteBoneId;
+    history.run('Delete bone', () => bonesStore.deleteBone(id));
+  }
   pendingDeleteBoneId = null;
   els.confirmModal.hidden = true;
 }
@@ -244,12 +286,12 @@ function cancelDeleteBone() {
 
 function nudgeSelectedBone(dx, dy) {
   const bone = bonesStore.selected;
-  if (bone) bonesStore.nudgePosition(bone, dx, dy);
+  if (bone) history.run('Move bone', () => bonesStore.nudgePosition(bone, dx, dy));
 }
 
 function rotateSelectedBone(delta) {
   const bone = bonesStore.selected;
-  if (bone) bonesStore.nudgeRotation(bone, delta);
+  if (bone) history.run('Rotate bone', () => bonesStore.nudgeRotation(bone, delta));
 }
 
 function handleBoneRename(event) {
@@ -277,9 +319,35 @@ function renderBoneList() {
       button.appendChild(marker);
     }
     button.appendChild(document.createTextNode(bone.name));
+    const attachedPart = bone.attachedPartId
+      ? partsStore.parts.find((part) => part.id === bone.attachedPartId)
+      : null;
+    if (attachedPart || !bone.visible) {
+      const tag = document.createElement('span');
+      tag.className = 'scene-part__tag';
+      const bits = [];
+      if (attachedPart) bits.push(`→ ${attachedPart.name}`);
+      if (!bone.visible) bits.push('hidden');
+      tag.textContent = `  ${bits.join(' · ')}`;
+      button.appendChild(tag);
+    }
+    button.classList.toggle('is-hidden', !bonesStore.isVisible(bone));
     button.addEventListener('click', () => bonesStore.select(bone.id));
 
-    item.appendChild(button);
+    const row = document.createElement('div');
+    row.className = 'list-row';
+    row.appendChild(button);
+    // Hiding a bone hides everything under it, so one tap can clear a
+    // whole limb off the screen while you work on another.
+    row.appendChild(iconButton({
+      label: bone.visible ? `Hide ${bone.name} and its children` : `Show ${bone.name}`,
+      glyph: bone.visible ? '👁' : '🚫',
+      pressed: !bone.visible,
+      onClick: () => history.run(bone.visible ? 'Hide bone' : 'Show bone',
+        () => bonesStore.setVisible(bone.id, !bone.visible)),
+    }));
+
+    item.appendChild(row);
     els.boneList.appendChild(item);
   }
 }
@@ -312,10 +380,41 @@ function renderRigChrome() {
     const localDegrees = Math.round((bone.rotation * 180) / Math.PI);
     els.rigDebugSlider.value = String(localDegrees);
     els.rigDebugValue.textContent = `${localDegrees}°`;
+    renderBoneLayerSelect(bone);
     renderPhysicsControls(bone);
   }
 
   els.rigHint.textContent = rigHintText(status);
+}
+
+// Which layer a bone drives is the user's call, never inferred from
+// whatever happens to sit under it, so the editor always asks. The same
+// control edits the assignment later -- it is not fixed at creation.
+function renderBoneLayerSelect(bone) {
+  const select = els.boneLayerSelect;
+  select.replaceChildren();
+
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = partsStore.isEmpty ? 'No layers imported' : 'Not assigned';
+  select.appendChild(none);
+
+  for (const part of partsStore.partsTopFirst) {
+    const option = document.createElement('option');
+    option.value = part.id;
+    option.textContent = part.name;
+    select.appendChild(option);
+  }
+
+  select.value = bone.attachedPartId || '';
+  select.disabled = partsStore.isEmpty;
+}
+
+function handleBoneLayerChange() {
+  const bone = bonesStore.selected;
+  if (!bone) return;
+  const partId = els.boneLayerSelect.value || null;
+  history.run('Assign bone to layer', () => bonesStore.setAttachedPart(bone.id, partId));
 }
 
 function rigHintText(status) {
@@ -346,7 +445,8 @@ function closeCanvasSizeModal() {
 // The store clamps to the 8..3072 limits; what the user typed is echoed
 // back as the size that was actually applied.
 function applyCanvasSize() {
-  sceneStore.setSize(els.canvasWidthInput.value, els.canvasHeightInput.value);
+  history.run('Change canvas size',
+    () => sceneStore.setSize(els.canvasWidthInput.value, els.canvasHeightInput.value));
   closeCanvasSizeModal();
   showToast(`Canvas is ${sceneStore.width} × ${sceneStore.height} pixels.`);
 }
@@ -378,7 +478,8 @@ function renderCanvasPresets() {
 function handlePhysicsToggle() {
   const bone = bonesStore.selected;
   if (!bone) return;
-  bonesStore.setPhysicsEnabled(bone.id, !bone.physicsEnabled);
+  history.run(bone.physicsEnabled ? 'Disable physics' : 'Enable physics',
+    () => bonesStore.setPhysicsEnabled(bone.id, !bone.physicsEnabled));
 }
 
 function handlePhysicsParam(key, slider, readout, decimals = 0) {
@@ -446,8 +547,10 @@ function handleAutoWeight() {
     return;
   }
 
-  bindPart(part, bonesStore, Number(els.densitySlider.value));
-  partsStore.notifyTransformed();
+  history.run('Auto-weight', () => {
+    bindPart(part, bonesStore, Number(els.densitySlider.value));
+    partsStore.notifyTransformed();
+  });
   renderChrome();
   showToast(`Auto-weighted "${part.name}" (${part.mesh.vertices.length} vertices).`);
 }
@@ -461,6 +564,9 @@ function handleDensityInput() {
 function handleDensityChange() {
   const part = partsStore.selected;
   if (!part || !part.mesh || !part.mesh.isBound) return;
+  // The density slider's own capture (registered first in bindEvents)
+  // already brackets this interaction, so the rebuild must not open a
+  // second entry of its own.
   bindPart(part, bonesStore, Number(els.densitySlider.value));
   partsStore.notifyTransformed();
   showToast('Mesh rebuilt at the new density — weights were auto-assigned again.');
@@ -615,21 +721,140 @@ function toggleScenePanel() {
   renderChrome();
 }
 
-// Rebuilt only on structural/selection changes, never mid-drag.
+function iconButton({ label, glyph, pressed = null, disabled = false, onClick }) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'row-btn';
+  button.textContent = glyph;
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  if (pressed !== null) button.setAttribute('aria-pressed', String(pressed));
+  button.disabled = disabled;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    onClick();
+  });
+  return button;
+}
+
+// Rebuilt only on structural/selection changes, never mid-drag. Each row
+// carries the controls that belong to that one layer: move it through the
+// stack, hide it, lock it.
 function renderPartsList() {
   els.scenePartsList.replaceChildren();
 
-  for (const part of partsStore.partsTopFirst) {
+  const ordered = partsStore.partsTopFirst;
+  ordered.forEach((part, index) => {
     const item = document.createElement('li');
+    const row = document.createElement('div');
+    row.className = 'list-row';
+
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'scene-part';
-    button.textContent = part.name;
     button.classList.toggle('is-selected', part.id === partsStore.selectedId);
+    button.classList.toggle('is-hidden', !part.visible);
+    button.appendChild(document.createTextNode(part.name));
+    if (!part.visible || part.locked) {
+      const tag = document.createElement('span');
+      tag.className = 'scene-part__tag';
+      tag.textContent = ` — ${[!part.visible ? 'hidden' : null, part.locked ? 'locked' : null]
+        .filter(Boolean)
+        .join(', ')}`;
+      button.appendChild(tag);
+    }
     button.addEventListener('click', () => partsStore.select(part.id));
-    item.appendChild(button);
+    row.appendChild(button);
+
+    // The list runs top-of-stack first, so "up" in the list is +1 in z.
+    row.appendChild(iconButton({
+      label: `Move ${part.name} up`, glyph: '▲', disabled: index === 0,
+      onClick: () => history.run('Reorder layer', () => partsStore.moveBy(part.id, 1)),
+    }));
+    row.appendChild(iconButton({
+      label: `Move ${part.name} down`, glyph: '▼', disabled: index === ordered.length - 1,
+      onClick: () => history.run('Reorder layer', () => partsStore.moveBy(part.id, -1)),
+    }));
+    row.appendChild(iconButton({
+      label: part.visible ? `Hide ${part.name}` : `Show ${part.name}`,
+      glyph: part.visible ? '👁' : '🚫', pressed: !part.visible,
+      onClick: () => history.run(part.visible ? 'Hide layer' : 'Show layer',
+        () => partsStore.setVisible(part.id, !part.visible)),
+    }));
+    row.appendChild(iconButton({
+      label: part.locked ? `Unlock ${part.name}` : `Lock ${part.name}`,
+      glyph: part.locked ? '🔒' : '🔓', pressed: part.locked,
+      onClick: () => history.run(part.locked ? 'Unlock layer' : 'Lock layer',
+        () => partsStore.setLocked(part.id, !part.locked)),
+    }));
+
+    item.appendChild(row);
     els.scenePartsList.appendChild(item);
+  });
+}
+
+// ---- Layer actions -----------------------------------------------------
+
+function handleDuplicatePart() {
+  const part = partsStore.selected;
+  if (!part) return;
+  const copy = history.run('Duplicate layer', () => {
+    const made = partsStore.duplicate(part.id);
+    // Inside the action, so redo re-selects it exactly as the first run did.
+    if (made) partsStore.select(made.id);
+    return made;
+  });
+  if (copy) showToast(`Duplicated as "${copy.name}".`);
+}
+
+// Deleting a layer that bones are attached to would orphan those bones,
+// so it asks first and defaults to keeping them: losing rig work must be
+// an explicit choice, never a side effect.
+function handleDeletePart() {
+  const part = partsStore.selected;
+  if (!part) return;
+
+  const attached = bonesStore.bonesAttachedTo(part.id);
+  if (attached.length === 0) {
+    history.run('Delete layer', () => partsStore.remove(part.id));
+    return;
   }
+
+  pendingDeletePartId = part.id;
+  const names = attached.map((bone) => `"${bone.name}"`).join(', ');
+  els.deletePartMessage.textContent =
+    `${attached.length} bone(s) are attached to "${part.name}": ${names}. ` +
+    'Keeping them leaves them in the skeleton with no layer assigned, ready to ' +
+    'point at another one. Deleting them also removes any bones beneath them ' +
+    'from the skeleton, which cannot be undone by hand.';
+  els.deletePartModal.hidden = false;
+}
+
+function completeDeletePart(alsoDeleteBones) {
+  const partId = pendingDeletePartId;
+  pendingDeletePartId = null;
+  els.deletePartModal.hidden = true;
+  if (!partId) return;
+
+  const part = partsStore.parts.find((candidate) => candidate.id === partId);
+  const attached = bonesStore.bonesAttachedTo(partId);
+  history.run(alsoDeleteBones ? 'Delete layer and bones' : 'Delete layer', () => {
+    if (alsoDeleteBones) {
+      for (const bone of attached) bonesStore.deleteBone(bone.id);
+    } else {
+      bonesStore.detachPart(partId);
+    }
+    partsStore.remove(partId);
+  });
+  autoSaveNow('delete-layer');
+  showToast(alsoDeleteBones
+    ? `Deleted "${part ? part.name : 'layer'}" and ${attached.length} bone(s).`
+    : `Deleted "${part ? part.name : 'layer'}". Its ${attached.length} bone(s) are now unassigned.`);
+}
+
+function cancelDeletePart() {
+  pendingDeletePartId = null;
+  els.deletePartModal.hidden = true;
 }
 
 // Reflects app state + scene contents onto the DOM: which control row is
@@ -681,7 +906,226 @@ function renderChrome() {
   renderBindChrome();
 }
 
+// ---- Undo / redo -------------------------------------------------------
+
+function renderHistoryChrome() {
+  els.undoBtn.disabled = !history.canUndo;
+  els.redoBtn.disabled = !history.canRedo;
+  els.undoBtn.title = history.canUndo ? `Undo ${history.undoLabel}` : 'Nothing to undo';
+  els.redoBtn.title = history.canRedo ? `Redo ${history.redoLabel}` : 'Nothing to redo';
+}
+
+function handleUndo() {
+  const label = history.undo();
+  if (label) showToast(`Undid: ${label}`);
+}
+
+function handleRedo() {
+  const label = history.redo();
+  if (label) showToast(`Redid: ${label}`);
+}
+
+// Sliders and text fields fire a stream of input events; each interaction
+// should still be ONE undo step. Snapshot on the first event, commit when
+// the control settles.
+function attachContinuousHistory(element, label) {
+  let token = null;
+  let timer = null;
+  const finish = () => {
+    clearTimeout(timer);
+    timer = null;
+    if (!token) return;
+    history.commitCapture(token, true);
+    token = null;
+  };
+  element.addEventListener('pointerdown', () => { if (!token) token = history.capture(label); });
+  element.addEventListener('input', () => {
+    if (!token) token = history.capture(label);
+    clearTimeout(timer);
+    timer = setTimeout(finish, 500);
+  });
+  element.addEventListener('change', finish);
+  element.addEventListener('blur', finish);
+}
+
+// ---- Save / load / recovery -------------------------------------------
+
+function formatTimestamp(ms) {
+  const date = new Date(ms);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function sanitizeProjectName(raw) {
+  return String(raw || '').trim().replace(/[\\/:*?"<>|]/g, '').slice(0, 60);
+}
+
+function openSaveProjectModal() {
+  els.projectNameInput.value = currentProjectName || '';
+  els.saveProjectHint.textContent = currentProjectName
+    ? `Saving over "${currentProjectName}" unless you change the name.`
+    : 'Saved on this device. Loading a project replaces what is on the canvas.';
+  els.saveProjectModal.hidden = false;
+}
+
+function closeSaveProjectModal() {
+  els.saveProjectModal.hidden = true;
+}
+
+async function handleConfirmSaveProject() {
+  const name = sanitizeProjectName(els.projectNameInput.value) || 'untitled';
+  try {
+    await storage.saveProject(name, serializeProject({ copyPixels: true }));
+    currentProjectName = name;
+    setAutoSaveSource(name);
+    history.markSaved();
+    await storage.clearRecovery(); // the manual save supersedes the recovery slot
+    closeSaveProjectModal();
+    showToast(`Saved "${name}".`);
+  } catch (error) {
+    console.warn(error);
+    showToast(`Could not save: ${error.message}`);
+  }
+}
+
+async function openProjectPicker() {
+  els.projectList.replaceChildren();
+  let projects = [];
+  try {
+    projects = await storage.listProjects();
+  } catch (error) {
+    console.warn(error);
+    showToast(`Could not read saved projects: ${error.message}`);
+    return;
+  }
+
+  els.openProjectEmpty.hidden = projects.length > 0;
+  for (const project of projects) {
+    const item = document.createElement('li');
+    const row = document.createElement('div');
+    row.className = 'project-row';
+
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'project-open';
+    const name = document.createElement('span');
+    name.className = 'project-open__name';
+    name.textContent = project.name;
+    const date = document.createElement('span');
+    date.className = 'project-open__date';
+    date.textContent = `Last saved ${formatTimestamp(project.savedAt)}`;
+    open.append(name, date);
+    open.addEventListener('click', () => loadNamedProject(project.name));
+    row.appendChild(open);
+
+    row.appendChild(iconButton({
+      label: `Delete project ${project.name}`, glyph: '🗑',
+      onClick: async () => {
+        await storage.deleteProject(project.name);
+        if (currentProjectName === project.name) currentProjectName = null;
+        openProjectPicker();
+        showToast(`Deleted project "${project.name}".`);
+      },
+    }));
+
+    item.appendChild(row);
+    els.projectList.appendChild(item);
+  }
+  els.openProjectModal.hidden = false;
+}
+
+function closeProjectPicker() {
+  els.openProjectModal.hidden = true;
+}
+
+async function loadNamedProject(name) {
+  try {
+    const record = await storage.loadProject(name);
+    if (!record) {
+      showToast(`"${name}" is no longer saved on this device.`);
+      return;
+    }
+    applyProject(record.data);
+    // A loaded project starts a fresh timeline: undoing back into the
+    // previous project's edits would be nonsense.
+    history.reset();
+    currentProjectName = name;
+    setAutoSaveSource(name);
+    closeProjectPicker();
+    view.fit();
+    showToast(`Opened "${name}".`);
+  } catch (error) {
+    console.warn(error);
+    showToast(`Could not open "${name}": ${error.message}`);
+  }
+}
+
+// On launch, an auto-save newer than the newest manual save means the app
+// went away with unsaved work in it.
+async function offerRecovery() {
+  let recovery = null;
+  let projects = [];
+  try {
+    [recovery, projects] = await Promise.all([storage.loadRecovery(), storage.listProjects()]);
+  } catch (error) {
+    console.warn('Recovery check failed', error);
+    return;
+  }
+  if (!recovery || !recovery.data) return;
+
+  const contents = recovery.data;
+  const hasContent = (contents.parts || []).length > 0 || (contents.bones || []).length > 0;
+  const newestSave = projects.reduce((newest, project) => Math.max(newest, project.savedAt), 0);
+  if (!hasContent || recovery.savedAt <= newestSave) return;
+
+  pendingRecovery = recovery;
+  const source = recovery.sourceName ? `"${recovery.sourceName}"` : 'an unsaved project';
+  els.recoveryMessage.textContent =
+    `Auto-saved work from ${source} at ${formatTimestamp(recovery.savedAt)} is newer than ` +
+    `your last manual save. It has ${(contents.parts || []).length} layer(s) and ` +
+    `${(contents.bones || []).length} bone(s).`;
+  els.recoveryModal.hidden = false;
+}
+
+let pendingRecovery = null;
+
+function restoreRecovery() {
+  if (pendingRecovery) {
+    applyProject(pendingRecovery.data);
+    history.reset();
+    currentProjectName = pendingRecovery.sourceName || null;
+    setAutoSaveSource(currentProjectName);
+    view.fit();
+    showToast('Restored your auto-saved work.');
+  }
+  pendingRecovery = null;
+  els.recoveryModal.hidden = true;
+}
+
+async function discardRecovery() {
+  pendingRecovery = null;
+  els.recoveryModal.hidden = true;
+  try {
+    await storage.clearRecovery();
+  } catch (error) {
+    console.warn(error);
+  }
+}
+
 function bindEvents() {
+  // FIRST, before the handlers that actually mutate: listeners on one
+  // element fire in registration order, so the snapshot has to be taken
+  // ahead of the change it is meant to record. One undo step per
+  // interaction, not one per input event.
+  attachContinuousHistory(els.rigDebugSlider, 'Rotate bone');
+  attachContinuousHistory(els.debugRotateSlider, 'Rotate bone');
+  attachContinuousHistory(els.boneNameInput, 'Rename bone');
+  attachContinuousHistory(els.stiffnessSlider, 'Change stiffness');
+  attachContinuousHistory(els.dampingSlider, 'Change damping');
+  attachContinuousHistory(els.gravitySlider, 'Change gravity');
+  attachContinuousHistory(els.densitySlider, 'Change mesh density');
+
   els.importBtn.addEventListener('click', handleImport);
   els.fitViewBtn.addEventListener('click', () => view.fit());
   els.canvasSizeBtn.addEventListener('click', openCanvasSizeModal);
@@ -735,8 +1179,28 @@ function bindEvents() {
     handlePhysicsParam('gravityInfluence', els.gravitySlider, els.gravityValue));
 
   els.scenePanelToggle.addEventListener('click', toggleScenePanel);
-  els.toFrontBtn.addEventListener('click', () => partsStore.bringToFront(partsStore.selectedId));
-  els.toBackBtn.addEventListener('click', () => partsStore.sendToBack(partsStore.selectedId));
+  els.toFrontBtn.addEventListener('click', () =>
+    history.run('Bring layer to front', () => partsStore.bringToFront(partsStore.selectedId)));
+  els.toBackBtn.addEventListener('click', () =>
+    history.run('Send layer to back', () => partsStore.sendToBack(partsStore.selectedId)));
+  els.duplicatePartBtn.addEventListener('click', handleDuplicatePart);
+  els.deletePartBtn.addEventListener('click', handleDeletePart);
+  els.deletePartKeepBonesBtn.addEventListener('click', () => completeDeletePart(false));
+  els.deletePartWithBonesBtn.addEventListener('click', () => completeDeletePart(true));
+  els.deletePartCancelBtn.addEventListener('click', cancelDeletePart);
+
+  els.undoBtn.addEventListener('click', handleUndo);
+  els.redoBtn.addEventListener('click', handleRedo);
+  els.boneLayerSelect.addEventListener('change', handleBoneLayerChange);
+
+  els.saveProjectBtn.addEventListener('click', openSaveProjectModal);
+  els.confirmSaveProjectBtn.addEventListener('click', handleConfirmSaveProject);
+  els.cancelSaveProjectBtn.addEventListener('click', closeSaveProjectModal);
+  els.openProjectBtn.addEventListener('click', openProjectPicker);
+  els.cancelOpenProjectBtn.addEventListener('click', closeProjectPicker);
+  els.restoreRecoveryBtn.addEventListener('click', restoreRecovery);
+  els.discardRecoveryBtn.addEventListener('click', discardRecovery);
+
 
   els.saveGifBtn.addEventListener('click', () => handleSave('gif'));
   els.saveMp4Btn.addEventListener('click', () => handleSave('mp4'));
@@ -792,4 +1256,8 @@ export function initUI() {
   // the tail tap), so the hint line listens to the tool directly.
   subscribeRig(renderChrome);
   sceneStore.subscribe(renderChrome);
+  history.subscribe(renderHistoryChrome);
+
+  initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
+  offerRecovery();
 }

@@ -30,9 +30,14 @@ a real, installable Android APK.
   size **re-assemble themselves** on a canvas of that size (see
   "Re-assembling layers exported from another app").
   See "The pixel grid" below, which also lists what was
-  re-verified from Parts 2–5 and the one gesture that changed. Drag-driven
-  animation and real GIF/MP4 export are still to come; export remains a
-  placeholder that only logs.
+  re-verified from Parts 2–5 and the one gesture that changed.
+- **Editor batch** (current) makes it a tool you can actually work in:
+  delete, reorder, duplicate, hide and lock layers; assign bones to layers
+  and hide bone branches; **undo and redo everything**; and **save projects
+  to the device**, with an auto-save that survives a crash. See "Managing
+  layers and bones", "Undo and redo" and "Saving and loading projects"
+  below. Drag-driven animation and real GIF/MP4 export are still to come;
+  export remains a placeholder that only logs.
 
 ## What's in this repo
 
@@ -60,6 +65,11 @@ www/js/rigTool.js       Touch handling for Bones: two-tap placement, handle drag
 www/js/bindTool.js      Touch handling for weights: the paint brush
 www/js/physics.js       The frame loop that keeps spring bones settling after
                          the input that disturbed them has stopped
+www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
+www/js/project.js       The whole scene as plain data and back — used by both
+                         undo/redo and save/load, so there is one serializer
+www/js/storage.js       Saved projects and the recovery slot, in IndexedDB
+www/js/autosave.js      Periodic + post-change auto-saves into the recovery slot
 www/js/canvas.js        Renderer — rasterizes every Part into a pixel-grid bitmap, blits
                          it at the current zoom, and draws the checkerboard, bones, mesh
                          heatmap, snap highlight and selection outline on top
@@ -1031,6 +1041,183 @@ sleeps, and any change wakes it again — an idle character costs nothing.
    skeleton puts it, then hold there.
 6. Bind a Part (Bind mode) and repeat — the artwork should lag with the
    bone rather than with the skeleton.
+
+---
+
+## Managing layers and bones
+
+### Layer controls
+
+Every row in **Scene Parts** carries its own controls, and the bar above
+the list acts on whichever layer is selected.
+
+| Control | Where | What it does |
+|---|---|---|
+| **▲ / ▼** | each row | Move the layer one step up or down the stack. Greyed out at the ends. |
+| **👁 / 🚫** | each row | Hide or show the layer. |
+| **🔓 / 🔒** | each row | Lock or unlock the layer. |
+| **To Front / To Back** | selection bar | Jump straight to the top or bottom, as before. |
+| **Duplicate** | selection bar | Independent copy of the artwork. |
+| **Delete** | selection bar | Remove the layer. |
+
+**Reordering to any position.** Part 2 could only send a layer all the way
+to the front or all the way to the back. The per-row **▲ / ▼** buttons move
+it one place at a time, so a layer can be placed anywhere in the stack —
+tap ▲ twice to lift a hand above the sleeve but keep it under the glove.
+The list runs top-of-stack first, so "up" in the list is "closer to the
+front" on the canvas.
+
+**Duplicate** copies the artwork, the position, scale and rotation, and
+drops the copy on top of the stack named `hand_l_copy` (then `_2`, `_3` if
+that name is taken). It gets a **brand-new id** and, deliberately, **none
+of the original's rig**: duplicating a layer duplicates artwork, not bone
+weights. Bind the copy separately when you want it deformed.
+
+**Hidden layers** stay in the project with all their data — bones, weights,
+position — and are simply not drawn. They are also **not touchable**: a tap
+where a hidden layer sits passes straight through to whatever is behind it,
+because picking something you cannot see is never what you meant.
+
+**Locked layers** can be selected, inspected and re-ordered, but **cannot
+be moved, scaled or rotated** on the canvas. Touching a locked layer pans
+the view instead, so the canvas still responds normally while the artwork
+stays exactly where you put it. Lock a finished background and you can
+never nudge it by accident again.
+
+### Deleting a layer that bones are attached to
+
+Deleting a layer with no bones attached happens immediately (and undo
+brings it straight back). If bones **are** attached to it, deleting would
+orphan them, so the app stops and asks, naming the bones. There are three
+answers:
+
+- **Delete layer, keep bones** *(the default, listed first)* — the layer
+  goes, the bones stay in the skeleton and become unassigned, ready to
+  point at another layer. Nothing about the rig is lost.
+- **Delete layer and its bones** — removes both. Deleting a bone also
+  re-parents its children (see Part 3), so a branch is not silently wiped.
+- **Cancel**.
+
+Keeping the bones is the default on purpose: **losing work should take an
+explicit choice**, never a side effect of a different one.
+
+### Which layer a bone controls
+
+A bone is not tied to a layer by guesswork — a bone over a torso might well
+be meant to drive the coat in front of it. So the bone editor in Rig mode
+has a **Controls layer** dropdown listing every layer plus **Not assigned**,
+which is what a new bone starts as.
+
+The assignment is **editable at any time**: select the bone later and pick
+a different layer, or clear it back to unassigned. The Skeleton list shows
+each bone's assignment inline (`Bone_2  → torso`).
+
+What the assignment does today: it drives the layer-delete warning above,
+and it labels the skeleton so a 30-bone rig stays readable. It deliberately
+does **not** change how auto-weighting works — weighting still considers
+every bone by distance, exactly as Part 4 described — because silently
+re-scoping the weighting would change how existing rigs deform.
+
+### Hiding bones
+
+Each row in the **Skeleton** list has a 👁 toggle. Hiding a bone hides
+**its whole branch**: hiding a shoulder takes the entire arm off the
+screen rather than leaving its children floating loose. Hidden bones are
+not drawn and cannot be tapped on the canvas, which makes a crowded rig
+workable while you concentrate on one area.
+
+Hidden bones **keep working**. They still drive the artwork bound to them,
+still take part in forward kinematics, and still simulate physics — hiding
+is a view setting, not an off switch.
+
+### Bone deletion (unchanged, and re-verified)
+
+Deleting a bone still behaves exactly as Part 3 described: a bone with no
+children goes immediately, and a bone **with** children warns first, then
+**re-parents them onto the deleted bone's own parent** while keeping their
+exact positions on the canvas. This was re-tested against everything added
+since — the child ends up under the right parent and does not move by so
+much as a fraction of a pixel — and it is now undoable, which restores both
+the bone and the original hierarchy.
+
+---
+
+## Undo and redo
+
+The **↶** and **↷** buttons in the top bar undo and redo. They are greyed
+out when there is nothing to undo or redo, and their tooltips name the
+action (*"Undo Delete layer"*). A toast confirms what was undone.
+
+**What is covered:** importing layers, deleting, moving, scaling and
+rotating them, reordering, duplicating, hiding and locking; creating,
+moving, rotating, renaming and deleting bones; changing a bone's layer
+assignment; toggling and tuning physics; auto-weighting, mesh density
+changes, and weight painting; and canvas size changes.
+
+**One action is one step.** A drag across the canvas is a single undo, not
+one per frame; so is a whole brush stroke, and a slider dragged from 0° to
+40°. Each one snapshots when the gesture starts and commits when it ends.
+
+**How it works.** A standard command-history stack: each action pushes a
+record holding the scene state *before* it and *after* it. Undo applies the
+before-state and moves the record onto the redo stack; redo applies the
+after-state. Doing something new clears the redo branch, as every editor
+does. The stack holds the last 60 actions.
+
+The records are **whole-scene snapshots** rather than hand-written inverse
+operations, and that is a deliberate choice. The actions needing undo
+include auto-weighting a mesh, deleting a bone (which re-parents children
+and rewrites their local coordinate frames), and painting weights across
+dozens of vertices at once. Writing a correct inverse for each of those is
+a large amount of subtle code whose bugs corrupt a project silently. The
+usual objection to snapshots — copying the artwork every time — does not
+apply here, because pixel buffers never change after import, so every
+snapshot shares them. What each record actually holds is a few kilobytes of
+numbers.
+
+---
+
+## Saving and loading projects
+
+Work is now kept **on the device**, not just in memory.
+
+### Saving
+
+Home screen → **Save**. Give the project a name (it offers the current
+one, so saving again overwrites the same project) and tap Save. Stored are
+**all layers with their artwork, positions, transforms and flags, the full
+bone hierarchy with layer assignments and physics settings, every mesh and
+its weights, and the canvas size** — everything needed to carry on exactly
+where you stopped.
+
+### Opening
+
+Home screen → **Open** lists every saved project, newest first, with its
+last-modified date. Tap one to load it; 🗑 deletes it. Loading **replaces**
+what is on the canvas and starts a fresh undo timeline, since undoing back
+into a different project's edits would be meaningless.
+
+### Auto-save and crash recovery
+
+Alongside your named saves the app keeps one **recovery slot** of its own.
+It is written a few seconds after any change settles, every two minutes
+while there is unsaved work, and whenever the app is backgrounded — the
+moment before a phone is most likely to kill it. Importing or deleting a
+layer writes it immediately, those being the most expensive things to lose.
+
+The recovery slot is **separate from your named saves and never overwrites
+them**. On the next launch, if it holds work **newer than your newest
+manual save**, the app offers to restore it, naming the project and the
+time. **Restore** brings it back; **Discard** throws it away. A manual save
+clears the slot, so you are not asked about work you already saved.
+
+### Where it is stored
+
+IndexedDB on the device, rather than `localStorage`: pixel data is binary
+and would have to be base64-encoded to fit in `localStorage`, inflating it
+by a third against a quota of a few megabytes that a single large layer
+could exhaust. Projects live in the app's own storage, so uninstalling the
+app removes them; there is no cloud copy and no export-to-file yet.
 
 ---
 

@@ -126,7 +126,10 @@ function renderScene(boneTransforms) {
   ensureSceneBuffer();
   const buffer = sceneImage.data;
 
-  const drawList = partsStore.partsBottomFirst.map((part) => {
+  // Hidden layers keep all their data but are not drawn. Their previous
+  // footprint is still cleared, because last frame's bounds are carried in
+  // `dirty` and unioned into the region wiped below.
+  const drawList = partsStore.partsBottomFirst.filter((part) => part.visible).map((part) => {
     const geometry = partGeometry(part, boneTransforms);
     return { part, geometry, bounds: boundsOf(geometry.positions) };
   });
@@ -301,7 +304,10 @@ function drawSkeleton() {
   for (const bone of bonesStore.bones) drawParentLink(bone);
 
   const selectedId = bonesStore.selectedId;
-  for (const bone of bonesStore.bones) drawBone(bone, bone.id === selectedId);
+  for (const bone of bonesStore.bones) {
+    if (!bonesStore.isVisible(bone)) continue;
+    drawBone(bone, bone.id === selectedId);
+  }
 
   const cell = getSnapCell();
   if (cell) drawSnapCell(cell);
@@ -392,7 +398,10 @@ function render() {
       drawMeshOverlay(part, boneTransforms, bonesStore.selectedId);
     }
     // Bones draw on top so the user can see what they are painting toward.
-    for (const bone of bonesStore.bones) drawBone(bone, bone.id === bonesStore.selectedId);
+    for (const bone of bonesStore.bones) {
+      if (!bonesStore.isVisible(bone)) continue;
+      drawBone(bone, bone.id === bonesStore.selectedId);
+    }
   }
 
   // Parts are not selectable in Rig or Bind mode, so no outline there.

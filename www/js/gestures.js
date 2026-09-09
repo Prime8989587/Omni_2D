@@ -20,6 +20,7 @@
 import { partsStore, clampScale, MIN_PART_SCALE, MAX_PART_SCALE } from './parts.js';
 import { appState, AppState } from './state.js';
 import { view } from './view.js';
+import { history } from './history.js';
 
 const pointers = new Map();
 let gesture = null;
@@ -50,6 +51,32 @@ function twoPointerMetrics() {
     centerX: (a.x + b.x) / 2,
     centerY: (a.y + b.y) / 2,
   };
+}
+
+// A gesture is ONE undo step however many pointermove frames it spans:
+// the snapshot is taken when the finger goes down and committed when the
+// last finger lifts, and only if the layer actually ended up different.
+let pendingEdit = null;
+
+function beginEdit(part, label) {
+  if (pendingEdit) return;
+  pendingEdit = {
+    token: history.capture(label),
+    part,
+    before: { x: part.x, y: part.y, scale: part.scale, rotation: part.rotation },
+  };
+}
+
+function finishEdit() {
+  if (!pendingEdit) return;
+  const { token, part, before } = pendingEdit;
+  pendingEdit = null;
+  const changed =
+    part.x !== before.x ||
+    part.y !== before.y ||
+    part.scale !== before.scale ||
+    part.rotation !== before.rotation;
+  history.commitCapture(token, changed);
 }
 
 function beginDrag(part, screenPoint) {
@@ -107,12 +134,18 @@ export function initGestures(canvasEl) {
       // Only when the finger is off the selected part does the touch
       // fall through to whatever is topmost there (tap-to-select).
       const selected = partsStore.selected;
-      const hit = selected && selected.containsPoint(scenePoint.x, scenePoint.y)
+      const hit = selected && selected.visible && selected.containsPoint(scenePoint.x, scenePoint.y)
         ? selected
         : partsStore.hitTest(scenePoint.x, scenePoint.y);
       partsStore.select(hit ? hit.id : null);
-      if (hit) beginDrag(hit, screenPoint);
-      else beginPan(screenPoint);
+      // A locked layer can be selected and inspected but not moved, so the
+      // touch drives the camera instead of the artwork.
+      if (hit && !hit.locked) {
+        beginEdit(hit, 'Move layer');
+        beginDrag(hit, screenPoint);
+      } else {
+        beginPan(screenPoint);
+      }
       return;
     }
 
@@ -120,8 +153,13 @@ export function initGestures(canvasEl) {
       // A second finger joins whatever the first one started: a part
       // gesture becomes a part transform, a camera gesture becomes a pinch.
       const onPart = gesture && (gesture.type === 'drag' || gesture.type === 'transform');
-      if (onPart && partsStore.selected) beginTransform(partsStore.selected);
-      else gesture = { type: 'pinchView' };
+      const part = partsStore.selected;
+      if (onPart && part && !part.locked) {
+        beginEdit(part, 'Transform layer');
+        beginTransform(part);
+      } else {
+        gesture = { type: 'pinchView' };
+      }
     }
   });
 
@@ -197,6 +235,7 @@ export function initGestures(canvasEl) {
 
     if (pointers.size === 0) {
       gesture = null;
+      finishEdit();
       return;
     }
 

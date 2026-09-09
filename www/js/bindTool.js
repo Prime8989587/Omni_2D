@@ -16,6 +16,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { applyWeightDelta, deformVertices } from './mesh.js';
 import { view } from './view.js';
+import { history } from './history.js';
 
 export const MIN_BRUSH = 10;
 export const MAX_BRUSH = 120;
@@ -23,6 +24,8 @@ export const MAX_BRUSH = 120;
 let brushRadius = 45; // screen pixels
 let brushStrength = 0.35;
 let painting = false;
+let strokeHistory = null; // undo snapshot for the whole brush stroke
+let strokePainted = false;
 
 export function getBrush() {
   return { radius: brushRadius, strength: brushStrength };
@@ -60,7 +63,10 @@ function paintAt(scenePoint) {
     changed = true;
   }
 
-  if (changed) partsStore.notifyTransformed();
+  if (changed) {
+    strokePainted = true;
+    partsStore.notifyTransformed();
+  }
 }
 
 export function initBindTool(canvasEl) {
@@ -75,6 +81,9 @@ export function initBindTool(canvasEl) {
     canvasEl.setPointerCapture(event.pointerId);
 
     painting = true;
+    // A stroke is one undo step, however many vertices it touches.
+    strokeHistory = history.capture('Paint weights');
+    strokePainted = false;
     paintAt(sceneFromEvent(canvasEl, event));
   });
 
@@ -82,6 +91,9 @@ export function initBindTool(canvasEl) {
     if (appState.state !== AppState.BIND || !painting) return;
     if (view.activePointerCount > 1) {
       painting = false;
+      history.commitCapture(strokeHistory, strokePainted);
+      strokeHistory = null;
+      strokePainted = false;
       return;
     }
     event.preventDefault();
@@ -90,6 +102,9 @@ export function initBindTool(canvasEl) {
 
   const endPointer = () => {
     painting = false;
+    history.commitCapture(strokeHistory, strokePainted);
+    strokeHistory = null;
+    strokePainted = false;
   };
 
   canvasEl.addEventListener('pointerup', endPointer);

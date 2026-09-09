@@ -18,6 +18,13 @@
 
 let nextId = 1;
 
+// Loading a project restores parts by their saved ids, so the generator
+// must never hand out an id that already exists in the scene.
+export function reservePartId(id) {
+  const match = /^part_(\d+)$/.exec(String(id));
+  if (match) nextId = Math.max(nextId, Number(match[1]) + 1);
+}
+
 export const MIN_PART_SCALE = 1;
 export const MAX_PART_SCALE = 16;
 
@@ -48,6 +55,12 @@ export class Part {
     // Only manual placements take a cascade slot, so an exactly placed
     // layer never nudges the next hand-placed one off-centre.
     this.placement = placement;
+
+    // Layer flags. Hidden layers keep all their data but are not drawn
+    // and cannot be picked on the canvas; locked layers can be selected
+    // and inspected but not moved, scaled or rotated.
+    this.visible = true;
+    this.locked = false;
 
     // The deformable mesh bound to the skeleton, or null while unbound.
     // Built and owned by mesh.js; the store, renderer, and gesture layers
@@ -187,9 +200,108 @@ class PartsStore {
     this._emit('structure');
   }
 
-  // Topmost part whose bounds contain the scene-space point, or null.
+  // Rewrites every zIndex as 0..n-1 in the current stacking order. Front
+  // and back use an ever-growing counter, which is fine for "put this on
+  // top" but useless for "swap these two neighbours" -- so any positional
+  // move normalizes first and then works with adjacent integers.
+  _normalizeZ() {
+    const ordered = this.partsBottomFirst;
+    ordered.forEach((part, index) => { part.zIndex = index; });
+    this._bottomZ = 0;
+    this._topZ = Math.max(0, ordered.length - 1);
+    return ordered;
+  }
+
+  // Moves a part one step through the stack: +1 towards the front, -1
+  // towards the back. Returns true when something actually moved, so the
+  // caller can skip recording an empty undo step at either end.
+  moveBy(id, delta) {
+    const ordered = this._normalizeZ();
+    const index = ordered.findIndex((part) => part.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= ordered.length) return false;
+
+    const part = ordered[index];
+    const other = ordered[target];
+    const swap = part.zIndex;
+    part.zIndex = other.zIndex;
+    other.zIndex = swap;
+    this._emit('structure');
+    return true;
+  }
+
+  remove(id) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return null;
+
+    this._parts = this._parts.filter((candidate) => candidate.id !== id);
+    if (this._selectedId === id) this._selectedId = null;
+    this._emit('structure');
+    return part;
+  }
+
+  // An independent copy of the artwork: new id, same pixels (which are
+  // never mutated, so the buffer is shared rather than cloned), same
+  // transform, dropped on top of the stack. The mesh is deliberately NOT
+  // copied -- duplicating a layer duplicates the artwork, not its rig.
+  duplicate(id) {
+    const source = this._parts.find((candidate) => candidate.id === id);
+    if (!source) return null;
+
+    const copy = new Part({
+      name: this._uniqueName(`${source.name}_copy`),
+      image: source.image,
+      pixels: source.pixels,
+      width: source.naturalWidth,
+      height: source.naturalHeight,
+      objectUrl: null, // the original owns the URL's lifetime
+      x: source.x,
+      y: source.y,
+      scale: source.scale,
+      rotation: source.rotation,
+      placement: source.placement,
+    });
+    copy.visible = source.visible;
+    copy.locked = source.locked;
+    return this.add(copy);
+  }
+
+  _uniqueName(base) {
+    const taken = new Set(this._parts.map((part) => part.name));
+    if (!taken.has(base)) return base;
+    let n = 2;
+    while (taken.has(`${base}_${n}`)) n++;
+    return `${base}_${n}`;
+  }
+
+  setVisible(id, visible) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || part.visible === visible) return;
+    part.visible = visible;
+    this._emit('structure');
+  }
+
+  setLocked(id, locked) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || part.locked === locked) return;
+    part.locked = locked;
+    this._emit('structure');
+  }
+
+  // Replaces the whole scene at once -- used by project load and by undo,
+  // which both rebuild parts from a serialized snapshot.
+  replaceAll(parts, selectedId = null) {
+    this._parts = parts;
+    this._selectedId = parts.some((part) => part.id === selectedId) ? selectedId : null;
+    this._normalizeZ();
+    this._emit('structure');
+  }
+
+  // Topmost VISIBLE part whose bounds contain the scene-space point, or
+  // null. Hidden layers are not pickable: they are not on screen, so a
+  // touch that appears to land on empty grid must behave that way.
   hitTest(x, y) {
-    return this.partsTopFirst.find((part) => part.containsPoint(x, y)) || null;
+    return this.partsTopFirst.find((part) => part.visible && part.containsPoint(x, y)) || null;
   }
 }
 
