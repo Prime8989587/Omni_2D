@@ -177,10 +177,26 @@ async function handleFilesPicked(event) {
     ...result.rejected.map((name) => `${name} is not a PNG`),
     ...result.failed.map((name) => `${name} could not be decoded`),
     ...result.wrongSize,
+    ...result.blank,
   ];
+
+  const notes = [];
   if (problems.length > 0) {
-    showToast(`Skipped ${problems.length} file(s): ${problems.join('; ')}`);
+    notes.push(`Skipped ${problems.length} file(s): ${problems.join('; ')}`);
   }
+  // A file that is not exactly canvas-sized carries no position, so it was
+  // placed the ordinary way. Say so, with both real sizes, rather than
+  // leaving the user to wonder why a layer did not land where it belongs.
+  if (result.manualPlacement.length > 0) {
+    notes.push(
+      `Placed by hand — auto-position needs an exact canvas match: ${result.manualPlacement.join('; ')}`
+    );
+  } else if (result.autoPlaced > 0) {
+    const layers = result.autoPlaced === 1 ? 'layer' : 'layers';
+    notes.push(`Positioned ${result.autoPlaced} ${layers} from the transparent padding.`);
+  }
+
+  if (notes.length > 0) showToast(notes.join(' · '));
 }
 
 function handleRigTapped() {

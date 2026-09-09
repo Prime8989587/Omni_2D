@@ -26,17 +26,28 @@ export function clampScale(value) {
 }
 
 export class Part {
-  constructor({ name, image, pixels, objectUrl, x, y, scale = 1, rotation = 0 }) {
+  constructor({ name, image = null, pixels, width, height, objectUrl = null, x, y, scale = 1, rotation = 0, placement = 'manual' }) {
     this.id = `part_${nextId++}`;
     this.name = name;
+    // The decoded pixels are the source of truth for the artwork; `image`
+    // is only kept when it is still the same size as those pixels. An
+    // import that trims transparent padding away passes explicit
+    // dimensions instead and drops the full-size image entirely.
     this.image = image;
     this.pixels = pixels; // RGBA bytes, naturalWidth x naturalHeight, read once at import
-    this.objectUrl = objectUrl; // kept alive for the session; the image re-reads it
+    this.sourceWidth = Math.max(1, Math.round(width ?? image.naturalWidth));
+    this.sourceHeight = Math.max(1, Math.round(height ?? image.naturalHeight));
+    this.objectUrl = objectUrl; // kept alive for the session while `image` is
     this.x = Math.round(x); // top-left corner, in scene pixels
     this.y = Math.round(y);
     this.scale = clampScale(scale); // scene pixels per source pixel, whole numbers only
     this.rotation = rotation; // radians, about the part's centre
     this.zIndex = 0; // assigned by the store on add
+    // How the importer positioned this part: 'auto' when its own
+    // transparent padding placed it, 'manual' for the default centring.
+    // Only manual placements take a cascade slot, so an exactly placed
+    // layer never nudges the next hand-placed one off-centre.
+    this.placement = placement;
 
     // The deformable mesh bound to the skeleton, or null while unbound.
     // Built and owned by mesh.js; the store, renderer, and gesture layers
@@ -45,11 +56,11 @@ export class Part {
   }
 
   get naturalWidth() {
-    return this.image.naturalWidth;
+    return this.sourceWidth;
   }
 
   get naturalHeight() {
-    return this.image.naturalHeight;
+    return this.sourceHeight;
   }
 
   // Footprint on the grid, before rotation.

@@ -26,7 +26,10 @@ a real, installable Android APK.
   grid**: you choose a canvas size in pixels, every grid cell is exactly
   one pixel, and everything — imported art, drags, scales, bone endpoints,
   and the deformed artwork itself — sits on whole pixels. Pinch to zoom in
-  on the grid. See "The pixel grid" below, which also lists what was
+  on the grid, and layers exported from another app at the full project
+  size **re-assemble themselves** on a canvas of that size (see
+  "Re-assembling layers exported from another app").
+  See "The pixel grid" below, which also lists what was
   re-verified from Parts 2–5 and the one gesture that changed. Drag-driven
   animation and real GIF/MP4 export are still to come; export remains a
   placeholder that only logs.
@@ -48,7 +51,8 @@ www/js/bones.js         The skeleton: Bone objects, the parent/child tree, and t
 www/js/mesh.js          Mesh generation, auto-weighting, weight painting maths, and
                          the linear blend skinning that deforms the artwork
 www/js/importer.js      Picked files -> Parts (PNG validation, size limits, decode,
-                         whole-pixel placement)
+                         whole-pixel placement, and position-preserving import of
+                         canvas-sized layers)
 www/js/gestures.js      Home-screen touch handling: drag / pinch-scale / twist a Part, or
                          pan / zoom the grid when the first finger lands on empty cells
 www/js/viewGestures.js  Two-finger pinch-zoom of the grid in Rig and Bind mode
@@ -501,6 +505,82 @@ message at the top: an image must be **at least 8 × 8**, and it must
 **fit within the current canvas** (enlarge the canvas first if it
 doesn't).
 
+### Re-assembling layers exported from another app
+
+If you drew your character in another app (ibis Paint, Procreate,
+Aseprite…) you can bring it in **layer by layer with every piece already
+in place** — no manual repositioning.
+
+The trick is that a layer exported at the *full project size* carries its
+own position: the artwork sits where it sat in the original composition
+and everything around it is transparent. **That transparent padding is
+the position information.** Omni 2D reads it.
+
+**How to use it**
+
+1. In the other app, note your project's pixel size and set Omni 2D's
+   canvas to **exactly** that (Home → the `Canvas W × H px` button).
+2. Export each layer on its own — hand, head, hair, torso — **at the full
+   project size**, not cropped or "trimmed to content". What matters is
+   that each PNG is the whole frame with just one layer visible.
+3. Import them all at once. Each lands exactly where it belongs, and the
+   character is assembled.
+
+A toast confirms it: *"Positioned 3 layers from the transparent
+padding."*
+
+**It only triggers on an exact size match — with whatever size your canvas
+happens to be.** No size is special or built in here: the app reads the
+canvas's current width and height at the moment you import and compares
+them with the file's real dimensions. A 64 × 64 canvas auto-positions
+64 × 64 files; a 1024 × 3072 canvas auto-positions 1024 × 3072 files. Any
+size the app supports (8 × 8 up to 3072 × 3072) behaves the same way.
+
+**If the sizes don't match**, the file is still imported — it just uses
+the ordinary placement (centred, then cascaded), and the message tells
+you why, naming both real sizes:
+
+> Placed by hand — auto-position needs an exact canvas match:
+> hand.png is 64×64, canvas is 512×512
+
+That is deliberate rather than a best guess. Padding only encodes a
+position relative to the frame it was exported from; on a differently
+sized grid the same padding points somewhere else, so guessing would put
+layers in subtly wrong places. Set the canvas to the source project's size
+and re-import to get automatic placement.
+
+A canvas-sized PNG that turns out to be **fully transparent** is skipped
+with a note, rather than becoming an invisible empty layer.
+
+**What gets stored: trimmed art plus an offset (and why)**
+
+Once the content's bounding box is found, the layer is **trimmed down to
+that box**, and the box's position becomes the Part's ordinary x/y
+coordinate. The alternative — keeping each layer as a full canvas-sized
+image with the artwork somewhere inside it — was rejected because a Part's
+`x`/`y` *already is* an offset, so trimming needs no new concept, and
+because a full-frame Part would degrade everything built on top of it:
+
+- **Selection and dragging** — a Part's touch area is its image, so a
+  full-frame layer would be "hit" anywhere on the canvas. Every layer
+  would overlap every other one, and tapping a piece would become
+  guesswork.
+- **The mesh (Part 4)** — mesh density is spread across the image, so a
+  6–10 cell grid stretched over the whole canvas would leave only a couple
+  of cells covering the actual hand. Bones would have almost no resolution
+  where it matters.
+- **Auto-weighting (Part 4)** — vertices out in the empty padding would
+  still be weighted to bones and dragged around, deforming nothing while
+  costing work every frame.
+- **Memory** — every layer would hold a full canvas of pixels: about 37 MB
+  each at 3072 × 3072, versus a few KB for the artwork itself.
+
+Trimming keeps all of Parts 2–5 working exactly as they already do: an
+auto-positioned layer is an ordinary Part that happens to know where it
+belongs. Verified end to end — a trimmed, auto-placed layer selects on its
+own artwork, binds, renders byte-identically at rest, and deforms with
+clean pixel edges.
+
 ### Assembling: drag, scale, rotate
 
 On the canvas (pinch in on empty grid first if the sprite is small):
@@ -569,6 +649,10 @@ the arrangement. Saving/loading is a later step.
    that piece on the canvas.
 7. Tap **Animate**, then **✕** to come back — your character should still
    be exactly where you left it.
+8. To test layer re-assembly: set the canvas to your source project's
+   exact size, export two or three layers from that project at full size,
+   and import them together — they should snap into their original
+   arrangement with no dragging at all.
 
 ---
 

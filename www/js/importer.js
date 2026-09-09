@@ -69,15 +69,72 @@ function initialPosition(image, cascadeIndex) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Position-preserving import
+//
+// A layer exported from another app at the FULL project size carries its
+// position in its transparent padding: the artwork sits where it sat in the
+// original composition, and everything else is transparent. When such a file
+// is imported into a canvas of exactly the same size, that padding is the
+// placement -- so several layers cut from one artwork reassemble themselves.
+//
+// It only applies on an EXACT match with whatever canvas size is configured
+// at that moment. Any other size cannot carry position information: the same
+// padding means a different place on a differently sized grid, so guessing
+// would silently misplace the layer.
+
+// The tight box around every pixel with a non-zero alpha, or null when the
+// image is fully transparent.
+function contentBounds(pixels, width, height) {
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      if (pixels[rowStart + x * 4 + 3] === 0) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  if (maxX < 0) return null;
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+// Copies the bounding box out of the decoded image, row by row.
+function cropPixels(pixels, width, bounds) {
+  const out = new Uint8ClampedArray(bounds.width * bounds.height * 4);
+  const rowBytes = bounds.width * 4;
+  for (let row = 0; row < bounds.height; row++) {
+    const from = ((bounds.y + row) * width + bounds.x) * 4;
+    out.set(pixels.subarray(from, from + rowBytes), row * rowBytes);
+  }
+  return out;
+}
+
 // Imports every usable PNG, one Part per file. Returns what was skipped so
 // the caller can tell the user: non-PNGs (no alpha channel, so no pixel-art
-// cutouts), files that fail to decode, and images outside the size limits.
+// cutouts), files that fail to decode, images outside the size limits, and
+// canvas-sized files that turned out to be entirely transparent. Also
+// returns which files could not be auto-positioned and why, so the user is
+// told rather than left wondering.
 export async function importFiles(fileList) {
   const files = Array.from(fileList);
   const rejected = files.filter((file) => !isPng(file)).map((file) => file.name);
   const failed = [];
   const wrongSize = [];
+  const blank = [];
+  const manualPlacement = [];
   let imported = 0;
+  let autoPlaced = 0;
+  // Only manually placed parts consume a cascade slot, so auto-positioned
+  // layers never push the next manual one off-centre.
+  let cascadeIndex = partsStore.parts.filter((part) => part.placement === 'manual').length;
 
   for (const file of files.filter(isPng)) {
     try {
@@ -90,18 +147,57 @@ export async function importFiles(fileList) {
         continue;
       }
 
-      const position = initialPosition(image, partsStore.parts.length);
-      const part = partsStore.add(
-        new Part({
-          name: displayName(file.name),
+      // Read the canvas size as it is right now, per file.
+      const canvasWidth = sceneStore.width;
+      const canvasHeight = sceneStore.height;
+      const importedWidth = image.naturalWidth;
+      const importedHeight = image.naturalHeight;
+      const matchesCanvas = importedWidth === canvasWidth && importedHeight === canvasHeight;
+
+      const pixels = readPixels(image);
+      let options;
+
+      if (matchesCanvas) {
+        const bounds = contentBounds(pixels, importedWidth, importedHeight);
+        if (!bounds) {
+          URL.revokeObjectURL(objectUrl);
+          blank.push(`${file.name} is fully transparent`);
+          continue;
+        }
+        // Trimmed to its artwork and placed at the offset that padding
+        // implied. The full-size decode is released here: nothing reads it
+        // once the pixels are cropped, and at canvas sizes it is large.
+        URL.revokeObjectURL(objectUrl);
+        options = {
+          image: null,
+          pixels: cropPixels(pixels, importedWidth, bounds),
+          width: bounds.width,
+          height: bounds.height,
+          objectUrl: null,
+          x: bounds.x,
+          y: bounds.y,
+          placement: 'auto',
+        };
+        autoPlaced += 1;
+      } else {
+        const position = initialPosition(image, cascadeIndex);
+        cascadeIndex += 1;
+        manualPlacement.push(
+          `${file.name} is ${importedWidth}×${importedHeight}, canvas is ${canvasWidth}×${canvasHeight}`
+        );
+        options = {
           image,
-          pixels: readPixels(image),
+          pixels,
+          width: importedWidth,
+          height: importedHeight,
           objectUrl,
           x: position.x,
           y: position.y,
-          scale: 1,
-        })
-      );
+          placement: 'manual',
+        };
+      }
+
+      const part = partsStore.add(new Part({ name: displayName(file.name), scale: 1, ...options }));
       partsStore.select(part.id);
       imported += 1;
     } catch (error) {
@@ -110,5 +206,5 @@ export async function importFiles(fileList) {
     }
   }
 
-  return { imported, rejected, failed, wrongSize };
+  return { imported, autoPlaced, rejected, failed, wrongSize, blank, manualPlacement };
 }
