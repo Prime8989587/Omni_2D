@@ -255,6 +255,9 @@ function render() {
     const x = (aboveAt.x + u * above.scale) * cam.zoom + cam.panX;
     const y = (aboveAt.y + v * above.scale) * cam.zoom + cam.panY;
     const size = above.scale * cam.zoom;
+    // Skip the ones off-screen: a wide brush can leave thousands of pins,
+    // and at the zoom that makes single pixels aimable most are outside.
+    if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
     ctx.fillStyle = 'rgba(255, 46, 147, 0.45)';
     ctx.fillRect(x, y, size, size);
     if (size >= 6) {
@@ -335,17 +338,25 @@ function brushIndices(u, v) {
   return indices;
 }
 
-// Applies the brush at one texel, remembering what each index was so the
-// whole stroke can be rolled back if it turns out to be a pinch.
-function stampAt(u, v) {
+// Applies the brush over a run of texels, remembering what each index was
+// so the whole stroke can be rolled back if it turns out to be a pinch.
+//
+// One setPins call for the whole run, never one per pixel: setPins redraws
+// the scene whenever it changes something, and a wide brush swept across a
+// layer touches thousands of texels.
+function stamp(texels) {
   const { above, stroke } = session;
   const pinning = session.tool === 'pin';
-  const indices = brushIndices(u, v).filter((index) =>
-    (pinning ? !above.pins.has(index) : above.pins.has(index)));
-  if (indices.length === 0) return;
+  const indices = new Set();
+  for (const { u, v } of texels) {
+    for (const index of brushIndices(u, v)) {
+      if (pinning ? !above.pins.has(index) : above.pins.has(index)) indices.add(index);
+    }
+  }
+  if (indices.size === 0) return;
 
   for (const index of indices) if (!stroke.touched.has(index)) stroke.touched.set(index, !pinning);
-  partsStore.setPins(above.id, indices, pinning);
+  partsStore.setPins(above.id, [...indices], pinning);
   stroke.changed = true;
 }
 
@@ -353,13 +364,15 @@ function stampAt(u, v) {
 // rather than a dotted trail.
 function stampLine(from, to) {
   const steps = Math.max(Math.abs(to.u - from.u), Math.abs(to.v - from.v));
-  if (steps <= 1) { stampAt(to.u, to.v); return; }
+  if (steps <= 1) { stamp([to]); return; }
+  const run = [];
   for (let i = 1; i <= steps; i++) {
-    stampAt(
-      Math.round(from.u + ((to.u - from.u) * i) / steps),
-      Math.round(from.v + ((to.v - from.v) * i) / steps)
-    );
+    run.push({
+      u: Math.round(from.u + ((to.u - from.u) * i) / steps),
+      v: Math.round(from.v + ((to.v - from.v) * i) / steps),
+    });
   }
+  stamp(run);
 }
 
 function beginStroke(point) {
@@ -370,7 +383,7 @@ function beginStroke(point) {
     changed: false,
   };
   const texel = texelAt(point);
-  stampAt(texel.u, texel.v);
+  stamp([texel]);
   session.stroke.last = texel;
   render();
 }
@@ -379,7 +392,7 @@ function extendStroke(point) {
   const texel = texelAt(point);
   const last = session.stroke.last;
   if (last && texel.u === last.u && texel.v === last.v) return;
-  if (last) stampLine(last, texel); else stampAt(texel.u, texel.v);
+  if (last) stampLine(last, texel); else stamp([texel]);
   session.stroke.last = texel;
   render();
 }
@@ -397,9 +410,14 @@ function abandonStroke() {
   const stroke = session.stroke;
   session.stroke = null;
   if (!stroke) return;
-  for (const [index, wasPinned] of stroke.touched) {
-    partsStore.setPins(session.above.id, [index], wasPinned);
-  }
+  // Two calls, not one per pixel: setPins redraws the scene each time it
+  // changes something, and a long stroke with a wide brush touches
+  // thousands of texels.
+  const wasOn = [];
+  const wasOff = [];
+  for (const [index, wasPinned] of stroke.touched) (wasPinned ? wasOn : wasOff).push(index);
+  if (wasOn.length) partsStore.setPins(session.above.id, wasOn, true);
+  if (wasOff.length) partsStore.setPins(session.above.id, wasOff, false);
   history.commitCapture(stroke.token, false);
   render();
 }
