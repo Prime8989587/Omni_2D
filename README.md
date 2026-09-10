@@ -312,6 +312,14 @@ character sitting at pixel (200, 200) stays there. Shrink the canvas
 below the character and the portion outside the grid is simply not drawn
 until you move it back in or enlarge the canvas again — nothing is lost.
 
+**⇄ Mirror** sits below the Width/Height fields, **off by default**. Turn
+it on and typing into *either* field copies that exact value — whatever
+you actually typed, not a fixed number — into the other, live as you type.
+A square canvas then needs entering once instead of twice. Turning it back
+off leaves the two fields independent again, unaffected by whatever they
+happened to match a moment ago. It has no effect on the preset buttons,
+which already set both sides at once.
+
 ### What you see
 
 The grid is a **checkerboard of black and dark-grey cells**, one cell per
@@ -832,6 +840,16 @@ The panel at the bottom has a **Parts** / **Bones** tab pair. Use the
 Parts tab to choose which piece you're working on, and the Bones tab to
 choose which bone you're inspecting or painting.
 
+**Show: All layers / Show: Rigged only.** Below the tabs, on the Parts
+tab only, a toggle narrows that list to layers at least one bone has
+claimed via **Controls layer** (Rig mode) — handy once a character has
+enough layers that scrolling past ones you have not rigged yet gets
+tedious. It defaults to **off**, deliberately: a layer with *no* bone
+attached is still a perfectly legitimate one to bind — auto-weighting
+falls back to whichever bones are nearest for it — and that has to stay
+reachable, not just possible in principle. The toggle hides itself on the
+Bones tab, where there is nothing for it to filter.
+
 ### Binding a Part (auto-weighting)
 
 1. On the **Parts** tab, tap the piece you want to bind.
@@ -1242,24 +1260,62 @@ settles.
 
 ### Layer controls
 
-Every row in **Scene Parts** carries its own controls, and the bar above
-the list acts on whichever layer is selected.
+Every row in **Scene Parts** is just a name and a single **⋮** button now.
+Tapping **⋮** opens a small panel directly beneath that row — the row
+growing downward, not a popup covering the screen — carrying the five
+things that used to be four separate buttons crowded into the row itself:
 
 | Control | Where | What it does |
 |---|---|---|
-| **▲ / ▼** | each row | Move the layer one step up or down the stack. Greyed out at the ends. |
-| **👁 / 🚫** | each row | Hide or show the layer. |
-| **🔓 / 🔒** | each row | Lock or unlock the layer. |
+| **✏️ Rename** | that row's **⋮** panel | Turns the name into a text field. See *Renaming a layer*, below. |
+| **▲ Move up / ▼ Move down** | that row's **⋮** panel | Move the layer one step up or down the stack. Greyed out at the ends. |
+| **👁 Hide / 🚫 Show** | that row's **⋮** panel | Hide or show the layer. |
+| **🔓 Lock / 🔒 Unlock** | that row's **⋮** panel | Lock or unlock the layer. |
 | **To Front / To Back** | selection bar | Jump straight to the top or bottom, as before. |
 | **Duplicate** | selection bar | Independent copy of the artwork. |
 | **Delete** | selection bar | Remove the layer. |
 
+**Only one row's panel is open at a time.** Tapping **⋮** on a different
+row closes whatever was open first — there is never a stack of them piled
+up. Tapping the *same* row's button again (it reads **✕** while its panel
+is open) closes it, so you are never forced to open a different row just
+to dismiss the one you have. The panel deliberately stays open after
+Move/Hide/Lock rather than closing itself, so nudging a layer down several
+slots, or checking a toggle actually took, doesn't mean reopening the menu
+each time — it is anchored to that layer, not that row's position, so it
+survives the list reshuffling under it.
+
 **Reordering to any position.** Part 2 could only send a layer all the way
-to the front or all the way to the back. The per-row **▲ / ▼** buttons move
+to the front or all the way to the back. **▲ Move up / ▼ Move down** move
 it one place at a time, so a layer can be placed anywhere in the stack —
-tap ▲ twice to lift a hand above the sleeve but keep it under the glove.
-The list runs top-of-stack first, so "up" in the list is "closer to the
-front" on the canvas.
+tap twice to lift a hand above the sleeve but keep it under the glove. The
+list runs top-of-stack first, so "up" in the list is "closer to the front"
+on the canvas.
+
+**Why the Skeleton list (Rig mode) does not have a "⋮" too.** A bone row
+already carries exactly one button (show/hide), not several — its
+rename/delete/nudge controls live in the single bone editor panel for
+whichever bone is selected, a form-style editor rather than a row of
+per-item buttons repeated down a list. Consolidating a single always-visible
+control behind an extra tap would only add friction for nothing gained, so
+that pattern was left as it is.
+
+### Renaming a layer
+
+Imported artwork starts out named after its source file — `9703`, `9704`
+— which stops meaning anything the moment you have more than two layers.
+Open a row's **⋮** panel and tap **✏️ Rename**: the name becomes an
+editable text field, pre-filled and pre-selected so typing straight away
+replaces it.
+
+- **Enter**, or tapping away from the field, commits the new name.
+- **Escape** cancels and puts the old name back, discarding what you typed.
+- A blank name is rejected rather than saved — a layer with no name would
+  be unfindable in every list that shows one.
+
+The new name is real data, not a label: it is what the **Controls layer**
+dropdown (Rig mode), the Bind Parts list, and every other place a layer
+name appears will show from then on, and it is saved with the project.
 
 **Duplicate** copies the artwork, the position, scale and rotation, and
 drops the copy on top of the stack named `hand_l_copy` (then `_2`, `_3` if

@@ -39,6 +39,10 @@ let currentProjectName = null; // the named project this session is editing
 let stateMenuOpen = false;
 let restorePoint = null; // the state "Reverse" comes back to
 let pendingStateAction = null;
+let openPartMenuId = null; // which Scene Parts row's "⋮" aside is open, if any
+let renamingPartId = null; // which Scene Parts row is mid-rename, if any
+let canvasSizeMirror = false; // Canvas size modal: type one side, the other follows
+let bindRiggedOnly = false; // Bind Parts tab: hide layers no bone has claimed
 
 function cacheElements() {
   els.canvas = document.getElementById('canvas');
@@ -62,6 +66,7 @@ function cacheElements() {
   els.canvasPresets = document.getElementById('canvasPresets');
   els.canvasWidthInput = document.getElementById('canvasWidthInput');
   els.canvasHeightInput = document.getElementById('canvasHeightInput');
+  els.canvasMirrorToggle = document.getElementById('canvasMirrorToggle');
   els.applyCanvasSizeBtn = document.getElementById('applyCanvasSizeBtn');
   els.cancelCanvasSizeBtn = document.getElementById('cancelCanvasSizeBtn');
   els.canvasEmptyHint = document.getElementById('canvasEmptyHint');
@@ -147,6 +152,7 @@ function cacheElements() {
   els.debugBoneName = document.getElementById('debugBoneName');
   els.showPartsTab = document.getElementById('showPartsTab');
   els.showBonesTab = document.getElementById('showBonesTab');
+  els.bindRiggedOnlyToggle = document.getElementById('bindRiggedOnlyToggle');
 
   els.rigDebugSlider = document.getElementById('rigDebugSlider');
   els.rigDebugValue = document.getElementById('rigDebugValue');
@@ -465,12 +471,41 @@ function rigHintText(status) {
 function openCanvasSizeModal() {
   els.canvasWidthInput.value = String(sceneStore.width);
   els.canvasHeightInput.value = String(sceneStore.height);
+  renderCanvasMirrorToggle();
   renderCanvasPresets();
   els.canvasSizeModal.hidden = false;
 }
 
 function closeCanvasSizeModal() {
   els.canvasSizeModal.hidden = true;
+}
+
+function renderCanvasMirrorToggle() {
+  els.canvasMirrorToggle.setAttribute('aria-pressed', String(canvasSizeMirror));
+  els.canvasMirrorToggle.textContent = `⇄ Mirror: ${canvasSizeMirror ? 'On' : 'Off'}`;
+}
+
+// OFF (the default) leaves width and height independent, exactly as
+// before. ON, typing into either field copies the SAME VALUE the user is
+// actually typing into the other -- never a fixed number -- so a square
+// canvas only needs entering once.
+function handleCanvasMirrorToggle() {
+  canvasSizeMirror = !canvasSizeMirror;
+  renderCanvasMirrorToggle();
+  if (canvasSizeMirror) {
+    els.canvasHeightInput.value = els.canvasWidthInput.value;
+    renderCanvasPresets();
+  }
+}
+
+function handleCanvasWidthInput() {
+  if (canvasSizeMirror) els.canvasHeightInput.value = els.canvasWidthInput.value;
+  renderCanvasPresets();
+}
+
+function handleCanvasHeightInput() {
+  if (canvasSizeMirror) els.canvasWidthInput.value = els.canvasHeightInput.value;
+  renderCanvasPresets();
 }
 
 // The store clamps to the 8..3072 limits; what the user typed is echoed
@@ -646,13 +681,19 @@ function renderBindList() {
   els.bindList.replaceChildren();
 
   const rows = bindListTab === 'parts'
-    ? partsStore.partsTopFirst.map((part) => ({
-        id: part.id,
-        label: part.mesh && part.mesh.isBound ? `${part.name} — bound` : part.name,
-        selected: part.id === partsStore.selectedId,
-        onSelect: () => partsStore.select(part.id),
-        depth: 0,
-      }))
+    ? partsStore.partsTopFirst
+        // "Rigged only" hides layers no bone has claimed. Off by default:
+        // an unclaimed layer is still a legitimate one to bind (auto-weight
+        // falls back to whichever bones are nearest), so this narrows the
+        // list on request rather than ever dropping that path silently.
+        .filter((part) => !bindRiggedOnly || bonesStore.bonesAttachedTo(part.id).length > 0)
+        .map((part) => ({
+          id: part.id,
+          label: part.mesh && part.mesh.isBound ? `${part.name} — bound` : part.name,
+          selected: part.id === partsStore.selectedId,
+          onSelect: () => partsStore.select(part.id),
+          depth: 0,
+        }))
     : bonesStore.toTreeList().map(({ bone, depth }) => ({
         id: bone.id,
         label: bone.name,
@@ -660,6 +701,16 @@ function renderBindList() {
         onSelect: () => bonesStore.select(bone.id),
         depth,
       }));
+
+  if (rows.length === 0 && bindListTab === 'parts' && bindRiggedOnly) {
+    const item = document.createElement('li');
+    const note = document.createElement('p');
+    note.className = 'rig-hint';
+    note.textContent = 'No layer has a bone attached yet — set "Controls layer" on a bone in Rig mode, or turn this filter off.';
+    item.appendChild(note);
+    els.bindList.appendChild(item);
+    return;
+  }
 
   for (const row of rows) {
     const item = document.createElement('li');
@@ -675,12 +726,24 @@ function renderBindList() {
   }
 }
 
+function handleBindRiggedOnlyToggle() {
+  bindRiggedOnly = !bindRiggedOnly;
+  renderBindList();
+  renderBindChrome();
+}
+
 function renderBindChrome() {
   const isBind = currentState === AppState.BIND;
   els.bindPanel.hidden = !isBind;
   els.bindControls.hidden = !isBind;
   els.bindHint.hidden = !isBind;
   if (!isBind) return;
+
+  // The filter only means anything among layers, so it stays out of the
+  // way on the Bones tab rather than sitting there doing nothing.
+  els.bindRiggedOnlyToggle.hidden = bindListTab !== 'parts';
+  els.bindRiggedOnlyToggle.setAttribute('aria-pressed', String(bindRiggedOnly));
+  els.bindRiggedOnlyToggle.textContent = bindRiggedOnly ? 'Show: Rigged only' : 'Show: All layers';
 
   const part = partsStore.selected;
   const bone = bonesStore.selected;
@@ -787,14 +850,29 @@ function iconButton({ label, glyph, pressed = null, disabled = false, onClick })
 }
 
 // Rebuilt only on structural/selection changes, never mid-drag. Each row
-// carries the controls that belong to that one layer: move it through the
-// stack, hide it, lock it.
+// is a name plus a single "⋮" button; the four controls that used to sit
+// in the row itself (move up/down, show/hide, lock) plus Rename now live
+// in an aside panel the "⋮" opens directly under that row -- at most one
+// open at a time, tracked by the part's id so it survives the re-render
+// a move/toggle causes and stays open on the SAME row.
 function renderPartsList() {
   els.scenePartsList.replaceChildren();
 
   const ordered = partsStore.partsTopFirst;
+  // A row that was open or mid-rename can't stay that way once its part
+  // is gone (deleted, or a project/undo replaced the whole list).
+  if (openPartMenuId && !ordered.some((part) => part.id === openPartMenuId)) openPartMenuId = null;
+  if (renamingPartId && !ordered.some((part) => part.id === renamingPartId)) renamingPartId = null;
+
   ordered.forEach((part, index) => {
     const item = document.createElement('li');
+
+    if (renamingPartId === part.id) {
+      item.appendChild(partRenameRow(part));
+      els.scenePartsList.appendChild(item);
+      return;
+    }
+
     const row = document.createElement('div');
     row.className = 'list-row';
 
@@ -815,31 +893,114 @@ function renderPartsList() {
     button.addEventListener('click', () => partsStore.select(part.id));
     row.appendChild(button);
 
-    // The list runs top-of-stack first, so "up" in the list is +1 in z.
+    const isOpen = openPartMenuId === part.id;
     row.appendChild(iconButton({
-      label: `Move ${part.name} up`, glyph: '▲', disabled: index === 0,
-      onClick: () => history.run('Reorder layer', () => partsStore.moveBy(part.id, 1)),
-    }));
-    row.appendChild(iconButton({
-      label: `Move ${part.name} down`, glyph: '▼', disabled: index === ordered.length - 1,
-      onClick: () => history.run('Reorder layer', () => partsStore.moveBy(part.id, -1)),
-    }));
-    row.appendChild(iconButton({
-      label: part.visible ? `Hide ${part.name}` : `Show ${part.name}`,
-      glyph: part.visible ? '👁' : '🚫', pressed: !part.visible,
-      onClick: () => history.run(part.visible ? 'Hide layer' : 'Show layer',
-        () => partsStore.setVisible(part.id, !part.visible)),
-    }));
-    row.appendChild(iconButton({
-      label: part.locked ? `Unlock ${part.name}` : `Lock ${part.name}`,
-      glyph: part.locked ? '🔒' : '🔓', pressed: part.locked,
-      onClick: () => history.run(part.locked ? 'Unlock layer' : 'Lock layer',
-        () => partsStore.setLocked(part.id, !part.locked)),
+      label: isOpen ? `Close menu for ${part.name}` : `More actions for ${part.name}`,
+      glyph: isOpen ? '✕' : '⋮',
+      pressed: isOpen,
+      onClick: () => {
+        // Tapping the open row's own button closes it; tapping any other
+        // row's button closes whatever was open and opens this one --
+        // never two at once.
+        openPartMenuId = isOpen ? null : part.id;
+        renderPartsList();
+      },
     }));
 
     item.appendChild(row);
+    if (isOpen) item.appendChild(partRowAside(part, index, ordered.length));
     els.scenePartsList.appendChild(item);
   });
+}
+
+// The panel a row's "⋮" opens: Rename plus the four controls it replaced,
+// unchanged in behavior. Left open after Move/Show/Lock (still anchored
+// to this part's id) so several taps in a row don't each need reopening
+// it; Rename instead swaps the row into edit mode.
+function partRowAside(part, index, total) {
+  const aside = document.createElement('div');
+  aside.className = 'row-aside';
+
+  const action = (label, glyph, onClick, extra = {}) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'row-aside__btn';
+    if (extra.pressed !== undefined) button.setAttribute('aria-pressed', String(extra.pressed));
+    button.disabled = Boolean(extra.disabled);
+    button.textContent = `${glyph} ${label}`;
+    button.addEventListener('click', onClick);
+    aside.appendChild(button);
+  };
+
+  action('Rename', '✏️', () => {
+    openPartMenuId = null;
+    renamingPartId = part.id;
+    renderPartsList();
+  });
+  // The list runs top-of-stack first, so "up" in the list is +1 in z.
+  action('Move up', '▲', () => history.run('Reorder layer', () => partsStore.moveBy(part.id, 1)),
+    { disabled: index === 0 });
+  action('Move down', '▼', () => history.run('Reorder layer', () => partsStore.moveBy(part.id, -1)),
+    { disabled: index === total - 1 });
+  action(part.visible ? 'Hide' : 'Show', part.visible ? '👁' : '🚫',
+    () => history.run(part.visible ? 'Hide layer' : 'Show layer',
+      () => partsStore.setVisible(part.id, !part.visible)),
+    { pressed: !part.visible });
+  action(part.locked ? 'Unlock' : 'Lock', part.locked ? '🔒' : '🔓',
+    () => history.run(part.locked ? 'Unlock layer' : 'Lock layer',
+      () => partsStore.setLocked(part.id, !part.locked)),
+    { pressed: part.locked });
+
+  return aside;
+}
+
+// Swaps a row's name button for a text field. Commits on Enter or blur,
+// cancels (reverting the typed text) on Escape; a blank or unchanged
+// value is treated as a cancel rather than a no-op rename. `settled`
+// guards against Enter's commit AND the blur it triggers both firing.
+function partRenameRow(part) {
+  const row = document.createElement('div');
+  row.className = 'list-row';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'text-input text-input--inline';
+  input.value = part.name;
+  input.autocomplete = 'off';
+  input.setAttribute('aria-label', `Rename ${part.name}`);
+
+  let settled = false;
+  const leaveRenameMode = () => {
+    renamingPartId = null;
+    renderPartsList();
+  };
+  const commit = () => {
+    if (settled) return;
+    settled = true;
+    // Same validity check partsStore.rename() applies internally -- kept
+    // here too so a no-op (blank, or unchanged) never reaches history.run
+    // and pushes a pointless undo step for nothing having changed.
+    const value = input.value.trim();
+    leaveRenameMode();
+    if (value && value !== part.name) {
+      history.run('Rename layer', () => partsStore.rename(part.id, value));
+    }
+  };
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    leaveRenameMode();
+  };
+
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); commit(); }
+    else if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+
+  row.appendChild(input);
+  requestAnimationFrame(() => { input.focus(); input.select(); });
+  return row;
 }
 
 // ---- Layer actions -----------------------------------------------------
@@ -1314,8 +1475,9 @@ function bindEvents() {
   els.canvasSizeBtn.addEventListener('click', openCanvasSizeModal);
   els.applyCanvasSizeBtn.addEventListener('click', applyCanvasSize);
   els.cancelCanvasSizeBtn.addEventListener('click', closeCanvasSizeModal);
-  els.canvasWidthInput.addEventListener('input', renderCanvasPresets);
-  els.canvasHeightInput.addEventListener('input', renderCanvasPresets);
+  els.canvasWidthInput.addEventListener('input', handleCanvasWidthInput);
+  els.canvasHeightInput.addEventListener('input', handleCanvasHeightInput);
+  els.canvasMirrorToggle.addEventListener('click', handleCanvasMirrorToggle);
   els.fileInput.addEventListener('change', handleFilesPicked);
   els.animateBtn.addEventListener('click', handleAnimateTapped);
   els.exitBtn.addEventListener('click', handleExit);
@@ -1332,6 +1494,7 @@ function bindEvents() {
   els.debugRotateSlider.addEventListener('input', handleDebugRotate);
   els.showPartsTab.addEventListener('click', () => setBindTab('parts'));
   els.showBonesTab.addEventListener('click', () => setBindTab('bones'));
+  els.bindRiggedOnlyToggle.addEventListener('click', handleBindRiggedOnlyToggle);
 
   els.rigBtn.addEventListener('click', handleRigTapped);
   els.rigExitBtn.addEventListener('click', handleRigExit);

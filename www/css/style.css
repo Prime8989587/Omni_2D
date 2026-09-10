@@ -686,6 +686,79 @@ button.physics-toggle.is-active {
   opacity: 0.75;
 }
 
+/* A row's "⋮" opens this directly beneath it -- the row growing downward,
+   not a modal -- and the four actions that used to sit in the row itself
+   (move up/down, show/hide, lock) live here now, plus Rename. Kept open
+   across re-renders by tracking the row's id rather than its position, so
+   repeated taps (nudging a layer down several slots) don't require
+   reopening the menu each time. */
+.row-aside {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 2px solid var(--color-accent);
+  border-radius: 10px;
+  background: rgba(255, 46, 147, 0.08);
+}
+
+.row-aside__btn {
+  -webkit-tap-highlight-color: transparent;
+  flex: 1 1 calc(50% - 3px);
+  min-width: 100px;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 2px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-accent);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.row-aside__btn[aria-pressed="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.row-aside__btn:disabled {
+  opacity: 0.35;
+}
+
+/* A small persistent on/off button -- the canvas-size Mirror toggle and
+   the Bind list's "Rigged only" filter both use it. */
+.toggle-chip {
+  -webkit-tap-highlight-color: transparent;
+  min-height: 40px;
+  padding: 0 14px;
+  margin: 8px 0;
+  border: 2px solid var(--color-accent);
+  border-radius: 10px;
+  background: var(--color-bg);
+  color: var(--color-accent);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.toggle-chip[aria-pressed="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.toggle-chip--wide {
+  display: block;
+  width: 100%;
+}
+
 .field-inline {
   display: flex;
   align-items: center;

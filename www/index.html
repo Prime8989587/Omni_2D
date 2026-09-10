@@ -146,6 +146,7 @@
           <button id="showPartsTab" class="segmented__btn is-active" type="button">Parts</button>
           <button id="showBonesTab" class="segmented__btn" type="button">Bones</button>
         </div>
+        <button id="bindRiggedOnlyToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show: All layers</button>
 
         <ul id="bindList" class="scene-parts"></ul>
       </div>
@@ -298,6 +299,7 @@
             <input id="canvasHeightInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
           </label>
         </div>
+        <button id="canvasMirrorToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">⇄ Mirror: Off</button>
         <div class="modal__actions">
           <button id="applyCanvasSizeBtn" class="btn btn--flourish" type="button">Apply</button>
           <button id="cancelCanvasSizeBtn" class="btn" type="button">Cancel</button>

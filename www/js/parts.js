@@ -292,6 +292,21 @@ class PartsStore {
     if (moved) this._emit('transform');
   }
 
+  // Layers import named after their source file ("9703"), which is never
+  // what anyone wants to see in the Scene Parts list for long. Blank input
+  // is ignored rather than accepted -- an empty name would make the layer
+  // impossible to pick back out of the list -- and unlike duplicate()'s
+  // generated names, a hand-typed one is not forced unique: the user asked
+  // for it.
+  rename(id, name) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return;
+    const trimmed = String(name).trim();
+    if (!trimmed || trimmed === part.name) return;
+    part.name = trimmed;
+    this._emit('structure');
+  }
+
   setVisible(id, visible) {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part || part.visible === visible) return;
