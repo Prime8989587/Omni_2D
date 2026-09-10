@@ -878,6 +878,32 @@ assigned bones, or says it will use whichever are nearest.
 The Parts list marks bound pieces as **"— bound"**, and the status line
 shows the vertex count.
 
+**Auto-weight never moves the layer.** It used to look as though it did:
+drag the character across the canvas in Free Move, come back and re-bind a
+layer, and the layer would jump back to roughly where it was imported. The
+button was not repositioning anything — the opposite. A bound layer is
+drawn at
+
+```
+its own stored origin  +  (where its bones are now − where they were at bind time)
+```
+
+and Free Move moves the *bones*, deliberately leaving bound layers' own
+coordinates alone because the bones already carry them. So after a drag the
+layer sits some distance from its own origin, held there entirely by that
+second term. Re-binding recaptures the bind pose at wherever the bones are
+*now*, which zeroes that term — and the layer fell back onto an origin that
+had gone stale hours ago.
+
+Binding now folds that offset into the origin instead of discarding it: the
+layer keeps its place on screen to the pixel, and its stored position
+finally means what it says again. The fold is measured against the **rest**
+pose rather than the simulated one, so re-binding a jiggling spring bone's
+layer takes in the settled displacement and lets the spring carry on from
+there, rather than freezing a wobble into the layer's coordinates. A first
+bind moves nothing at all, since there is no previous bind pose to be
+carried away from.
+
 **Nothing should look different yet.** That is the correctness check: a
 freshly bound Part renders pixel-for-pixel identically to the flat sprite
 until a bone actually moves. (Verified — the bound render is currently
@@ -1204,25 +1230,11 @@ Free Move draws no skeleton and no controls over the artwork: no bone
 bodies, no handles, no parent links, not even a selection outline on a
 layer. The canvas shows the character and the checkerboard, full stop.
 
-### Saved state: Save, Reverse, Discard
+### Saved state
 
-The round **≡** button under the Start/Stop row opens a small menu with
-one job: getting back to a state you liked.
-
-- **Save** — marks the current arrangement as the one to come back to. It
-  asks first, so a mispress costs nothing.
-- **Reverse** — puts the character back to that saved arrangement. It is
-  available immediately after importing without saving anything, because
-  **the moment you import artwork is captured automatically** — so
-  Reverse means "how it was when I uploaded it" until you save something
-  you prefer.
-- **Discard** — removes every layer and every bone, leaving an empty
-  canvas. It warns first, and it does not touch your saved projects.
-
-All three are ordinary undoable actions, so **↶** takes back a Reverse or
-a Discard. The saved state is stored on the device alongside the
-auto-save, so it survives closing the app, and it is separate from the
-named projects in **Open**.
+Save, Reverse and Discard have moved out of this screen and into the
+**≡ menu in the top bar**, where they are reachable from every mode — see
+*The ≡ menu* below.
 
 ### Sway: how much a bone minds being moved
 
@@ -1483,9 +1495,29 @@ numbers.
 
 Work is now kept **on the device**, not just in memory.
 
+### The ≡ menu
+
+Saving, opening and discarding are properties of the *project*, not of
+whichever screen you happen to be standing on — so they live in one menu
+behind the **≡** button in the **top bar**, open from **Home, Rig, Bind and
+Free Move alike**. They used to be split in two: Save/Open sat in the Home
+screen's canvas row, and Save-state/Reverse/Discard sat in a row of their
+own inside Free Move, so each was unreachable from three of the app's four
+screens. Now there is one menu, in one place, always there:
+
+| | |
+|---|---|
+| **Save project…** | Name it and store it on the device. |
+| **Open project…** | Load a saved project, or delete one. |
+| **Save state** | Mark the current arrangement as the one to come back to. |
+| **Reverse** | Put the character back to that arrangement. |
+| **Discard everything** | Empty the canvas (warns first). |
+
+Tap **≡** again, or anywhere outside the menu, to dismiss it.
+
 ### Saving
 
-Home screen → **Save**. Give the project a name (it offers the current
+**≡ → Save project…**. Give the project a name (it offers the current
 one, so saving again overwrites the same project) and tap Save. Stored are
 **all layers with their artwork, positions, transforms and flags, the full
 bone hierarchy with layer assignments and physics settings, every mesh and
@@ -1494,10 +1526,29 @@ where you stopped.
 
 ### Opening
 
-Home screen → **Open** lists every saved project, newest first, with its
+**≡ → Open project…** lists every saved project, newest first, with its
 last-modified date. Tap one to load it; 🗑 deletes it. Loading **replaces**
 what is on the canvas and starts a fresh undo timeline, since undoing back
 into a different project's edits would be meaningless.
+
+### Saved state: Save state, Reverse, Discard
+
+Separate from named projects, and aimed at one thing: getting back to an
+arrangement you liked.
+
+- **Save state** — marks the current arrangement as the one to come back
+  to. It asks first, so a mispress costs nothing.
+- **Reverse** — puts the character back to that saved arrangement. It is
+  available immediately after importing without saving anything, because
+  **the moment you import artwork is captured automatically** — so
+  Reverse means "how it was when I uploaded it" until you save something
+  you prefer.
+- **Discard everything** — removes every layer and every bone, leaving an
+  empty canvas. It warns first, and it does not touch your saved projects.
+
+All three are ordinary undoable actions, so **↶** takes back a Reverse or
+a Discard. The saved state is stored on the device alongside the
+auto-save, so it survives closing the app.
 
 ### Auto-save and crash recovery
 

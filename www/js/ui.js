@@ -168,9 +168,8 @@ function cacheElements() {
   els.inertiaValue = document.getElementById('inertiaValue');
   els.animateHint = document.getElementById('animateHint');
   els.movePad = document.getElementById('movePad');
-  els.stateRow = document.getElementById('stateRow');
-  els.stateMenuBtn = document.getElementById('stateMenuBtn');
-  els.stateMenu = document.getElementById('stateMenu');
+  els.appMenuBtn = document.getElementById('appMenuBtn');
+  els.appMenu = document.getElementById('appMenu');
   els.stateSaveBtn = document.getElementById('stateSaveBtn');
   els.stateReverseBtn = document.getElementById('stateReverseBtn');
   els.stateDiscardBtn = document.getElementById('stateDiscardBtn');
@@ -1347,12 +1346,12 @@ async function discardRecovery() {
 // uploaded it" without anyone having to think about it in advance, and a
 // deliberate Save overwrites it with whatever they like better.
 
+// Saving, opening and discarding belong to the project, not to whichever
+// screen you happen to be on, so this menu hangs off the top bar and is
+// reachable from Home, Rig, Bind and Free Move alike -- no mode gating.
 function renderStateChrome() {
-  const isAnimating = currentState === AppState.ANIMATING;
-  els.stateRow.hidden = !isAnimating;
-  if (!isAnimating) stateMenuOpen = false;
-  els.stateMenu.hidden = !stateMenuOpen;
-  els.stateMenuBtn.setAttribute('aria-expanded', String(stateMenuOpen));
+  els.appMenu.hidden = !stateMenuOpen;
+  els.appMenuBtn.setAttribute('aria-expanded', String(stateMenuOpen));
   els.stateReverseBtn.disabled = !restorePoint;
   els.stateReverseBtn.textContent = restorePoint ? 'Reverse' : 'Reverse (nothing saved yet)';
   els.stateDiscardBtn.disabled = partsStore.isEmpty && bonesStore.isEmpty;
@@ -1360,6 +1359,12 @@ function renderStateChrome() {
 
 function toggleStateMenu() {
   stateMenuOpen = !stateMenuOpen;
+  renderStateChrome();
+}
+
+function closeStateMenu() {
+  if (!stateMenuOpen) return;
+  stateMenuOpen = false;
   renderStateChrome();
 }
 
@@ -1537,7 +1542,17 @@ function bindEvents() {
   els.deletePartWithBonesBtn.addEventListener('click', () => completeDeletePart(true));
   els.deletePartCancelBtn.addEventListener('click', cancelDeletePart);
 
-  els.stateMenuBtn.addEventListener('click', toggleStateMenu);
+  els.appMenuBtn.addEventListener('click', (event) => {
+    event.stopPropagation(); // so the document listener below doesn't close it again
+    toggleStateMenu();
+  });
+  // A floating menu over the canvas has to be dismissable by tapping past
+  // it, not only by finding the button again.
+  document.addEventListener('click', (event) => {
+    if (!stateMenuOpen) return;
+    if (els.appMenu.contains(event.target)) return;
+    closeStateMenu();
+  });
   els.stateSaveBtn.addEventListener('click', handleStateSave);
   els.stateReverseBtn.addEventListener('click', handleStateReverse);
   els.stateDiscardBtn.addEventListener('click', handleStateDiscard);
@@ -1548,10 +1563,12 @@ function bindEvents() {
   els.redoBtn.addEventListener('click', handleRedo);
   els.boneLayerSelect.addEventListener('change', handleBoneLayerChange);
 
-  els.saveProjectBtn.addEventListener('click', openSaveProjectModal);
+  // Now that these live in the menu, choosing one has to dismiss it before
+  // its modal opens -- otherwise the menu is still sitting there behind it.
+  els.saveProjectBtn.addEventListener('click', () => { closeStateMenu(); openSaveProjectModal(); });
   els.confirmSaveProjectBtn.addEventListener('click', handleConfirmSaveProject);
   els.cancelSaveProjectBtn.addEventListener('click', closeSaveProjectModal);
-  els.openProjectBtn.addEventListener('click', openProjectPicker);
+  els.openProjectBtn.addEventListener('click', () => { closeStateMenu(); openProjectPicker(); });
   els.cancelOpenProjectBtn.addEventListener('click', closeProjectPicker);
   els.restoreRecoveryBtn.addEventListener('click', restoreRecovery);
   els.discardRecoveryBtn.addEventListener('click', discardRecovery);

@@ -196,8 +196,54 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
   return mesh;
 }
 
+// RE-BINDING MUST NOT MOVE THE ARTWORK
+//
+// A bound layer is drawn at
+//
+//   part origin  +  (where its bones are now  -  where they were at bind)
+//
+// so once the character has been dragged in Free Move, the layer is on
+// screen some distance away from its own stored origin: the bones carry
+// it, and translateUnbound() deliberately leaves bound layers' x/y alone
+// precisely because the bones already do that job.
+//
+// Re-binding recaptures the bind pose at wherever the bones are NOW, which
+// zeroes that second term -- so without this, the layer drops back onto its
+// stored origin the moment you press Auto-weight, looking for all the world
+// like the button had teleported it back to where it was imported. It had
+// not moved anything; it had removed the offset that was holding it away
+// from an origin that had gone stale.
+//
+// So the offset is moved into the origin instead of being discarded: the
+// layer keeps its place on screen, and its stored position finally means
+// what it says again. Measured against the REST pose, not the simulated
+// one, so re-binding mid-jiggle folds in the settled displacement and lets
+// the spring carry on from there rather than freezing the wobble into the
+// layer's coordinates.
+function carryBoneOffsetIntoOrigin(part, bonesStore) {
+  if (!part.mesh || !part.mesh.isBound) return; // a first bind moves nothing
+  const rest = bonesStore.snapshotRestTransforms();
+  const deformed = deformVertices(part.mesh, part, rest);
+  if (deformed.length === 0) return;
+
+  // Where the layer draws now, against where a fresh bind would put it
+  // (its own centre, since the mesh's rest shape is centred on the origin).
+  const cx = deformed.reduce((sum, p) => sum + p.x, 0) / deformed.length;
+  const cy = deformed.reduce((sum, p) => sum + p.y, 0) / deformed.length;
+  const dx = Math.round(cx - part.centerX);
+  const dy = Math.round(cy - part.centerY);
+  if (dx === 0 && dy === 0) return;
+
+  // Whole cells only: a layer's origin is integer scene pixels, and that
+  // invariant outranks chasing the last fraction of a cell in a pose that
+  // has been rotated (where no rigid origin can be exactly right anyway).
+  part.x += dx;
+  part.y += dy;
+}
+
 export function bindPart(part, bonesStore, density) {
   const resolved = density || defaultDensity(part);
+  carryBoneOffsetIntoOrigin(part, bonesStore);
   part.mesh = autoWeightMesh(generateMesh(part, resolved), part, bonesStore);
   return part.mesh;
 }

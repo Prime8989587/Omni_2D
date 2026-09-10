@@ -13,10 +13,21 @@
       <button id="fitViewBtn" class="btn btn--icon" type="button" aria-label="Fit the whole canvas on screen" title="Fit">&#10530;</button>
       <button id="undoBtn" class="btn btn--icon" type="button" aria-label="Undo" title="Undo" disabled>&#8634;</button>
       <button id="redoBtn" class="btn btn--icon" type="button" aria-label="Redo" title="Redo" disabled>&#8635;</button>
+      <button id="appMenuBtn" class="btn btn--icon" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="appMenu" aria-label="Save, open and discard" title="Save / Open / Discard">&#8801;</button>
       <div id="logo" class="logo">&#8734;omni-2D</div>
       <div id="modeLabel" class="mode-label" hidden>
         <span class="mode-label__dot" aria-hidden="true"></span>
         <span id="modeLabelText">Animate Mode</span>
+      </div>
+
+      <div id="appMenu" class="app-menu" hidden>
+        <p class="app-menu__group">Project</p>
+        <button id="saveProjectBtn" class="app-menu__item" type="button">Save project…</button>
+        <button id="openProjectBtn" class="app-menu__item" type="button">Open project…</button>
+        <p class="app-menu__group">Saved state</p>
+        <button id="stateSaveBtn" class="app-menu__item" type="button">Save state</button>
+        <button id="stateReverseBtn" class="app-menu__item" type="button">Reverse</button>
+        <button id="stateDiscardBtn" class="app-menu__item app-menu__item--danger" type="button">Discard everything</button>
       </div>
     </header>
 
@@ -158,8 +169,6 @@
 
       <div id="homeCanvasRow" class="control-row">
         <button id="canvasSizeBtn" class="btn btn--sm canvas-size-btn" type="button">Canvas 512 × 512 px</button>
-        <button id="saveProjectBtn" class="btn btn--sm" type="button">Save</button>
-        <button id="openProjectBtn" class="btn btn--sm" type="button">Open</button>
       </div>
 
       <div id="homeControls" class="control-row">
@@ -180,17 +189,6 @@
         <button id="exitBtn" class="btn btn--icon" type="button" aria-label="Exit animate mode">&#10005;</button>
         <button id="startBtn" class="btn btn--flourish" type="button" disabled>Start</button>
         <button id="stopBtn" class="btn btn--flourish" type="button" disabled>Stop</button>
-      </div>
-
-      <div id="stateRow" class="control-row state-row" hidden>
-        <button id="stateMenuBtn" class="btn btn--round" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Saved state menu" title="Saved state">&#8801;</button>
-        <span class="state-row__label">Saved state</span>
-      </div>
-
-      <div id="stateMenu" class="state-menu" hidden>
-        <button id="stateSaveBtn" class="state-menu__item" type="button">Save</button>
-        <button id="stateReverseBtn" class="state-menu__item" type="button">Reverse</button>
-        <button id="stateDiscardBtn" class="state-menu__item state-menu__item--danger" type="button">Discard</button>
       </div>
 
       <div id="movePad" class="move-pad" role="application" aria-label="Drag to move the character" hidden>

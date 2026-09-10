@@ -277,6 +277,27 @@ class BonesStore {
     return transforms;
   }
 
+  // The same snapshot with every bone read at its REST pose -- where the
+  // skeleton has been PUT, ignoring wherever a spring happens to be
+  // swinging this instant. Re-binding uses this so a rebind lands on the
+  // settled pose rather than freezing a transient jiggle into stored data.
+  snapshotRestTransforms() {
+    const transforms = {};
+    for (const bone of this._bones) {
+      const head = this.restWorldHead(bone);
+      const rotation = this.restWorldRotation(bone);
+      transforms[bone.id] = {
+        head,
+        rotation,
+        physics: bone.physicsEnabled,
+        partId: bone.attachedPartId,
+        rigidHead: head,
+        rigidRotation: rotation,
+      };
+    }
+    return transforms;
+  }
+
   // ---- The REST pose ----------------------------------------------------
   //
   // worldRotation() and worldHead() report where a bone IS -- for a spring
