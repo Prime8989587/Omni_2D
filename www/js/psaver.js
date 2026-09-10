@@ -260,10 +260,20 @@ function writeBrowserDownload(filename, text) {
   return { uri: filename, where: 'your Downloads folder', durable: true };
 }
 
+// A project name is not yet a file name. The caller has already stripped
+// the characters a path cannot contain; what is left to deal with is dots
+// and spaces at the ends -- and the leading dot in particular, because on
+// Android and Linux that makes the file HIDDEN. An export nobody can see
+// in their file manager is the exact failure PSaver exists to prevent.
+export function toFilename(name) {
+  const trimmed = String(name || '').replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+  return `${trimmed || 'project'}${PSAVER_EXTENSION}`;
+}
+
 // name -> a written file. Returns where it landed so the caller can tell
 // the user somewhere they can actually go and look.
 export async function exportToFile(name) {
-  const filename = `${name}${PSAVER_EXTENSION}`;
+  const filename = toFilename(name);
   const text = JSON.stringify(toFileBody(name));
   const cap = nativeBridge();
   const result = cap

@@ -1767,6 +1767,11 @@ whatever happens to the app."
 
 **≡ → PSaver: Export…**, name the file (it offers the current project's
 name, the same way the Save and GIF-export prompts do), and tap **Export**.
+Leave the field blank and it uses the placeholder, exactly as the GIF
+prompt does. Path characters are stripped from whatever you type, and so
+is a leading dot — on Android a leading dot makes a file **hidden**, and
+an export nobody can find in their file manager is the precise failure
+PSaver exists to prevent.
 
 The file is written into a **`Omni2D` folder inside your device's shared
 `Documents`** — a location you can reach from the Files app or from a
