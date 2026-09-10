@@ -509,8 +509,17 @@ function renderCanvasPresets() {
 function handlePhysicsToggle() {
   const bone = bonesStore.selected;
   if (!bone) return;
-  history.run(bone.physicsEnabled ? 'Disable physics' : 'Enable physics',
-    () => bonesStore.setPhysicsEnabled(bone.id, !bone.physicsEnabled));
+  const turningOn = !bone.physicsEnabled;
+  history.run(turningOn ? 'Enable physics' : 'Disable physics',
+    () => bonesStore.setPhysicsEnabled(bone.id, turningOn));
+
+  // A spring bone jiggles the layer it was given and nothing else, so one
+  // with no layer has nothing to jiggle. Say so, rather than letting the
+  // user switch physics on and watch nothing happen.
+  if (turningOn && !bone.attachedPartId) {
+    showToast(`"${bone.name}" has physics but no layer — set "Controls layer" ` +
+      'so it has artwork to move.');
+  }
 }
 
 function handlePhysicsParam(key, slider, readout, decimals = 0) {

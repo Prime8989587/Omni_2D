@@ -252,12 +252,19 @@ class BonesStore {
   // Every bone's current world transform, keyed by id. This is the whole
   // input the mesh skinning needs each frame -- Part 6's animation loop
   // can feed exactly this into deformVertices().
+  // physics/partId ride along so skinning can tell a spring bone's jiggle
+  // apart from rigid motion, and tell whose artwork the jiggle is for.
+  // Reading them here rather than storing them on the mesh keeps the whole
+  // thing derived: toggling physics changes the result on the next frame,
+  // in both directions, without touching a single stored weight.
   snapshotTransforms() {
     const transforms = {};
     for (const bone of this._bones) {
       transforms[bone.id] = {
         head: this.worldHead(bone),
         rotation: this.worldRotation(bone),
+        physics: bone.physicsEnabled,
+        partId: bone.attachedPartId,
       };
     }
     return transforms;

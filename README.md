@@ -1307,7 +1307,8 @@ a different layer, or clear it back to unassigned. The Skeleton list shows
 each bone's assignment inline (`Bone_2  → torso`).
 
 What the assignment does: it **restricts auto-weighting to the bones you
-named**. Bind a layer that one or more bones claim, and only those bones get
+named**, and it is what tells a spring bone whose artwork to jiggle
+(see *Spring bones only jiggle the layer they were given*, below). Bind a layer that one or more bones claim, and only those bones get
 weight over it — distance then only decides how the weight is split among
 them. It also drives the layer-delete warning above, and labels the skeleton
 so a 30-bone rig stays readable (`Bone_2  → torso`).
@@ -1317,6 +1318,41 @@ by distance. So existing rigs that never touched this dropdown deform
 exactly as they did before. Nothing here alters the deformation maths — the
 same linear blend skinning, the same rest-pose capture, the same whole-pixel
 snapping. It only changes *which* bones are allowed into the sum.
+
+### Spring bones only jiggle the layer they were given
+
+Switching physics on for a bone says *this piece is loose*. It does not say
+*and everything near it is loose too* — but that is what proximity
+weighting quietly did. Auto-weighting handed a spring bone a minority share
+of every layer around it, and linear blend skinning then dragged that share
+along with the spring. Measured on a body/hair/hands/chest rig, one chest
+bone owned **24% of the torso layer** and **8% of the hair**.
+
+The result looked exactly like physics leaking onto rigid bones. It wasn't.
+The bones were never wrong: through an entire Free-Move drag every rigid
+bone stayed **0.00 px** from the root, precisely as a rigid bone should.
+Only the *artwork* lagged — the torso trailing 1.7 px and the hair 6.5 px,
+rising and falling in an unmistakable spring curve — because a quarter of
+it was riding a spring nobody had pointed at it.
+
+So skinning applies a simulating bone **only to the layer named in its
+"Controls layer" dropdown**. Everywhere else it drops out of the blend and
+the remaining weights renormalize, leaving that artwork rigid. The
+simulation is untouched: the bone swings exactly as it always did, over
+exactly the artwork it was assigned.
+
+This is read live from the bone rather than baked into the mesh, which
+matters more than it sounds. Weights are never rewritten, so hand-painted
+work survives; switching physics off restores the previous look exactly;
+and it makes no difference whether you bind first and enable physics after
+or the other way round — a bind-order dependence that would otherwise be
+impossible to explain to anyone.
+
+**The trade-off, stated plainly:** a spring bone with no layer assigned now
+moves no artwork at all. That is the honest consequence of refusing to
+guess — proximity is the very signal that proved untrustworthy here. To
+keep it from being a silent surprise, switching physics on for an
+unassigned bone says so in a toast and points at the dropdown.
 
 ### Hiding bones
 

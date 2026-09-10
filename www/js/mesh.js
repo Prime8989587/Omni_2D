@@ -139,7 +139,9 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
   // subtlety the user can tune around; it is the wrong bone.
   //
   // With no explicit assignment there is nothing to go on but distance,
-  // so the old behaviour stands and every bone is a candidate.
+  // so the old behaviour stands and every bone is a candidate. Note that a
+  // SPRING bone may well win a share of a layer it was never meant to
+  // drive; deformVertices below is what stops that share from jiggling.
   const assigned = part && part.id ? bonesStore.bonesAttachedTo(part.id) : [];
   const bones = assigned.length > 0 ? assigned : bonesStore.bones;
   mesh.bindPose = {};
@@ -270,6 +272,24 @@ export function deformVertices(mesh, part, boneTransforms) {
       // A bone deleted since binding simply drops out; the remaining
       // weights are renormalized below.
       if (!bind || !current) continue;
+
+      // A SPRING BONE ONLY JIGGLES THE LAYER IT WAS GIVEN
+      //
+      // Switching physics on says "this piece is loose". Auto-weighting,
+      // which knows only about distance, hands a spring bone a minority
+      // share of every layer near it -- so a rigid torso came out 24%
+      // owned by one chest bone, and a rigid hair layer 8%. The BONES were
+      // never wrong: through a whole drag they stayed 0.00px from the
+      // root, exactly as rigid bones should. Their ARTWORK was the thing
+      // that lagged and jiggled, because a quarter of it was riding a
+      // spring nobody had pointed at it.
+      //
+      // So a bone that is simulating contributes here only to the layer
+      // named in its "Controls layer" dropdown. Everywhere else it drops
+      // out and the remaining weights renormalize, leaving that artwork
+      // rigid. Nothing about the simulation changes -- the bone swings
+      // exactly as it did, over exactly the artwork it was assigned.
+      if (current.physics && current.partId !== (part && part.id)) continue;
 
       const angle = current.rotation - bind.rotation;
       const cos = Math.cos(angle);
