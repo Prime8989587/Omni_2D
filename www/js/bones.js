@@ -265,6 +265,13 @@ class BonesStore {
         rotation: this.worldRotation(bone),
         physics: bone.physicsEnabled,
         partId: bone.attachedPartId,
+        // The same bone with the simulation ignored: still carried by the
+        // drag, just not swinging. Artwork this bone was not assigned to
+        // is deformed by THIS instead of by the simulated pose, which is
+        // what keeps a spring out of a rigid layer without ever detaching
+        // that layer from the skeleton.
+        rigidHead: this.restWorldHead(bone),
+        rigidRotation: this.restWorldRotation(bone),
       };
     }
     return transforms;

@@ -284,21 +284,31 @@ export function deformVertices(mesh, part, boneTransforms) {
       // that lagged and jiggled, because a quarter of it was riding a
       // spring nobody had pointed at it.
       //
-      // So a bone that is simulating contributes here only to the layer
-      // named in its "Controls layer" dropdown. Everywhere else it drops
-      // out and the remaining weights renormalize, leaving that artwork
-      // rigid. Nothing about the simulation changes -- the bone swings
-      // exactly as it did, over exactly the artwork it was assigned.
-      if (current.physics && current.partId !== (part && part.id)) continue;
+      // So for any layer other than the one it was assigned, the bone is
+      // read at its RIGID transform: carried by the drag exactly like
+      // every other bone, simply not swinging.
+      //
+      // Reading it rigidly rather than dropping it is the whole point. An
+      // earlier version skipped the bone instead, which worked until a
+      // vertex's weight sat ENTIRELY on spring bones -- then nothing was
+      // left to blend, and the fallback at the end of this loop put that
+      // vertex back at its untouched import position. A layer whose bone
+      // had been re-pointed at something else lost all 42 of its vertices
+      // that way and stayed pinned where it was imported while the rest of
+      // the character was dragged off. Every bone now contributes
+      // something, so that fallback stays unreachable.
+      const springElsewhere = current.physics && current.partId !== (part && part.id);
+      const head = springElsewhere ? current.rigidHead : current.head;
+      const rotation = springElsewhere ? current.rigidRotation : current.rotation;
 
-      const angle = current.rotation - bind.rotation;
+      const angle = rotation - bind.rotation;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
       const dx = rest.x - bind.head.x;
       const dy = rest.y - bind.head.y;
 
-      x += weight * (current.head.x + dx * cos - dy * sin);
-      y += weight * (current.head.y + dx * sin + dy * cos);
+      x += weight * (head.x + dx * cos - dy * sin);
+      y += weight * (head.y + dx * sin + dy * cos);
       totalWeight += weight;
     }
 

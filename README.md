@@ -1335,11 +1335,21 @@ Only the *artwork* lagged — the torso trailing 1.7 px and the hair 6.5 px,
 rising and falling in an unmistakable spring curve — because a quarter of
 it was riding a spring nobody had pointed at it.
 
-So skinning applies a simulating bone **only to the layer named in its
-"Controls layer" dropdown**. Everywhere else it drops out of the blend and
-the remaining weights renormalize, leaving that artwork rigid. The
-simulation is untouched: the bone swings exactly as it always did, over
-exactly the artwork it was assigned.
+So for any layer other than the one it was assigned, skinning reads that
+bone at its **rigid transform** — carried by the drag exactly like every
+other bone, simply not swinging. The simulation is untouched: the bone
+swings as it always did, over exactly the artwork it was assigned.
+
+Reading it rigidly rather than *dropping* it is the whole point, and the
+first version got this wrong. Dropping the bone worked until a vertex's
+weight sat entirely on spring bones — which is exactly what a layer bound
+100% to one bone looks like after that bone is re-pointed at something
+else. Then nothing was left to blend, and the renormalizing fallback put
+the vertex back at its untouched **import position**. All 42 vertices of a
+layer went that way at once, and it sat pinned where it was first imported
+while the rest of the character was dragged off: panties riding up to the
+chest, a hand left behind in mid-air. Every bone now contributes something,
+so that fallback is unreachable.
 
 This is read live from the bone rather than baked into the mesh, which
 matters more than it sounds. Weights are never rewritten, so hand-painted
