@@ -567,6 +567,88 @@ button {
   font-size: 13px;
 }
 
+/* ---------- Px Pin ---------- */
+
+/* A dedicated full-screen window with its own canvas and its own camera.
+   Nothing here touches the main view or any layer's real transform: the
+   zoom and pan live entirely inside pxpin.js's viewport state. */
+.px-pin {
+  position: fixed;
+  inset: 0;
+  z-index: 55; /* over the app, under toasts */
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.px-pin__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 2px solid rgba(255, 46, 147, 0.35);
+}
+
+.px-pin__title {
+  color: var(--color-accent);
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.px-pin__status {
+  flex: 1;
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.px-pin__canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  touch-action: none; /* the window handles its own pan/pinch */
+  image-rendering: pixelated;
+}
+
+.px-pin__controls {
+  padding: 10px 16px;
+  border-top: 2px solid rgba(255, 46, 147, 0.35);
+}
+
+.px-pin__controls .segmented {
+  margin-bottom: 10px;
+}
+
+/* The active tool fills solid so "am I pinning or erasing?" is always
+   answerable at a glance -- the two are separate tools, never a hidden
+   toggle. */
+.px-pin__controls .segmented__btn[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #000000;
+}
+
+.px-pin__hint {
+  margin: 4px 0 0;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
+  text-align: center;
+}
+
+.px-pin-launch {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
 /* ---------- Toast ---------- */
 
 .toast {

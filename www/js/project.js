@@ -84,6 +84,10 @@ function serializePart(part, copyPixels) {
     visible: part.visible,
     locked: part.locked,
     placement: part.placement,
+    // Px Pin: texel indices in the layer's own pixel grid. A tiny array,
+    // and part of the scene state -- so undo, Reverse and named saves all
+    // carry pins along without any special casing.
+    pins: [...part.pins],
     mesh: serializeMesh(part.mesh),
   };
 }
@@ -107,6 +111,7 @@ function deserializePart(data) {
   part.zIndex = data.zIndex;
   part.visible = data.visible !== false;
   part.locked = Boolean(data.locked);
+  part.pins = new Set(data.pins || []); // absent in older saves: no pins
   part.mesh = deserializeMesh(data.mesh);
   return part;
 }

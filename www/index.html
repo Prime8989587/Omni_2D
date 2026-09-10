@@ -143,6 +143,8 @@
           </label>
         </div>
 
+        <button id="pxpinOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Px Pin — pin single pixels…</button>
+
         <div class="bind-row">
           <label class="slider-field">
             <span>Brush <b id="brushValue">45</b></span>
@@ -309,6 +311,50 @@
           <button id="cancelCanvasSizeBtn" class="btn" type="button">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <div id="pxpinPickerModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pxpinPickerTitle">
+        <h2 id="pxpinPickerTitle" class="modal__title">Px Pin</h2>
+        <p class="modal__text">Pick the layer to pin pixels on (Above) and one to line it up against (Below, shown as reference only).</p>
+        <label class="field-inline">
+          <span>Above</span>
+          <select id="pxpinAboveSelect" class="select-input"></select>
+        </label>
+        <label class="field-inline">
+          <span>Below</span>
+          <select id="pxpinBelowSelect" class="select-input"></select>
+        </label>
+        <div class="modal__actions">
+          <button id="pxpinStartBtn" class="btn btn--flourish" type="button">Open</button>
+          <button id="pxpinCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pxpinModal" class="px-pin" hidden>
+      <header class="px-pin__bar">
+        <span class="px-pin__title">Px Pin — <b id="pxpinAboveName"></b></span>
+        <span id="pxpinStatus" class="px-pin__status"></span>
+        <button id="pxpinDoneBtn" class="btn btn--sm" type="button">Done</button>
+      </header>
+      <canvas id="pxpinCanvas" class="px-pin__canvas"></canvas>
+      <footer class="px-pin__controls">
+        <div class="segmented">
+          <button id="pxpinToolPinBtn" class="segmented__btn" type="button" aria-pressed="true">📌 Pin</button>
+          <button id="pxpinToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">⌫ Eraser Pin</button>
+          <button id="pxpinBrushBtn" class="segmented__btn" type="button" aria-pressed="false">1 px</button>
+        </div>
+        <label class="slider-field slider-field--wide">
+          <span>Above opacity <b id="pxpinAboveOpacityValue">100%</b></span>
+          <input id="pxpinAboveOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
+        </label>
+        <label class="slider-field slider-field--wide">
+          <span>Below opacity <b id="pxpinBelowOpacityValue">100%</b></span>
+          <input id="pxpinBelowOpacity" class="slider" type="range" min="0" max="100" step="5" value="100" />
+        </label>
+        <p class="px-pin__hint">Tap a pixel to pin or erase · one finger drags the view · pinch to zoom</p>
+      </footer>
     </div>
 
     <div id="toast" class="toast" role="status" hidden></div>

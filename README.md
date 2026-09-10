@@ -955,6 +955,53 @@ pixel art staying hard-edged rather than blurring. Because the skeleton is
 a forward-kinematics chain, rotating a parent also swings every child
 bone, and the artwork bound to those children comes along too.
 
+### Px Pin: pinning single pixels
+
+Weight painting works at the mesh's resolution; **Px Pin** works at the
+pixel's. From Bind mode, **Px Pin — pin single pixels…** opens a dedicated
+full-screen window (not the main canvas) for marking individual pixels
+that must never deform.
+
+**Entering.** Pick two layers: **Above** is the one you'll pin; **Below**
+is drawn underneath purely as reference, so you can line pixels up against
+what they sit on. Both appear at their current arrangement.
+
+**Looking.** The window has its own camera: pinch to zoom (far enough to
+fill the screen with a handful of pixels), one finger drags the view, and
+each layer has an opacity slider so you can see through the top one. A
+texel grid fades in once cells are big enough to aim at. **This camera is
+the window's alone** — zooming to 800%, panning around and leaving again
+cannot move, scale or rotate anything; the layers' real transforms are
+never touched, only read. (Verified: every part and bone transform, and
+the main camera, are byte-identical after a zoom-pin-zoom-exit round
+trip.)
+
+**Pinning.** With the **📌 Pin** tool active, tapping a pixel pins exactly
+that pixel; the brush button switches between **1 px** and **2×2 px** per
+tap. Pinned pixels show a pink marker in this window (and only here — the
+main canvas stays clean). **⌫ Eraser Pin** is a separate, explicitly
+selected tool, never a hidden toggle of Pin: with it active, tapping a
+pinned pixel frees it again, at the same 1 px / 2×2 brush size. A short
+touch is a tap; moving past a small slop is a pan, so navigation can never
+pin by accident.
+
+**What a pin does.** Pins are stored per layer, in that layer's own pixel
+grid — not screen or canvas coordinates — so they stay glued to their
+artwork wherever the layer goes. At runtime a pinned pixel is excused from
+the deformation machinery: no skinning, no bone rotation, no spring
+physics. It is NOT nailed to the canvas — legitimate whole-layer movement
+(a Free-Move drag, a rigid or pivot chain carrying the layer) carries pins
+along exactly, measured the same way the auto-weight fix measures
+carriage: against the rest pose, which physics never touches. Unpinned
+pixels on the same layer keep deforming normally. At rest, a pinned layer
+renders byte-identically to an unpinned one — a pin only shows its effect
+when deformation would have moved that pixel.
+
+Erasing a pin returns the pixel to normal deformable behaviour
+immediately. Pins are part of the scene state: they save with the project,
+survive Reverse and recovery, and pinning/erasing are ordinary undoable
+steps.
+
 ### How the deformation works
 
 Standard **linear blend skinning**. For each vertex, every influencing

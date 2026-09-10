@@ -377,6 +377,63 @@ export function deformVerticesSnapped(mesh, part, boneTransforms) {
   return snapToGrid(deformVertices(mesh, part, boneTransforms));
 }
 
+// ---------------------------------------------------------------------------
+// Px Pin: pixels excused from deformation.
+//
+// A pinned pixel does not skin, does not turn with a bone and does not
+// jiggle -- but it is NOT nailed to the canvas. The layer it belongs to is
+// still carried around (Free Move drags the whole character; a rigid or
+// pivot chain can carry the layer wholesale), and a pin rides along with
+// that legitimate whole-layer motion. What it is excused from is the
+// deformation machinery only.
+//
+// "Where the layer is being carried" is measured the same way the
+// auto-weight fix measures it: deform the mesh at the REST pose (each
+// bone's rigid transform -- carried by the drag, never swinging) and take
+// the centroid's offset from the part's own centre. For a whole-character
+// drag that is exactly the drag delta; physics never touches it, because
+// the rest pose ignores the simulation entirely; and re-posing a bone in
+// Rig mode carries the pins with the layer's average motion instead of
+// stranding them in space where the limb used to be. Rounded to whole
+// cells, keeping the grid invariant.
+export function pinCarriageOffset(part, boneTransforms) {
+  if (!part.mesh || !part.mesh.isBound || !boneTransforms) return { x: 0, y: 0 };
+
+  const rest = {};
+  for (const [id, t] of Object.entries(boneTransforms)) {
+    const head = t.rigidHead || t.head;
+    const rotation = t.rigidRotation ?? t.rotation;
+    rest[id] = { head, rotation, physics: false, partId: t.partId, rigidHead: head, rigidRotation: rotation };
+  }
+  const points = deformVertices(part.mesh, part, rest);
+  if (points.length === 0) return { x: 0, y: 0 };
+
+  const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+  const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+  return { x: Math.round(cx - part.centerX), y: Math.round(cy - part.centerY) };
+}
+
+// Every pinned texel's block for this frame: its top-left corner in scene
+// pixels (part origin + texel offset + carriage, all integers) and its
+// source coordinates. One block is part.scale x part.scale scene cells --
+// the same cells the texel would cover undeformed.
+export function pinnedTexelBlocks(part, boneTransforms) {
+  if (!part.pins || part.pins.size === 0) return [];
+  const offset = pinCarriageOffset(part, boneTransforms);
+  const width = part.naturalWidth;
+  const blocks = [];
+  for (const index of part.pins) {
+    const u = index % width;
+    const v = Math.floor(index / width);
+    blocks.push({
+      u, v,
+      x: part.x + u * part.scale + offset.x,
+      y: part.y + v * part.scale + offset.y,
+    });
+  }
+  return blocks;
+}
+
 // An unbound part drawn as a plain quad: its four corners in scene space,
 // snapped, with the UVs and triangle order the rasterizer wants. At rest
 // the corners are already integers, so snapping changes nothing.

@@ -21,6 +21,7 @@ import { serializeProject, applyProject } from './project.js';
 import * as storage from './storage.js';
 import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
+import { initPxPin } from './pxpin.js';
 
 const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
@@ -1658,6 +1659,7 @@ export function initUI() {
   sceneStore.subscribe(renderChrome);
   history.subscribe(renderHistoryChrome);
 
+  initPxPin();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();
   loadRestorePointFromStorage();

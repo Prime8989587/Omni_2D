@@ -66,6 +66,19 @@ export class Part {
     // Built and owned by mesh.js; the store, renderer, and gesture layers
     // only ever read it.
     this.mesh = null;
+
+    // Px Pin: source texels exempted from deformation. Each entry is a
+    // texel index (v * naturalWidth + u) in THIS layer's own pixel grid --
+    // local to the artwork, so a pin stays glued to its pixel no matter
+    // where the layer goes. A pinned pixel is still carried by legitimate
+    // whole-layer movement; it is only excused from skinning, bone
+    // rotation and spring physics (see mesh.js, pinCarriageOffset).
+    this.pins = new Set();
+  }
+
+  texelIndex(u, v) {
+    if (u < 0 || v < 0 || u >= this.naturalWidth || v >= this.naturalHeight) return -1;
+    return v * this.naturalWidth + u;
   }
 
   get naturalWidth() {
@@ -312,6 +325,24 @@ class PartsStore {
     if (!part || part.visible === visible) return;
     part.visible = visible;
     this._emit('structure');
+  }
+
+  // Pins or un-pins a batch of texel indices on one layer. Returns how
+  // many actually changed, so a tap on already-pinned pixels (or an erase
+  // on clean ones) can skip recording an empty undo step.
+  setPins(id, indices, pinned) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return 0;
+    let changed = 0;
+    for (const index of indices) {
+      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
+      if (pinned ? !part.pins.has(index) : part.pins.has(index)) {
+        if (pinned) part.pins.add(index); else part.pins.delete(index);
+        changed++;
+      }
+    }
+    if (changed) this._emit('transform');
+    return changed;
   }
 
   setLocked(id, locked) {

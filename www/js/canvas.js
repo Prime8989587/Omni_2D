@@ -15,7 +15,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
-import { deformVerticesSnapped, partQuad } from './mesh.js';
+import { deformVerticesSnapped, partQuad, pinnedTexelBlocks } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { view, MIN_VISIBLE_CELL_PX } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
@@ -119,6 +119,57 @@ function partGeometry(part, boneTransforms) {
   return partQuad(part);
 }
 
+// Paints one part's pinned texels at their undeformed positions. Runs
+// AFTER that part's own triangles (so a pin wins over the deformed mesh
+// it was lifted out of) and inside the part's slot in the z-order (so
+// higher layers still overwrite it normally). Source-over, exactly like
+// the rasterizer, and each block is the same scale x scale cells the
+// texel would cover flat.
+function paintPinBlocks(buffer, part, blocks) {
+  for (const block of blocks) {
+    const source = (block.v * part.naturalWidth + block.u) * 4;
+    const alpha = part.pixels[source + 3];
+    if (alpha === 0) continue;
+
+    for (let dy = 0; dy < part.scale; dy++) {
+      const y = block.y + dy;
+      if (y < 0 || y >= sceneHeight) continue;
+      for (let dx = 0; dx < part.scale; dx++) {
+        const x = block.x + dx;
+        if (x < 0 || x >= sceneWidth) continue;
+        const t = (y * sceneWidth + x) * 4;
+        if (alpha === 255) {
+          buffer[t] = part.pixels[source];
+          buffer[t + 1] = part.pixels[source + 1];
+          buffer[t + 2] = part.pixels[source + 2];
+          buffer[t + 3] = 255;
+          continue;
+        }
+        const srcA = alpha / 255;
+        const dstA = buffer[t + 3] / 255;
+        const outA = srcA + dstA * (1 - srcA);
+        if (outA === 0) continue;
+        for (let c = 0; c < 3; c++) {
+          buffer[t + c] = (part.pixels[source + c] * srcA + buffer[t + c] * dstA * (1 - srcA)) / outA;
+        }
+        buffer[t + 3] = outA * 255;
+      }
+    }
+  }
+}
+
+function pinBounds(part, blocks) {
+  if (blocks.length === 0) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const block of blocks) {
+    if (block.x < x0) x0 = block.x;
+    if (block.y < y0) y0 = block.y;
+    if (block.x + part.scale > x1) x1 = block.x + part.scale;
+    if (block.y + part.scale > y1) y1 = block.y + part.scale;
+  }
+  return { x0: x0 - 1, y0: y0 - 1, x1: x1 + 1, y1: y1 + 1 };
+}
+
 // Rasterizes every part into the scene bitmap, bottom-first so a higher
 // part overwrites a lower one -- z-order IS the collision rule between
 // parts. Only the region that changed is cleared and re-uploaded.
@@ -131,7 +182,11 @@ function renderScene(boneTransforms) {
   // `dirty` and unioned into the region wiped below.
   const drawList = partsStore.partsBottomFirst.filter((part) => part.visible).map((part) => {
     const geometry = partGeometry(part, boneTransforms);
-    return { part, geometry, bounds: boundsOf(geometry.positions) };
+    // Px Pin: pinned texels are lifted out of the mesh pass and drawn as
+    // fixed blocks; their footprint joins the dirty region like any other.
+    const pins = pinnedTexelBlocks(part, boneTransforms);
+    const bounds = unionBounds(boundsOf(geometry.positions), pinBounds(part, pins));
+    return { part, geometry, pins, bounds };
   });
 
   let touched = dirty;
@@ -140,8 +195,9 @@ function renderScene(boneTransforms) {
 
   clearRegion(buffer, sceneWidth, sceneHeight, touched.x0, touched.y0, touched.x1, touched.y1);
 
-  for (const { part, geometry } of drawList) {
+  for (const { part, geometry, pins } of drawList) {
     const { positions, uvs, triangles } = geometry;
+    const skip = pins.length > 0 ? part.pins : null;
     for (let i = 0; i < triangles.length; i += 3) {
       const a = triangles[i];
       const b = triangles[i + 1];
@@ -150,9 +206,10 @@ function renderScene(boneTransforms) {
         buffer, sceneWidth, sceneHeight,
         part.pixels, part.naturalWidth, part.naturalHeight,
         positions[a], positions[b], positions[c],
-        uvs[a], uvs[b], uvs[c]
+        uvs[a], uvs[b], uvs[c], skip
       );
     }
+    if (pins.length > 0) paintPinBlocks(buffer, part, pins);
   }
 
   dirty = null;
