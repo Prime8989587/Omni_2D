@@ -91,7 +91,13 @@
             <input id="rigDebugSlider" class="slider" type="range" min="-180" max="180" step="1" />
           </label>
 
-          <button id="physicsToggle" class="segmented__btn physics-toggle" type="button" aria-pressed="false">Enable Physics</button>
+          <div class="field-label joint-label">Follows parent</div>
+          <div class="segmented joint-picker" role="group" aria-label="How this bone follows its parent">
+            <button id="jointRigidBtn" class="segmented__btn" type="button" aria-pressed="true">Rigid</button>
+            <button id="jointPhysicsBtn" class="segmented__btn" type="button" aria-pressed="false">Physics</button>
+            <button id="jointPivotBtn" class="segmented__btn" type="button" aria-pressed="false">Pivot</button>
+          </div>
+          <p id="jointHint" class="joint-hint"></p>
 
           <div id="physicsParams" hidden>
             <label class="slider-field slider-field--wide">

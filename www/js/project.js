@@ -15,7 +15,7 @@
 // deep-copied, so a snapshot can never be mutated from underneath.
 
 import { Part, partsStore, reservePartId } from './parts.js';
-import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA } from './bones.js';
+import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
 import { MeshVertex, PartMesh } from './mesh.js';
 import { sceneStore } from './scene.js';
 
@@ -119,6 +119,9 @@ function serializeBone(bone) {
     localHead: { x: bone.localHead.x, y: bone.localHead.y },
     rotation: bone.rotation,
     length: bone.length,
+    jointType: bone.jointType,
+    // Kept alongside jointType so a project saved now still opens in a
+    // build from before pivot existed, reading as rigid or physics.
     physicsEnabled: bone.physicsEnabled,
     stiffness: bone.stiffness,
     damping: bone.damping,
@@ -141,7 +144,11 @@ function deserializeBone(data) {
     length: data.length,
   });
   bone.id = data.id;
-  bone.physicsEnabled = Boolean(data.physicsEnabled);
+  // Projects saved before pivot existed carry only the physics flag; the
+  // two choices it could express map onto the first two joint types.
+  bone.jointType = JOINT_TYPES.has(data.jointType)
+    ? data.jointType
+    : (data.physicsEnabled ? JointType.PHYSICS : JointType.RIGID);
   bone.stiffness = data.stiffness;
   bone.damping = data.damping;
   bone.gravityInfluence = data.gravityInfluence;

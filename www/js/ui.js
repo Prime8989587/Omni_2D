@@ -5,7 +5,7 @@
 
 import { appState, AppState } from './state.js';
 import { partsStore } from './parts.js';
-import { bonesStore, PHYSICS_RANGES } from './bones.js';
+import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
 import { sceneStore, SCENE_PRESETS } from './scene.js';
 import { view } from './view.js';
@@ -156,7 +156,10 @@ function cacheElements() {
 
   els.rigDebugSlider = document.getElementById('rigDebugSlider');
   els.rigDebugValue = document.getElementById('rigDebugValue');
-  els.physicsToggle = document.getElementById('physicsToggle');
+  els.jointRigidBtn = document.getElementById('jointRigidBtn');
+  els.jointPhysicsBtn = document.getElementById('jointPhysicsBtn');
+  els.jointPivotBtn = document.getElementById('jointPivotBtn');
+  els.jointHint = document.getElementById('jointHint');
   els.physicsParams = document.getElementById('physicsParams');
   els.stiffnessSlider = document.getElementById('stiffnessSlider');
   els.stiffnessValue = document.getElementById('stiffnessValue');
@@ -540,17 +543,28 @@ function renderCanvasPresets() {
 
 // ---- Bone physics ------------------------------------------------------
 
-function handlePhysicsToggle() {
+const JOINT_LABELS = {
+  [JointType.RIGID]: 'Rigid',
+  [JointType.PHYSICS]: 'Physics',
+  [JointType.PIVOT]: 'Pivot',
+};
+
+const JOINT_HINTS = {
+  [JointType.RIGID]: 'Turns with its parent, instantly.',
+  [JointType.PHYSICS]: 'Trails behind its parent and settles, like hair or cloth.',
+  [JointType.PIVOT]: 'Carried by its parent, but never turned by it — its own angle is yours to set.',
+};
+
+function handleJointTypeChange(type) {
   const bone = bonesStore.selected;
-  if (!bone) return;
-  const turningOn = !bone.physicsEnabled;
-  history.run(turningOn ? 'Enable physics' : 'Disable physics',
-    () => bonesStore.setPhysicsEnabled(bone.id, turningOn));
+  if (!bone || bone.jointType === type) return;
+  history.run(`Set ${JOINT_LABELS[type].toLowerCase()} joint`,
+    () => bonesStore.setJointType(bone.id, type));
 
   // A spring bone jiggles the layer it was given and nothing else, so one
   // with no layer has nothing to jiggle. Say so, rather than letting the
   // user switch physics on and watch nothing happen.
-  if (turningOn && !bone.attachedPartId) {
+  if (type === JointType.PHYSICS && !bone.attachedPartId) {
     showToast(`"${bone.name}" has physics but no layer — set "Controls layer" ` +
       'so it has artwork to move.');
   }
@@ -583,9 +597,18 @@ function applySliderRange(slider, range) {
 }
 
 function renderPhysicsControls(bone) {
-  els.physicsToggle.classList.toggle('is-active', bone.physicsEnabled);
-  els.physicsToggle.setAttribute('aria-pressed', String(bone.physicsEnabled));
-  els.physicsToggle.textContent = bone.physicsEnabled ? 'Physics On' : 'Enable Physics';
+  // Three behaviours, so three buttons: an on/off toggle cannot say which
+  // of the two "not physics" answers a bone is giving.
+  for (const [type, button] of [
+    [JointType.RIGID, els.jointRigidBtn],
+    [JointType.PHYSICS, els.jointPhysicsBtn],
+    [JointType.PIVOT, els.jointPivotBtn],
+  ]) {
+    const active = bone.jointType === type;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  els.jointHint.textContent = JOINT_HINTS[bone.jointType] || '';
   els.physicsParams.hidden = !bone.physicsEnabled;
 
   if (!bone.physicsEnabled) return;
@@ -1521,7 +1544,9 @@ function bindEvents() {
   els.rotateCwBtn.addEventListener('click', () => rotateSelectedBone(NUDGE_STEP_RADIANS));
 
   els.rigDebugSlider.addEventListener('input', handleRigDebugRotate);
-  els.physicsToggle.addEventListener('click', handlePhysicsToggle);
+  els.jointRigidBtn.addEventListener('click', () => handleJointTypeChange(JointType.RIGID));
+  els.jointPhysicsBtn.addEventListener('click', () => handleJointTypeChange(JointType.PHYSICS));
+  els.jointPivotBtn.addEventListener('click', () => handleJointTypeChange(JointType.PIVOT));
   els.stiffnessSlider.addEventListener('input', () =>
     handlePhysicsParam('stiffness', els.stiffnessSlider, els.stiffnessValue));
   els.dampingSlider.addEventListener('input', () =>

@@ -419,18 +419,37 @@ button {
   margin-bottom: 0;
 }
 
-.physics-toggle {
-  width: 100%;
-  margin: 8px 0;
+/* Rigid / Physics / Pivot. Three mutually exclusive answers, so a row of
+   three rather than a toggle: an on/off switch cannot say WHICH of the two
+   "not physics" behaviours a bone has. */
+.joint-label {
+  margin-top: 10px;
+  margin-bottom: 6px;
 }
 
-/* Qualified with the element name so this beats .segmented__btn.is-active,
-   which has equal specificity but is defined further down and would
-   otherwise repaint the label pink on a pink fill -- invisible. */
-button.physics-toggle.is-active {
+.joint-picker {
+  margin-bottom: 6px;
+}
+
+.joint-picker .segmented__btn {
+  font-size: 14px;
+}
+
+/* Scoped to the picker, and outweighing .segmented__btn.is-active further
+   down the file, which would otherwise repaint the label pink on a pink
+   fill -- invisible. */
+.joint-picker .segmented__btn[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #000000;
+}
+
+.joint-hint {
+  margin: 0 0 10px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
 }
 
 .bone-readout {

@@ -88,19 +88,49 @@ const MAX_SUBSTEP = 1 / 120;
 const SETTLE_ANGLE = 0.0005;
 const SETTLE_VELOCITY = 0.004; // rad/s -- also stops it sleeping mid-coast
 
+// HOW A BONE FOLLOWS ITS PARENT
+//
+// Three behaviours, one choice per bone, and the difference between them is
+// entirely about ROTATION -- position works the same way for all three, so
+// every bone is carried by its parent identically.
+//
+//   RIGID   the parent's rotation passes straight through: the bone turns
+//           with it, instantly. A head on a neck.
+//   PHYSICS the same target as rigid, reached late: a spring lets the bone
+//           trail behind and settle. Hair, cloth, anything loose.
+//   PIVOT   the parent's rotation does not pass through AT ALL. The bone is
+//           carried wherever the parent goes, but keeps whatever angle it
+//           was given until something turns it on purpose.
+//
+// PIVOT is deliberately nothing more than that. It has no rate, no speed,
+// nothing derived from how far or how fast the parent moved -- "position
+// follows, rotation does not" is the whole rule, and it is as
+// content-agnostic as the other two.
+export const JointType = Object.freeze({
+  RIGID: 'rigid',
+  PHYSICS: 'physics',
+  PIVOT: 'pivot',
+});
+
+export const JOINT_TYPES = new Set(Object.values(JointType));
+
 export class Bone {
   constructor({ name, parentId = null, localHead, rotation = 0, length = 0 }) {
     this.id = `bone_${nextId++}`;
     this.name = name;
     this.parentId = parentId; // null for a root bone
     this.localHead = { x: localHead.x, y: localHead.y };
-    this.rotation = rotation; // radians, relative to the parent's world rotation
+    // Radians. Relative to the parent's world rotation -- EXCEPT on a pivot
+    // bone, where no parent rotation is inherited, so the same number is
+    // read as a world angle. setJointType() rewrites it across that
+    // boundary so switching type never moves the bone.
+    this.rotation = rotation;
     this.length = length;
 
-    // Optional spring physics. Off by default -- a head or torso should
-    // move rigidly with its parent; only loose things (hair, chest, cloth)
-    // want to lag and jiggle.
-    this.physicsEnabled = false;
+    // How this bone follows its parent. Rigid by default: a head or torso
+    // should move with its parent, and both of the other two are things
+    // you opt into deliberately.
+    this.jointType = JointType.RIGID;
     this.stiffness = DEFAULT_STIFFNESS;
     this.damping = DEFAULT_DAMPING;
     this.gravityInfluence = DEFAULT_GRAVITY;
@@ -134,6 +164,22 @@ export class Bone {
 
   get isRoot() {
     return this.parentId === null;
+  }
+
+  // Views onto jointType rather than fields of their own. Keeping one
+  // stored value means a bone can never be caught claiming to be two
+  // things at once, and the simulation, the serializer and the skinning
+  // snapshot all keep asking the question they were already asking.
+  get isPivot() {
+    return this.jointType === JointType.PIVOT;
+  }
+
+  get physicsEnabled() {
+    return this.jointType === JointType.PHYSICS;
+  }
+
+  set physicsEnabled(enabled) {
+    this.jointType = enabled ? JointType.PHYSICS : JointType.RIGID;
   }
 }
 
@@ -212,7 +258,15 @@ class BonesStore {
   // Where forward kinematics says this bone should be: the parent's
   // current world rotation plus this bone's own local rotation. Physics
   // never changes the target -- only how quickly the bone reaches it.
+  //
+  // A PIVOT bone is the one exception, and this line is the whole of it:
+  // the parent's rotation is simply not added, so the bone holds the angle
+  // it was given no matter what its parent does. Its POSITION is untouched
+  // by this -- worldHead() below still places it off the parent exactly as
+  // it places a rigid bone -- which is what makes pivot "carried along,
+  // but not turned".
   targetWorldRotation(bone) {
+    if (bone.isPivot) return bone.rotation;
     const parent = this.parentOf(bone);
     return parent ? this.worldRotation(parent) + bone.rotation : bone.rotation;
   }
@@ -314,6 +368,7 @@ class BonesStore {
   // hierarchy ignoring the simulation entirely.
 
   restWorldRotation(bone) {
+    if (bone.isPivot) return bone.rotation; // no parent rotation inherited
     const parent = this.parentOf(bone);
     return parent ? this.restWorldRotation(parent) + bone.rotation : bone.rotation;
   }
@@ -404,8 +459,11 @@ class BonesStore {
     bone.length = Math.hypot(dx, dy);
     // Relative to the parent's REST rotation. Against a simulated parent
     // this would store "rest offset plus whatever the parent's swing
-    // happened to be", which never comes back to the right place.
-    bone.rotation = Math.atan2(dy, dx) - (parent ? this.restWorldRotation(parent) : 0);
+    // happened to be", which never comes back to the right place. A pivot
+    // bone inherits no parent rotation, so its stored angle IS the world
+    // angle and nothing is subtracted.
+    const parentRotation = bone.isPivot || !parent ? 0 : this.restWorldRotation(parent);
+    bone.rotation = Math.atan2(dy, dx) - parentRotation;
     this._emit('transform');
   }
 
@@ -475,18 +533,38 @@ class BonesStore {
     this._emit('structure');
   }
 
-  // ---- Spring physics ----------------------------------------------------
+  // ---- How a bone follows its parent -------------------------------------
 
-  setPhysicsEnabled(id, enabled) {
+  // Rigid, physics or pivot. Changing it must never MOVE the bone: the
+  // choice is about what happens from here on, not a hidden edit to the
+  // pose you already built.
+  //
+  // Two things have to be squared away for that to hold. A pivot bone
+  // stores a world angle while the other two store an angle relative to
+  // the parent, so crossing that boundary rewrites the number to keep the
+  // same world rotation it had a moment ago -- otherwise a bone under a
+  // parent turned 90 degrees would snap 90 degrees the instant you named
+  // it a pivot. And the spring is seeded at its target on the way in and
+  // cleared on the way out, so physics starts from where the bone already
+  // is rather than yanking it somewhere.
+  setJointType(id, type) {
     const bone = this.byId(id);
-    if (!bone) return;
+    if (!bone || !JOINT_TYPES.has(type) || bone.jointType === type) return;
 
-    bone.physicsEnabled = enabled;
-    // Seed the simulation at the target so switching physics on never
-    // makes the bone jump; switching it off returns it to rigid FK.
-    bone.simWorldRotation = enabled ? this.targetWorldRotation(bone) : null;
+    const worldBefore = this.restWorldRotation(bone);
+    bone.jointType = type;
+    const parent = this.parentOf(bone);
+    bone.rotation = bone.isPivot || !parent
+      ? worldBefore
+      : worldBefore - this.restWorldRotation(parent);
+
+    bone.simWorldRotation = bone.physicsEnabled ? this.targetWorldRotation(bone) : null;
     bone.angularVelocity = 0;
     this._emit('structure');
+  }
+
+  setPhysicsEnabled(id, enabled) {
+    this.setJointType(id, enabled ? JointType.PHYSICS : JointType.RIGID);
   }
 
   setPhysicsParam(id, key, value) {

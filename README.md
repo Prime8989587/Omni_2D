@@ -1011,18 +1011,66 @@ smaller or fewer Parts, not a coarser mesh.
 
 ---
 
+## How a bone follows its parent
+
+Select a bone in **Rig mode** and the editor asks one question under
+**Follows parent**: is this bone **Rigid**, **Physics** or **Pivot**? Three
+mutually exclusive answers, so three buttons rather than a switch — an
+on/off toggle cannot say *which* of the two "not physics" behaviours a bone
+has.
+
+| | What the parent's motion does to it |
+|---|---|
+| **Rigid** *(default)* | Carried by the parent, and turned by it, instantly. A head on a neck. |
+| **Physics** | Same as rigid, but late: a spring lets it trail behind and settle. Hair, cloth, a chest. |
+| **Pivot** | Carried by the parent, **never turned by it**. It keeps whatever angle it was given. |
+
+**Position works identically for all three.** A bone is always placed off
+its parent by the same stored rest offset, so all three are carried around
+by the parent with no drift whatsoever. The entire difference between them
+is what happens to their *rotation*.
+
+**Switching type never moves the bone.** A pivot bone stores a world angle
+while the other two store an angle relative to the parent, so crossing that
+boundary rewrites the stored number to keep the same world rotation it
+already had. Without that, a bone hanging under a parent turned 90° would
+snap 90° the instant you named it a pivot. Switching to Physics likewise
+seeds the spring where the bone already is.
+
+### Pivot
+
+A pivot bone goes where its parent goes and points where *you* point it.
+Rotate the parent by any amount and the pivot child's own rotation value
+does not change by a thousandth of a degree — but drag the character across
+the canvas and it travels exactly as far as everything else.
+
+Its own angle is yours to set, with the same rotate buttons and slider as
+any other bone, and it stays where you put it until you move it again.
+
+**Pivot means that and nothing else.** There is no spin rate, no speed, no
+rotation derived from how far or how fast the parent moved. It is a general
+joint type for anything that should be carried without being turned, not a
+wheel, and it carries no content-specific behaviour of any kind — exactly
+as generic as Rigid and Physics.
+
+A pivot bone's **own children follow their own rules** relative to it. A
+rigid child of a pivot turns with the pivot (and only with the pivot); a
+physics child of a pivot springs off the pivot's angle. The chain works
+normally — the pivot simply doesn't pass its parent's rotation down into
+it. Setting a *root* bone to Pivot is allowed but changes nothing: a root
+has no parent whose rotation could reach it.
+
 ## Spring physics on a bone
 
-By default every bone moves rigidly: when its parent turns, it turns with
-it instantly. Spring physics makes a bone *lag* behind that motion,
+Choosing **Physics** makes a bone *lag* behind its parent's motion,
 overshoot slightly, and wobble to a stop — the difference between a head
 (which should be rigid) and a ponytail (which shouldn't).
 
 ### Turning it on
 
-In **Rig mode**, select a bone and tap **Enable Physics**. It's off by
-default on every bone, which is the right default — most of a character
-should not jiggle.
+In **Rig mode**, select a bone and tap **Physics** under *Follows parent*.
+Every bone starts **Rigid**, which is the right default — most of a
+character should not jiggle.
 
 Switching it on never makes the bone jump: the simulation starts exactly
 where the bone already is.
@@ -1070,7 +1118,8 @@ Build a rig where the contrast is visible side by side:
 2. Place a **child** off it, then re-select the parent and place a
    **second child** so the two are siblings, angled apart so you can tell
    them apart.
-3. Select **one** child and tap **Enable Physics**. Leave the other alone.
+3. Select **one** child and tap **Physics** under *Follows parent*. Leave
+   the other alone.
 4. Select the **parent** and swing the **Debug: rotate** slider back and
    forth.
 
