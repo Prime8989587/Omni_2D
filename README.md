@@ -838,10 +838,24 @@ choose which bone you're inspecting or painting.
 2. Tap **Auto-weight Part**.
 
 That builds a grid mesh over the Part's image, splits it into triangles,
-and gives every vertex weights to its nearest bones — inverse squared
-distance to each bone's line segment, capped at the 3 closest bones and
-normalized to sum to 1. Capping matters: letting every bone tug on every
-vertex produces mush.
+and gives every vertex weights by inverse squared distance to each bone's
+line segment, capped at the 3 closest bones and normalized to sum to 1.
+Capping matters: letting every bone tug on every vertex produces mush.
+
+**Which bones are candidates is your choice, not the geometry's.** If any
+bones name this layer in their **Controls layer** dropdown (Rig mode), then
+those are the *only* bones that can weight it, and distance decides nothing
+but how the weight is shared between them. Assign one bone and that layer
+becomes wholly its own — every vertex at weight 1, immune to anything else
+in the rig. Only when no bone claims the layer does auto-weighting fall
+back to considering every bone by distance.
+
+That fallback is why the old behaviour looked like a hit-test bug. Layers
+overlap constantly — a hand resting on a chest, hair over a face — and pure
+proximity would hand a slice of the hand to the chest bone, so rotating the
+chest dragged the hand with it. Naming the bone fixes it outright. The Bind
+screen's hint line tells you which way you are about to go: it names the
+assigned bones, or says it will use whichever are nearest.
 
 The Parts list marks bound pieces as **"— bound"**, and the status line
 shows the vertex count.
@@ -1292,11 +1306,17 @@ The assignment is **editable at any time**: select the bone later and pick
 a different layer, or clear it back to unassigned. The Skeleton list shows
 each bone's assignment inline (`Bone_2  → torso`).
 
-What the assignment does today: it drives the layer-delete warning above,
-and it labels the skeleton so a 30-bone rig stays readable. It deliberately
-does **not** change how auto-weighting works — weighting still considers
-every bone by distance, exactly as Part 4 described — because silently
-re-scoping the weighting would change how existing rigs deform.
+What the assignment does: it **restricts auto-weighting to the bones you
+named**. Bind a layer that one or more bones claim, and only those bones get
+weight over it — distance then only decides how the weight is split among
+them. It also drives the layer-delete warning above, and labels the skeleton
+so a 30-bone rig stays readable (`Bone_2  → torso`).
+
+A layer no bone claims is unchanged from Part 4: every bone competes for it
+by distance. So existing rigs that never touched this dropdown deform
+exactly as they did before. Nothing here alters the deformation maths — the
+same linear blend skinning, the same rest-pose capture, the same whole-pixel
+snapping. It only changes *which* bones are allowed into the sum.
 
 ### Hiding bones
 

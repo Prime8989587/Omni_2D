@@ -124,7 +124,24 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
 // Capping the influence count keeps deformation crisp -- letting every
 // bone touch every vertex produces mush.
 export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_MAX_INFLUENCES) {
-  const bones = bonesStore.bones;
+  // WHICH BONES ARE ALLOWED TO DRIVE THIS LAYER
+  //
+  // If the user has said which bones control this layer -- the "Controls
+  // layer" choice in the bone editor -- then those are the only
+  // candidates, and distance decides nothing but how the weight is shared
+  // between them.
+  //
+  // Distance alone is not good enough once parts overlap, which on a
+  // character they constantly do. A hand resting against the chest has a
+  // chest bone closer to some of its pixels than its own hand bone, so
+  // proximity would hand a slice of the hand over to the chest and the
+  // hand would then swing whenever the chest did. That is not a weighting
+  // subtlety the user can tune around; it is the wrong bone.
+  //
+  // With no explicit assignment there is nothing to go on but distance,
+  // so the old behaviour stands and every bone is a candidate.
+  const assigned = part && part.id ? bonesStore.bonesAttachedTo(part.id) : [];
+  const bones = assigned.length > 0 ? assigned : bonesStore.bones;
   mesh.bindPose = {};
   if (bones.length === 0) {
     for (const vertex of mesh.vertices) vertex.weights = {};

@@ -706,7 +706,14 @@ function renderBindChrome() {
   } else if (bonesStore.isEmpty) {
     els.bindHint.textContent = 'No bones yet — build a skeleton in Rig mode first.';
   } else if (!bound) {
-    els.bindHint.textContent = `Tap Auto-weight Part to bind "${part.name}" to the skeleton.`;
+    // Say which bones will actually take this layer, because that is now
+    // what the result depends on -- and if the answer is "whichever are
+    // nearest", say that too rather than letting it be a surprise.
+    const assigned = bonesStore.bonesAttachedTo(part.id);
+    els.bindHint.textContent = assigned.length
+      ? `Auto-weight Part binds "${part.name}" to ${assigned.map((b) => `"${b.name}"`).join(', ')}.`
+      : `Auto-weight Part binds "${part.name}" to whichever bones are nearest. ` +
+        'To pin it to particular ones, set "Controls layer" on them in Rig mode.';
   } else if (!bone) {
     els.bindHint.textContent = 'Pick a bone (Bones tab) to see its influence and paint weights.';
   } else {
