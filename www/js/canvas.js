@@ -17,7 +17,7 @@ import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
 import { deformVerticesSnapped, partQuad } from './mesh.js';
 import { sceneStore } from './scene.js';
-import { view, MIN_VISIBLE_CELL_PX } from './view.js';
+import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
 
 const ACCENT = '#FF2E93';
@@ -30,12 +30,13 @@ const CHILD_STROKE = '#FF8FC4';
 const ROOT_FILL = 'rgba(255, 46, 147, 0.35)';
 const CHILD_FILL = 'rgba(255, 143, 196, 0.28)';
 
-// The grid: alternating black and dark grey cells, one per scene pixel.
+// The grid: alternating black and dark grey cells, one per scene pixel,
+// at every zoom level -- there is no threshold below which this becomes a
+// flat fill. Zoomed out far enough that a cell is under a device pixel,
+// checkerPattern() floors it to one device pixel wide rather than fading
+// it out, so the pattern is dense there instead of hidden.
 const CHECKER_DARK = '#000000';
 const CHECKER_LIGHT = '#262626';
-// When cells are too small to resolve, the grid is a flat tone instead of
-// a moiré pattern.
-const GRID_FLAT = '#161616';
 const GRID_EDGE = 'rgba(255, 255, 255, 0.28)';
 
 // Rig mode veils the character art so bright pink bones stay readable on
@@ -189,8 +190,23 @@ function checkerPattern() {
   const pattern = ctx.createPattern(checkerTile, 'repeat');
   // The tile is in device pixels; the context draws in CSS pixels. Scaling
   // by 1/dpr lands each tile pixel on exactly one device pixel.
-  const cell = Math.max(1, Math.round(zoom * dpr));
-  pattern.setTransform(new DOMMatrix([1 / dpr, 0, 0, 1 / dpr, view.panX, view.panY]).scale(zoom * dpr / cell));
+  const rawCell = zoom * dpr;
+  const cell = Math.max(1, Math.round(rawCell));
+  // The extra zoom*dpr/cell factor nudges the tile back toward the TRUE
+  // fractional size Math.round() discarded, so cell boundaries don't
+  // creep out of step with the artwork's over a large grid. That only
+  // makes sense while cell is tracking rawCell -- once rawCell drops
+  // below 1 and cell is pinned at its Math.max(1, ...) floor instead,
+  // the same factor pushes the tile to a size SMALLER than one device
+  // pixel, which the browser then has to resample. What that produced
+  // was not a smaller checkerboard: sampling a sub-pixel repeat against
+  // a whole-pixel grid aliases into a moire beat with its own unrelated
+  // period (measured: a 0.6-device-px checker came out with a period of
+  // 3 device px, not 1). Below one device pixel there is nothing finer
+  // to preserve, so the correction is simply skipped and the checker
+  // stays at exactly one crisp device pixel -- dense, but real.
+  const correction = rawCell >= 1 ? rawCell / cell : 1;
+  pattern.setTransform(new DOMMatrix([1 / dpr, 0, 0, 1 / dpr, view.panX, view.panY]).scale(correction));
   return pattern;
 }
 
@@ -199,7 +215,7 @@ function drawGrid() {
   const width = sceneStore.width * view.zoom;
   const height = sceneStore.height * view.zoom;
 
-  ctx.fillStyle = view.zoom >= MIN_VISIBLE_CELL_PX ? checkerPattern() : GRID_FLAT;
+  ctx.fillStyle = checkerPattern();
   ctx.fillRect(origin.x, origin.y, width, height);
 
   ctx.strokeStyle = GRID_EDGE;

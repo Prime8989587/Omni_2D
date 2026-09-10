@@ -331,6 +331,9 @@ which already set both sides at once.
 The grid is a **checkerboard of black and dark-grey cells**, one cell per
 pixel, drawn *behind* the artwork — transparent pixels show the
 checkerboard through them, the way a paint program shows transparency.
+**It renders at every zoom level, all the way from the most zoomed-out fit
+to the most zoomed-in**, never a flat panel — there is no distance at
+which it switches off.
 
 Pixel cells are usually far smaller than a fingertip, so the grid is
 zoomable:
@@ -339,13 +342,49 @@ zoomable:
   fingers, from the whole canvas down to a handful of cells. Pinch works
   in every mode (Home, Rig, Bind).
 - **One finger on empty grid, drag** — pan.
-- **⤢ (Fit)** in the top bar — fit the whole canvas on screen again.
+- **⤢ (Fit)** in the top bar — zoom out (or in) to show the whole canvas
+  and **re-centre it**, however far you had panned or zoomed beforehand.
 
 When you let go after a pinch, the zoom snaps to a whole number of screen
 pixels per cell, so every cell is exactly the same size and the
-checkerboard stays even. Below 3 screen pixels per cell the checkerboard
-would be a moiré blur, so at that distance it is drawn as a flat dark
-panel; pinch in and the cells reappear.
+checkerboard stays even — and one cell is always exactly **one real pixel
+of the canvas**, at whatever size that pixel happens to be on screen right
+now. Zooming in has a natural ceiling: past a certain point a cell is
+already as large as it is useful to make one pixel, and since there is
+nothing smaller than a pixel in this grid to zoom into, the camera simply
+stops there. Zooming out the other way, a cell can end up smaller than a
+single screen pixel — the screen has no way to draw anything finer than
+that — so past that point every cell is held at one screen pixel wide
+instead of continuing to shrink. The checkerboard stays dense and busy
+rather than blank, which is exactly the point: **even zoomed out over a
+large canvas, you are still looking at a pixel grid, not a flat colour.**
+
+#### Two bugs this used to have
+
+**Fit used to leave the canvas parked in the top-left corner.** `fit()`
+worked out the pan needed to centre the content, then rounded the zoom to
+a whole number of screen pixels per cell for crispness — *after* the pan
+had already been measured for the un-rounded zoom. Content sized for one
+zoom, positioned to centre a different one: the two came apart by however
+far the rounding moved, which on a typical phone is a large fraction of
+the zoom step, not a stray pixel. Now the zoom is rounded first and the
+centring pan is measured from that same final number, so the two can
+never disagree.
+
+**The checkerboard used to vanish below a fairly ordinary zoom level.**
+It was written to fall back to a flat dark tone once a cell dropped under
+3 screen pixels, to dodge a resampling glitch at very small sizes. Taking
+that fallback out to make the pattern always render exposed the glitch it
+was hiding: below one screen pixel per cell, the checker tile was being
+asked to draw itself at a size smaller than a screen pixel, which the
+browser then had to resample — and a repeating pattern resampled below
+its own resolution beats against the screen's pixel grid instead of
+shrinking cleanly, so a checker that should have been a fraction of a
+pixel wide came out as a false, unrelated 3-pixel-wide pattern. Past that
+point there is nothing smaller than one screen pixel to draw, so the tile
+is now simply held at one screen pixel per cell instead of chasing a size
+the screen cannot show — dense, but a real, correctly scaled checker
+pattern rather than an aliased one.
 
 ### What's snapped, and what isn't
 

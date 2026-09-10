@@ -13,14 +13,15 @@
 import { sceneStore } from './scene.js';
 
 const MIN_ZOOM = 0.05;
+// The camera's own ceiling. A checker cell (and so an artwork pixel) is
+// always exactly one scene pixel, at any zoom -- this renderer has no
+// notion of anything smaller to subdivide into -- so capping zoom here is
+// the only cap the "how big can one real pixel get" question needs. 48
+// CSS px per scene pixel is comfortably past the size where a single
+// pixel is still meaningfully "one square", so there is no reason to let
+// the camera go further.
 const MAX_ZOOM = 48;
 const FIT_MARGIN = 0.94; // a little air around the grid when fitted
-
-// Checker cells (and therefore artwork pixels) only look crisp when they
-// are a whole number of device pixels wide. Below this many CSS pixels per
-// cell the checkerboard collapses into moiré, so the renderer draws a flat
-// tone instead.
-export const MIN_VISIBLE_CELL_PX = 3;
 
 let zoom = 1;
 let panX = 0;
@@ -92,6 +93,16 @@ export const view = {
     const sceneWidth = sceneStore.width;
     const sceneHeight = sceneStore.height;
     zoom = clamp(Math.min(viewWidth / sceneWidth, viewHeight / sceneHeight) * FIT_MARGIN, MIN_ZOOM, MAX_ZOOM);
+    // Snap zoom to a whole number of device pixels per scene pixel BEFORE
+    // centring on it. snapToDevicePixels() rounds zoom too, but doing that
+    // AFTER computing pan centres the content for one zoom value and then
+    // renders it at a different one -- the content stays sized to the
+    // rounded zoom while pan was measured for the unrounded one, so the
+    // two disagree by however far the rounding moved zoom. At typical
+    // fit-to-screen ratios that gap is a large fraction of the zoom step,
+    // which is why the symptom was the character parked in the top-left
+    // rather than a sub-pixel wobble.
+    if (zoom * dpr >= 1) zoom = Math.round(zoom * dpr) / dpr;
     panX = (viewWidth - sceneWidth * zoom) / 2;
     panY = (viewHeight - sceneHeight * zoom) / 2;
     this.snapToDevicePixels();
