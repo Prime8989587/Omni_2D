@@ -38,4 +38,15 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        PSaver writes an exported project into shared Documents storage so
+        the file survives uninstalling the app. Android 10 and earlier
+        require this permission to write there at all; from Android 11 an
+        app may create its own files in shared storage without it, so the
+        request is capped rather than asked for on every device.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
 </manifest>

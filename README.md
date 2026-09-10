@@ -78,6 +78,8 @@ www/js/history.js       Undo/redo: the command stack of reversible scene snapsho
 www/js/project.js       The whole scene as plain data and back — used by both
                          undo/redo and save/load, so there is one serializer
 www/js/storage.js       Saved projects and the recovery slot, in IndexedDB
+www/js/psaver.js        PSaver: the same project written out as a file the user
+                         can copy off the device, and read back in
 www/js/autosave.js      Periodic + post-change auto-saves into the recovery slot
 www/js/canvas.js        Renderer — rasterizes every Part into a pixel-grid bitmap, blits
                          it at the current zoom, and draws the checkerboard, bones, mesh
@@ -86,7 +88,8 @@ www/js/ui.js            DOM wiring: buttons, Scene Parts panel, the export modal
 www/js/app.js           Thin entry point that boots ui.js once the page loads
 capacitor.config.json   Tells Capacitor the app's name, ID, and where the web files live
 android/                The native Android project Capacitor generated (this is what Gradle builds)
-package.json            Node project file listing Capacitor as a dependency
+package.json            Node project file listing Capacitor and the Filesystem
+                         plugin (PSaver writes exports through it) as dependencies
 ```
 
 You will **not** need to hand-edit anything inside `android/` — Capacitor
@@ -1672,6 +1675,8 @@ screens. Now there is one menu, in one place, always there:
 |---|---|
 | **Save project…** | Name it and store it on the device. |
 | **Open project…** | Load a saved project, or delete one. |
+| **PSaver: Export…** | Write the project out as a file you can copy off the device. |
+| **PSaver: Import…** | Read such a file back in. |
 | **Save state** | Mark the current arrangement as the one to come back to. |
 | **Reverse** | Put the character back to that arrangement. |
 | **Discard everything** | Empty the canvas (warns first). |
@@ -1732,8 +1737,133 @@ clears the slot, so you are not asked about work you already saved.
 IndexedDB on the device, rather than `localStorage`: pixel data is binary
 and would have to be base64-encoded to fit in `localStorage`, inflating it
 by a third against a quota of a few megabytes that a single large layer
-could exhaust. Projects live in the app's own storage, so uninstalling the
-app removes them; there is no cloud copy and no export-to-file yet.
+could exhaust.
+
+Projects live in the app's own storage, so **uninstalling the app removes
+them**, and there is no cloud copy. That is what **PSaver** is for.
+
+---
+
+## PSaver: projects as files
+
+### What it is for
+
+A saved project lives inside the app. Uninstall Omni 2D — or update it in
+a way that clears its data, or tap "Clear storage" in Android's app
+settings — and every saved project goes with it, and the character has to
+be rebuilt layer by layer, bone by bone. There is no cloud account behind
+this app to fall back on.
+
+**PSaver writes the project out as an ordinary file**: something you can
+see in the Files app, copy to a PC over USB, e-mail to yourself, or drop
+in Drive or Dropbox. Reinstall the app, import the file, and the character
+is back exactly as it was.
+
+The rule of thumb: **Save project…** is for "I am coming back to this
+tomorrow". **PSaver: Export…** is for "I do not want to lose this,
+whatever happens to the app."
+
+### Exporting
+
+**≡ → PSaver: Export…**, name the file (it offers the current project's
+name, the same way the Save and GIF-export prompts do), and tap **Export**.
+
+The file is written into a **`Omni2D` folder inside your device's shared
+`Documents`** — a location you can reach from the Files app or from a
+computer, and, crucially, one Android **keeps when the app is
+uninstalled**. A screen then tells you the file name, its size and the
+full path it landed on, so you know where to go and look. On a device that
+refuses shared storage, the export falls back to the app's own external
+folder and says so in plain words, including the warning that *that*
+folder is deleted on uninstall and the file needs moving now.
+
+What goes in is everything: **every layer with its image data, position,
+scale, rotation, stacking order and flags; the whole bone hierarchy with
+each bone's relationship type — rigid, physics or pivot — and its
+parameters; every mesh with every painted weight and bind pose; every Px
+Pin pinned pixel; and the canvas size.**
+
+### Importing
+
+**≡ → PSaver: Import…** opens the device's file picker filtered to PSaver
+files. Pick one and it becomes the project on screen — visible on canvas,
+editable in Rig, Bind and Free Move immediately, exactly as if it had been
+opened from an internal save. Import **replaces** what is on the canvas and
+starts a fresh undo timeline, for the same reason opening a saved project
+does.
+
+An imported project is not yet *saved* on the device — use **Save
+project…** afterwards if you want it in the app's own list too.
+
+### The file
+
+`yourname.omni2d.json`, and it is exactly what it looks like: JSON.
+
+The contents are **the same data structure the internal save already
+uses** — `serializeProject()`'s output, the one shared by Save/Open and by
+undo/redo — wrapped in a small header naming the app and the file-format
+version. There is no second format to drift out of step with the first: a
+field added to the serializer travels in an export automatically.
+
+The one difference is layer pixels. IndexedDB stores a `Uint8ClampedArray`
+natively; JSON has no such type, so on the way out each layer's pixel
+buffer becomes base64 and on the way in it becomes a typed array again.
+That single conversion is the whole gap between a file and an internal
+save, and it is why an export is roughly a third larger than the raw
+artwork.
+
+**Why the double extension.** The file really is JSON, so Android's file
+picker recognises it by MIME type and will actually offer it for
+selection. A made-up extension carries no MIME type at all, and on the
+devices that *do* honour the picker's filter it would leave your own
+export greyed out and unpickable. The `omni2d` half still names the app
+for anyone browsing a folder.
+
+### When a file is not a PSaver file
+
+Every check runs **before the scene is touched**, so a rejected file
+leaves whatever you were working on exactly as it was — half-loading a
+corrupt project over a good one would be worse than not loading at all.
+A message says what is wrong, in these words:
+
+| What you picked | What it says |
+|---|---|
+| Something that isn't text data | *That file is not a PSaver project — it is not even readable as text data.* |
+| JSON, but from something else | *That file is not a PSaver project — it is missing the Omni 2D marker.* |
+| An export from a newer Omni 2D | *That project was exported by a newer version of Omni 2D (file format N, this build reads up to 1).* |
+| A PSaver file missing its layers or bones | *That PSaver file is damaged — its layer list is missing.* |
+| A PSaver file cut short mid-download | *That PSaver file is truncated — Layer "X" should hold N bytes of image data but has M.* |
+| A PSaver file whose bones lost their positions | *That PSaver file is damaged — bone "hair" has no position.* |
+| An empty file | *That file is empty.* |
+
+The truncation check is the sharp one: RGBA means exactly four bytes per
+pixel, so a file that was cut short in transit is caught by arithmetic
+rather than by a torn layer appearing on the canvas.
+
+### Verified end to end
+
+A character was built with three layers, all three bone relationship types
+(rigid root, physics child, pivot child, with a non-default spring
+stiffness), auto-weighted meshes on two layers and 64 pinned pixels on a
+third, on a 112 × 96 canvas. It was exported, and then **every trace of it
+was removed from the app** — every saved project deleted, the auto-save and
+restore slots cleared, and the page reloaded so the app booted with nothing
+of its own to find, which is what a reinstall leaves. The exported file was
+then imported through the file picker.
+
+Restored identically: every layer's pixels (byte-for-byte hash), position,
+scale, rotation, visibility and lock; the stacking order; all three joint
+types with their parameters; every mesh weight, rest position and bind
+pose; every pinned pixel; and the canvas size. The imported character then
+opened in Rig mode with its skeleton intact, showed its physics and pivot
+bones as such in the editor, and dragged in Free Move.
+
+The one thing that does **not** come back byte-identical is the absolute
+`zIndex` numbers, which any load renumbers to a dense 0…n−1 while keeping
+the order — and the test proves that by saving and re-opening through the
+app's *internal* Save/Open and getting the same renumbering. An import is
+exactly as faithful as the app's own Open, which is the point: it goes
+through the same `applyProject()` code path.
 
 ---
 

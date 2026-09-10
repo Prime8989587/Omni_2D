@@ -472,6 +472,16 @@ button {
   line-height: 1.5;
 }
 
+/* Where a PSaver export actually landed. A path is the one thing here the
+   user may have to read character by character and retype into a file
+   manager, so it gets a monospace face and is allowed to wrap anywhere. */
+.modal__text--mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--color-accent);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Bind mode ---------- */
 
 .bind-row {

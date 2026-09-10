@@ -24,6 +24,9 @@
         <p class="app-menu__group">Project</p>
         <button id="saveProjectBtn" class="app-menu__item" type="button">Save project…</button>
         <button id="openProjectBtn" class="app-menu__item" type="button">Open project…</button>
+        <p class="app-menu__group">PSaver — project files</p>
+        <button id="psaverExportBtn" class="app-menu__item" type="button">PSaver: Export…</button>
+        <button id="psaverImportBtn" class="app-menu__item" type="button">PSaver: Import…</button>
         <p class="app-menu__group">Saved state</p>
         <button id="stateSaveBtn" class="app-menu__item" type="button">Save state</button>
         <button id="stateReverseBtn" class="app-menu__item" type="button">Reverse</button>
@@ -44,6 +47,7 @@
     </main>
 
     <input id="fileInput" class="visually-hidden" type="file" accept="image/png,.png" multiple />
+    <input id="psaverFileInput" class="visually-hidden" type="file" accept=".omni2d.json,.json,application/json" />
 
     <footer class="controls">
       <div id="scenePanel" class="scene-panel" hidden>
@@ -253,6 +257,34 @@
         <div class="modal__actions">
           <button id="confirmSaveProjectBtn" class="btn btn--flourish" type="button">Save</button>
           <button id="cancelSaveProjectBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="psaverExportModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="psaverExportTitle">
+        <h2 id="psaverExportTitle" class="modal__title">PSaver: Export</h2>
+        <label for="psaverNameInput" class="field-label">File name</label>
+        <input id="psaverNameInput" class="text-input" type="text" placeholder="my_character" autocomplete="off" />
+        <p class="modal__text">
+          Writes this project — every layer, bone, weight and pin — to a
+          <code>.omni2d.json</code> file you can copy off the device. Unlike a saved
+          project, the file survives reinstalling the app.
+        </p>
+        <div class="modal__actions">
+          <button id="psaverExportConfirmBtn" class="btn btn--flourish" type="button">Export</button>
+          <button id="psaverExportCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="psaverResultModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="psaverResultTitle">
+        <h2 id="psaverResultTitle" class="modal__title">PSaver</h2>
+        <p id="psaverResultMessage" class="modal__text"></p>
+        <p id="psaverResultPath" class="modal__text modal__text--mono"></p>
+        <div class="modal__actions">
+          <button id="psaverResultOkBtn" class="btn btn--flourish" type="button">OK</button>
         </div>
       </div>
     </div>

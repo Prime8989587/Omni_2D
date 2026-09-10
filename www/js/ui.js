@@ -22,6 +22,7 @@ import * as storage from './storage.js';
 import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
+import * as psaver from './psaver.js';
 
 const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
@@ -95,6 +96,14 @@ function cacheElements() {
   els.deletePartWithBonesBtn = document.getElementById('deletePartWithBonesBtn');
   els.deletePartCancelBtn = document.getElementById('deletePartCancelBtn');
 
+  for (const id of [
+    'psaverExportBtn', 'psaverImportBtn', 'psaverFileInput', 'psaverExportModal',
+    'psaverNameInput', 'psaverExportConfirmBtn', 'psaverExportCancelBtn',
+    'psaverResultModal', 'psaverResultTitle', 'psaverResultMessage',
+    'psaverResultPath', 'psaverResultOkBtn',
+  ]) {
+    els[id] = document.getElementById(id);
+  }
   els.saveProjectBtn = document.getElementById('saveProjectBtn');
   els.openProjectBtn = document.getElementById('openProjectBtn');
   els.saveProjectModal = document.getElementById('saveProjectModal');
@@ -1289,6 +1298,20 @@ function closeProjectPicker() {
   els.openProjectModal.hidden = true;
 }
 
+// Everything that means "this snapshot is now the project on screen".
+// Opening a saved project and importing a PSaver file are the same act
+// once the data is in hand, so they go through here rather than each
+// remembering to reset history, repoint the auto-save and re-fit the view.
+function adoptProject(data, name) {
+  applyProject(data);
+  // A loaded project starts a fresh timeline: undoing back into the
+  // previous project's edits would be nonsense.
+  history.reset();
+  currentProjectName = name;
+  setAutoSaveSource(name);
+  view.fit();
+}
+
 async function loadNamedProject(name) {
   try {
     const record = await storage.loadProject(name);
@@ -1296,19 +1319,104 @@ async function loadNamedProject(name) {
       showToast(`"${name}" is no longer saved on this device.`);
       return;
     }
-    applyProject(record.data);
-    // A loaded project starts a fresh timeline: undoing back into the
-    // previous project's edits would be nonsense.
-    history.reset();
-    currentProjectName = name;
-    setAutoSaveSource(name);
+    adoptProject(record.data, name);
     closeProjectPicker();
-    view.fit();
     showToast(`Opened "${name}".`);
   } catch (error) {
     console.warn(error);
     showToast(`Could not open "${name}": ${error.message}`);
   }
+}
+
+// ---- PSaver: projects as files ----------------------------------------
+//
+// Save/Open keeps a project in the app's own storage, which an uninstall
+// or a "clear data" takes with it. PSaver writes the same project to a
+// file the user can move off the device and read back afterwards. The
+// heavy lifting is in psaver.js; this is the buttons and the wording.
+
+function openPSaverExport() {
+  els.psaverNameInput.value = currentProjectName || '';
+  els.psaverExportModal.hidden = false;
+}
+
+function closePSaverExport() {
+  els.psaverExportModal.hidden = true;
+}
+
+// Export and import both end in something the user needs to READ -- a
+// path to go and find, or an explanation of why a file was rejected. A
+// toast times out; this does not.
+function showPSaverResult(title, message, path = '') {
+  els.psaverResultTitle.textContent = title;
+  els.psaverResultMessage.textContent = message;
+  els.psaverResultPath.textContent = path;
+  els.psaverResultPath.hidden = !path;
+  els.psaverResultModal.hidden = false;
+}
+
+async function handlePSaverExport() {
+  const name = sanitizeProjectName(els.psaverNameInput.value) ||
+    els.psaverNameInput.placeholder;
+  closePSaverExport();
+  try {
+    const result = await psaver.exportToFile(name);
+    const size = `${Math.max(1, Math.round(result.bytes / 1024))} KB`;
+    showPSaverResult(
+      'Exported',
+      result.durable
+        ? `"${result.filename}" (${size}) was written to ${result.where}. ` +
+          'It stays there if you uninstall or reinstall Omni 2D — copy it somewhere ' +
+          'safe and you can bring this character back with PSaver: Import.'
+        : `"${result.filename}" (${size}) was written to ${result.where}, because this ` +
+          'device would not let Omni 2D write to shared storage. THAT FOLDER IS ' +
+          'DELETED IF YOU UNINSTALL THE APP — move the file somewhere else now.',
+      // On Android this is the real path to go and look at; in a browser
+      // the download went wherever the browser puts downloads and the uri
+      // is just the filename again, which the message already said.
+      result.uri === result.filename ? '' : result.uri
+    );
+  } catch (error) {
+    console.warn(error);
+    showPSaverResult('Export failed', error.message || String(error));
+  }
+}
+
+function handlePSaverImport() {
+  els.psaverFileInput.value = ''; // so re-picking the same file still fires
+  els.psaverFileInput.click();
+}
+
+async function handlePSaverFilePicked(event) {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+
+  let parsed;
+  try {
+    // Validated in full BEFORE the scene is touched, so a bad file leaves
+    // whatever is on the canvas exactly as it was.
+    parsed = await psaver.readPickedFile(file);
+  } catch (error) {
+    console.warn(error);
+    showPSaverResult(
+      'Import failed',
+      error instanceof psaver.PSaverError
+        ? error.message
+        : `That file could not be read: ${error.message || error}`
+    );
+    return;
+  }
+
+  const name = sanitizeProjectName(parsed.name) || null;
+  adoptProject(parsed.data, name);
+  closeStateMenu();
+  const layers = (parsed.data.parts || []).length;
+  const bones = (parsed.data.bones || []).length;
+  showToast(
+    `Imported ${name ? `"${name}"` : 'project'} — ${layers} layer(s), ${bones} bone(s). ` +
+    'Save project… to keep it on this device.'
+  );
 }
 
 // On launch, an auto-save newer than the newest manual save means the app
@@ -1592,6 +1700,12 @@ function bindEvents() {
   // Now that these live in the menu, choosing one has to dismiss it before
   // its modal opens -- otherwise the menu is still sitting there behind it.
   els.saveProjectBtn.addEventListener('click', () => { closeStateMenu(); openSaveProjectModal(); });
+  els.psaverExportBtn.addEventListener('click', () => { closeStateMenu(); openPSaverExport(); });
+  els.psaverImportBtn.addEventListener('click', () => { closeStateMenu(); handlePSaverImport(); });
+  els.psaverExportConfirmBtn.addEventListener('click', handlePSaverExport);
+  els.psaverExportCancelBtn.addEventListener('click', closePSaverExport);
+  els.psaverFileInput.addEventListener('change', handlePSaverFilePicked);
+  els.psaverResultOkBtn.addEventListener('click', () => { els.psaverResultModal.hidden = true; });
   els.confirmSaveProjectBtn.addEventListener('click', handleConfirmSaveProject);
   els.cancelSaveProjectBtn.addEventListener('click', closeSaveProjectModal);
   els.openProjectBtn.addEventListener('click', () => { closeStateMenu(); openProjectPicker(); });
