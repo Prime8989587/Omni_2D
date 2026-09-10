@@ -74,6 +74,9 @@ export class Part {
     // whole-layer movement; it is only excused from skinning, bone
     // rotation and spring physics (see mesh.js, pinCarriageOffset).
     this.pins = new Set();
+    // Bumped on every pin change so mesh.js can cache the per-vertex
+    // influence field instead of rebuilding it every frame.
+    this.pinsVersion = 0;
   }
 
   texelIndex(u, v) {
@@ -341,7 +344,10 @@ class PartsStore {
         changed++;
       }
     }
-    if (changed) this._emit('transform');
+    if (changed) {
+      part.pinsVersion++;
+      this._emit('transform');
+    }
     return changed;
   }
 

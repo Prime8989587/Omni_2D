@@ -57,8 +57,9 @@ www/js/parts.js         The scene model: the Part object (whole-pixel position a
                          plus its decoded pixels) and the store holding them
 www/js/bones.js         The skeleton: Bone objects, the parent/child tree, and the
                          forward-kinematics math. Kept separate from parts.js
-www/js/mesh.js          Mesh generation, auto-weighting, weight painting maths, and
-                         the linear blend skinning that deforms the artwork
+www/js/mesh.js          Mesh generation, auto-weighting, weight painting maths, the
+                         linear blend skinning that deforms the artwork, and the
+                         per-vertex pin influence that holds pinned pixels still
 www/js/importer.js      Picked files -> Parts (PNG validation, size limits, decode,
                          whole-pixel placement, and position-preserving import of
                          canvas-sized layers)
@@ -71,6 +72,8 @@ www/js/physics.js       The frame loop that keeps spring bones settling after
                          the input that disturbed them has stopped
 www/js/poseTool.js      Free Move: the drag that moves the whole character, from
                          the canvas or from the pad below the buttons
+www/js/pxpin.js         Px Pin: the pixel-pinning window — its own camera, the
+                         paint strokes, and the brush-size menu
 www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
 www/js/project.js       The whole scene as plain data and back — used by both
                          undo/redo and save/load, so there is one serializer
@@ -966,9 +969,9 @@ that must never deform.
 is drawn underneath purely as reference, so you can line pixels up against
 what they sit on. Both appear at their current arrangement.
 
-**Looking.** The window has its own camera: pinch to zoom (far enough to
-fill the screen with a handful of pixels), one finger drags the view, and
-each layer has an opacity slider so you can see through the top one. A
+**Looking.** The window has its own camera: **two fingers** pinch to zoom
+(far enough to fill the screen with a handful of pixels) and drag to pan,
+and each layer has an opacity slider so you can see through the top one. A
 texel grid fades in once cells are big enough to aim at. **This camera is
 the window's alone** — zooming to 800%, panning around and leaving again
 cannot move, scale or rotate anything; the layers' real transforms are
@@ -976,31 +979,95 @@ never touched, only read. (Verified: every part and bone transform, and
 the main camera, are byte-identical after a zoom-pin-zoom-exit round
 trip.)
 
-**Pinning.** With the **📌 Pin** tool active, tapping a pixel pins exactly
-that pixel; the brush button switches between **1 px** and **2×2 px** per
-tap. Pinned pixels show a pink marker in this window (and only here — the
-main canvas stays clean). **⌫ Eraser Pin** is a separate, explicitly
-selected tool, never a hidden toggle of Pin: with it active, tapping a
-pinned pixel frees it again, at the same 1 px / 2×2 brush size. A short
-touch is a tap; moving past a small slop is a pan, so navigation can never
-pin by accident.
+**Pinning.** One finger paints. With the **📌 Pin** tool active, press
+down and drag: every pixel the finger crosses is pinned as it goes, and a
+fast flick still fills in the texels between samples rather than leaving a
+dotted trail. Pinning a collar or a scalp band is one stroke, and the
+whole stroke is a single undo step. Pinned pixels show a pink marker in
+this window (and only here — the main canvas stays clean).
+
+**⌫ Eraser Pin** is a separate, explicitly selected tool, never a hidden
+toggle of Pin: with it active, the same drag frees pixels again.
+
+**Brush size.** The third button opens a dropdown of every size from
+**1×1 to 10×10** pixels, in the same "⌄" menu style used elsewhere in the
+app. The chosen size shows on the button, applies to Pin and Eraser Pin
+alike, and stamps a square centred on the touch.
+
+Because one finger paints, the camera belongs to two fingers — and if a
+second finger lands mid-stroke, that stroke is *undone* rather than left
+behind as a stray pin, since a pinch that started slightly out of sync
+should not paint.
 
 **What a pin does.** Pins are stored per layer, in that layer's own pixel
 grid — not screen or canvas coordinates — so they stay glued to their
-artwork wherever the layer goes. At runtime a pinned pixel is excused from
-the deformation machinery: no skinning, no bone rotation, no spring
-physics. It is NOT nailed to the canvas — legitimate whole-layer movement
-(a Free-Move drag, a rigid or pivot chain carrying the layer) carries pins
-along exactly, measured the same way the auto-weight fix measures
-carriage: against the rest pose, which physics never touches. Unpinned
-pixels on the same layer keep deforming normally. At rest, a pinned layer
-renders byte-identically to an unpinned one — a pin only shows its effect
-when deformation would have moved that pixel.
+artwork wherever the layer goes. At runtime a pinned pixel is held at its
+rest position: bone rotation and spring physics move the artwork around it
+and leave it where it was. It is NOT nailed to the canvas — legitimate
+whole-layer movement (a Free-Move drag, a rigid or pivot chain carrying
+the layer) carries pins along exactly, measured the same way the
+auto-weight fix measures carriage: against the rest pose, which physics
+never touches. Unpinned pixels on the same layer keep deforming normally.
+At rest, a pinned layer renders byte-identically to an unpinned one — a
+pin only shows its effect when deformation would have moved that pixel.
 
 Erasing a pin returns the pixel to normal deformable behaviour
 immediately. Pins are part of the scene state: they save with the project,
 survive Reverse and recovery, and pinning/erasing are ordinary undoable
 steps.
+
+### Why pinned pixels used to tear away, and what fixed it
+
+The first version of Px Pin tore: pin a hair layer's scalp band, give the
+hair a physics bone, drag the character in Free Move, and the pinned band
+came apart from the hair hanging off it — a seam opened straight across
+the layer at exactly the pin boundary.
+
+The natural guess is that pinned *vertices* were being overridden without
+their neighbours being constrained to stay attached. **That is not what
+was happening, and it is worth correcting precisely: there were no pinned
+vertices at all.** Pins were a rendering trick, not geometry. The
+rasterizer skipped pinned texels, and a *second pass* painted them at
+their undeformed position afterwards. The mesh never knew a pin existed.
+So the deformation carried the surrounding artwork wherever physics wanted
+while those texels were stamped back at rest, and the two simply came
+apart. Measured on a hair layer at full swing, the seam reached **80 cells
+wide across 49 columns**, and the layer rendered as **three separate
+pieces**.
+
+That design also broke the renderer's founding promise — that every scene
+pixel is decided exactly once, by one mesh — which is what makes this
+rasterizer produce no gaps and no doubled pixels in the first place. A
+second pass is by definition a second decision.
+
+**A pin is now a constraint on the mesh.** Every vertex carries a pin
+influence between 0 and 1: **1** on pinned artwork, easing to **0** about
+one mesh cell away, along a smoothstep so the surface has no crease at
+either end. A vertex's final position is that fraction of the way from
+where the bones would put it back to where it rests. Pinned regions
+therefore hold still, their neighbours are drawn along a *continuous*
+surface, and there is one mesh and one raster pass again — so a seam would
+have to be a hole inside a triangle, which the rasterizer cannot produce.
+Tearing is not fixed here so much as made geometrically impossible.
+
+A pin holds the whole mesh **cell** its pixel sits in. Cell corners are
+the only places a mesh can hold anything, so holding the cell is what
+makes the pinned pixel itself land exactly on its rest position rather
+than somewhere within a fraction of a cell of it. The cost is that the
+pixel's immediate neighbours inside that cell come along; raise **Mesh
+density** in Bind mode to shrink that neighbourhood.
+
+Measured on the reported scenario — hair layer, physics bone, pins across
+the attachment band, dragged in Free Move at up to **92° of spring lag**:
+
+| | Before | After |
+|---|---|---|
+| Rendered pieces at worst frame | **3** | **1** |
+| Pinned band displacement | **27.7 cells** | **0 cells** |
+| Free ends still swinging | yes | yes — **47.6 cells** |
+
+One continuous, visually connected piece at every frame of the drag and
+after it settles, with the unpinned length still swinging freely.
 
 ### How the deformation works
 

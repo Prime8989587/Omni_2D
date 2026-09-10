@@ -301,7 +301,7 @@ export function applyWeightDelta(vertex, boneId, delta) {
 //
 // With no bone moved, every term reduces to p, so the mesh sits exactly at
 // rest and renders identically to the undeformed sprite.
-export function deformVertices(mesh, part, boneTransforms) {
+function deformRaw(mesh, part, boneTransforms) {
   const out = new Array(mesh.vertices.length);
 
   for (let i = 0; i < mesh.vertices.length; i++) {
@@ -380,6 +380,119 @@ export function deformVerticesSnapped(mesh, part, boneTransforms) {
 // ---------------------------------------------------------------------------
 // Px Pin: pixels excused from deformation.
 //
+// WHY THE FIRST VERSION TORE
+//
+// Pins started life as a rendering trick: the rasterizer skipped pinned
+// texels, and a second pass painted them at their undeformed spot. The
+// mesh never knew the pins existed. So the deformation carried the
+// surrounding artwork wherever physics wanted while those texels stayed
+// put, and the two simply came apart -- a hair layer with a pinned scalp
+// band opened a seam up to 80 cells wide, across 49 columns, at exactly
+// the pin boundary. That is what a "simple override, invisible to the
+// surrounding mesh" gets you, and it also broke the renderer's founding
+// promise that every scene pixel is decided exactly once by one mesh.
+//
+// A pin is now a CONSTRAINT ON THE MESH instead. Each vertex gets an
+// influence in 0..1 -- 1 where it sits on pinned artwork, easing to 0
+// about a mesh cell away -- and its final position is that fraction of the
+// way from where the bones would put it back to where it rests. Pinned
+// regions therefore hold still, their neighbours are pulled along a
+// continuous surface, and the boundary cannot tear because there is only
+// ONE mesh and one raster pass again: a seam would have to be a hole in a
+// triangle, which the rasterizer cannot produce.
+//
+// The transition is a smoothstep so the surface has no crease, and it
+// spans one mesh cell because that is the finest detail this mesh can
+// express. For the same reason a pin holds the whole CELL its pixel sits
+// in: cell corners are the only places a mesh can pin anything, so holding
+// the cell is what makes the pixel land exactly on its rest position. The
+// pinned pixel is therefore exact, and the cost is that its immediate
+// neighbours within the cell come along -- raise Mesh density in Bind mode
+// to shrink that neighbourhood.
+
+//
+// Per-vertex pin influence, cached against the layer's pin version: pins
+// change on a tap, the mesh's rest shape never does, so this is computed
+// when the pin set actually changes rather than every frame.
+function pinInfluence(mesh, part) {
+  const version = part.pinsVersion || 0;
+  if (mesh._pinInfluence && mesh._pinInfluenceVersion === version) return mesh._pinInfluence;
+
+  const width = part.naturalWidth;
+  const height = part.naturalHeight;
+  const cellW = width / Math.max(1, mesh.cols);
+  const cellH = height / Math.max(1, mesh.rows);
+  // One mesh cell, in texels: the width of the transition band.
+  const radius = Math.max(1, Math.max(cellW, cellH));
+
+  // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
+  // what its vertices can express, and the vertices are cell corners -- so
+  // the cell under a pinned pixel is held whole, which is what makes the
+  // pixel itself land exactly on its rest position rather than somewhere
+  // within a fraction of a cell of it. Collapsing also caps the work at
+  // cols x rows however many thousands of pixels a wide brush painted.
+  const cells = new Set();
+  for (const index of part.pins) {
+    const cu = Math.min(mesh.cols - 1, Math.floor((index % width) / cellW));
+    const cv = Math.min(mesh.rows - 1, Math.floor(Math.floor(index / width) / cellH));
+    cells.add(cv * mesh.cols + cu);
+  }
+  const held = [...cells].map((c) => {
+    const cu = c % mesh.cols;
+    const cv = Math.floor(c / mesh.cols);
+    return [cu * cellW, cv * cellH, (cu + 1) * cellW, (cv + 1) * cellH];
+  });
+
+  const influence = mesh.vertices.map((vertex) => {
+    // The vertex in texel coordinates; pins are texel-indexed.
+    const u = vertex.restLocal.x + width / 2;
+    const v = vertex.restLocal.y + height / 2;
+    let nearest = Infinity;
+    for (const [x0, y0, x1, y1] of held) {
+      // Distance to the held cell's rectangle, so every corner of a cell
+      // carrying a pin reads exactly zero and is held completely.
+      const dx = Math.max(x0 - u, 0, u - x1);
+      const dy = Math.max(y0 - v, 0, v - y1);
+      const d = Math.hypot(dx, dy);
+      if (d < nearest) nearest = d;
+      if (nearest === 0) break;
+    }
+    if (nearest === Infinity) return 0;
+    const t = Math.max(0, Math.min(1, 1 - nearest / radius));
+    return t * t * (3 - 2 * t); // smoothstep: no crease at either end
+  });
+
+  mesh._pinInfluence = influence;
+  mesh._pinInfluenceVersion = version;
+  return influence;
+}
+
+// The deformation every consumer sees: bone skinning, then pins pulling
+// their neighbourhood back toward rest. One pass, one mesh, no seams.
+export function deformVertices(mesh, part, boneTransforms) {
+  const out = deformRaw(mesh, part, boneTransforms);
+  if (!part || !part.pins || part.pins.size === 0) return out;
+
+  const influence = pinInfluence(mesh, part);
+  // Pinned artwork holds still relative to its LAYER, not to the canvas:
+  // a Free-Move drag or a rigid/pivot chain still carries it, and this is
+  // how far it has been carried.
+  const carriage = pinCarriageOffset(part, boneTransforms);
+
+  for (let i = 0; i < out.length; i++) {
+    const k = influence[i];
+    if (k <= 0) continue;
+    const rest = localToWorld(part, mesh.vertices[i].restLocal);
+    const anchorX = rest.x + carriage.x;
+    const anchorY = rest.y + carriage.y;
+    out[i] = {
+      x: out[i].x + (anchorX - out[i].x) * k,
+      y: out[i].y + (anchorY - out[i].y) * k,
+    };
+  }
+  return out;
+}
+
 // A pinned pixel does not skin, does not turn with a bone and does not
 // jiggle -- but it is NOT nailed to the canvas. The layer it belongs to is
 // still carried around (Free Move drags the whole character; a rigid or
@@ -405,33 +518,12 @@ export function pinCarriageOffset(part, boneTransforms) {
     const rotation = t.rigidRotation ?? t.rotation;
     rest[id] = { head, rotation, physics: false, partId: t.partId, rigidHead: head, rigidRotation: rotation };
   }
-  const points = deformVertices(part.mesh, part, rest);
+  const points = deformRaw(part.mesh, part, rest);
   if (points.length === 0) return { x: 0, y: 0 };
 
   const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
   const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
   return { x: Math.round(cx - part.centerX), y: Math.round(cy - part.centerY) };
-}
-
-// Every pinned texel's block for this frame: its top-left corner in scene
-// pixels (part origin + texel offset + carriage, all integers) and its
-// source coordinates. One block is part.scale x part.scale scene cells --
-// the same cells the texel would cover undeformed.
-export function pinnedTexelBlocks(part, boneTransforms) {
-  if (!part.pins || part.pins.size === 0) return [];
-  const offset = pinCarriageOffset(part, boneTransforms);
-  const width = part.naturalWidth;
-  const blocks = [];
-  for (const index of part.pins) {
-    const u = index % width;
-    const v = Math.floor(index / width);
-    blocks.push({
-      u, v,
-      x: part.x + u * part.scale + offset.x,
-      y: part.y + v * part.scale + offset.y,
-    });
-  }
-  return blocks;
 }
 
 // An unbound part drawn as a plain quad: its four corners in scene space,

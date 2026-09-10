@@ -343,8 +343,9 @@
         <div class="segmented">
           <button id="pxpinToolPinBtn" class="segmented__btn" type="button" aria-pressed="true">📌 Pin</button>
           <button id="pxpinToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">⌫ Eraser Pin</button>
-          <button id="pxpinBrushBtn" class="segmented__btn" type="button" aria-pressed="false">1 px</button>
+          <button id="pxpinBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pxpinBrushMenu">1 × 1 ⌄</button>
         </div>
+        <div id="pxpinBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
         <label class="slider-field slider-field--wide">
           <span>Above opacity <b id="pxpinAboveOpacityValue">100%</b></span>
           <input id="pxpinAboveOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
@@ -353,7 +354,7 @@
           <span>Below opacity <b id="pxpinBelowOpacityValue">100%</b></span>
           <input id="pxpinBelowOpacity" class="slider" type="range" min="0" max="100" step="5" value="100" />
         </label>
-        <p class="px-pin__hint">Tap a pixel to pin or erase · one finger drags the view · pinch to zoom</p>
+        <p class="px-pin__hint">Drag one finger to paint pins · two fingers pan · pinch to zoom</p>
       </footer>
     </div>
 

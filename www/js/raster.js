@@ -29,15 +29,10 @@ function edge(ax, ay, bx, by, px, py) {
 // targetHeight). p0..p2 are the triangle's corners in scene pixels --
 // callers snap them to integers first. uv0..uv2 are the matching source
 // texel coordinates in `source` (RGBA, sourceWidth x sourceHeight).
-//
-// `skip`, when given, is a Set of source texel indices (v * sourceWidth
-// + u) that this pass must NOT paint. Px Pin uses it to lift pinned
-// pixels out of the deformed mesh -- they are drawn separately at their
-// undeformed spot, and painting them here too would show each one twice.
 export function rasterizeTriangle(
   target, targetWidth, targetHeight,
   source, sourceWidth, sourceHeight,
-  p0, p1, p2, uv0, uv1, uv2, skip = null
+  p0, p1, p2, uv0, uv1, uv2
 ) {
   let area = edge(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
   if (area === 0) return; // degenerate: no pixels have their centre inside
@@ -77,7 +72,6 @@ export function rasterizeTriangle(
       // Nearest neighbour: the single texel whose cell contains (u, v).
       const texelX = Math.min(maxTexelX, Math.max(0, Math.floor(u)));
       const texelY = Math.min(maxTexelY, Math.max(0, Math.floor(v)));
-      if (skip !== null && skip.has(texelY * sourceWidth + texelX)) continue;
       const s = (texelY * sourceWidth + texelX) * 4;
       const alpha = source[s + 3];
       if (alpha === 0) continue;

@@ -14,10 +14,14 @@
 // artwork". The layers are drawn FLAT (their own pixel grids, undeformed)
 // at their current arrangement, which is exactly the frame pins live in.
 //
-// One finger: a short touch is a tap (pin / erase one pixel or a 2x2
-// block); moving past the slop turns it into a pan. Two fingers pinch to
-// zoom about the midpoint. So navigation never needs a mode switch, and a
-// tap can only ever land where the finger is.
+// One finger paints, two fingers move the view. Pressing down starts a
+// stroke and every texel the finger crosses is pinned (or erased) as it
+// goes -- pinning a collar by tapping each pixel was the wrong amount of
+// work. That leaves the camera to two fingers, which is where pinch
+// already lived, so navigation still needs no mode switch. A second finger
+// arriving mid-stroke means the user meant to pinch all along and simply
+// landed one finger first, so the stroke is UNDONE rather than left behind
+// as a stray pin. A whole stroke is one undo step.
 
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
@@ -25,8 +29,8 @@ import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 
 const ACCENT = '#FF2E93';
-const TAP_SLOP_PX = 8; // finger movement beyond this is a pan, not a tap
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
+const MAX_BRUSH = 10; // the biggest square a single touch-point covers
 const GRID_MIN_CELL_PX = 12; // draw the texel grid once cells are this big
 
 const els = {};
@@ -37,7 +41,7 @@ function cacheElements() {
     'pxpinOpenBtn', 'pxpinPickerModal', 'pxpinAboveSelect', 'pxpinBelowSelect',
     'pxpinStartBtn', 'pxpinCancelBtn', 'pxpinModal', 'pxpinAboveName',
     'pxpinStatus', 'pxpinDoneBtn', 'pxpinCanvas', 'pxpinToolPinBtn',
-    'pxpinToolEraseBtn', 'pxpinBrushBtn', 'pxpinAboveOpacity',
+    'pxpinToolEraseBtn', 'pxpinBrushBtn', 'pxpinBrushMenu', 'pxpinAboveOpacity',
     'pxpinBelowOpacity', 'pxpinAboveOpacityValue', 'pxpinBelowOpacityValue',
   ]) {
     els[id] = document.getElementById(id);
@@ -123,8 +127,14 @@ function startSession() {
   }
   closePicker();
 
+  // The two layers are held BY ID, not by reference: undo and project load
+  // rebuild every Part from a snapshot, so a cached object would quietly go
+  // stale and read pins that are no longer in the scene.
   session = {
-    above, below,
+    aboveId: above.id,
+    belowId: below.id,
+    get above() { return partsStore.parts.find((part) => part.id === this.aboveId); },
+    get below() { return partsStore.parts.find((part) => part.id === this.belowId); },
     aboveAt: layerPlacement(above),
     belowAt: layerPlacement(below),
     aboveCanvas: layerCanvas(above),
@@ -132,11 +142,12 @@ function startSession() {
     cam: { zoom: 1, panX: 0, panY: 0 },
     tool: 'pin',
     brush: 1,
+    brushMenuOpen: false,
     aboveOpacity: 1,
     belowOpacity: 1,
     pointers: new Map(),
     pinch: null,
-    drag: null,
+    stroke: null,
   };
 
   els.pxpinAboveName.textContent = above.name;
@@ -144,8 +155,6 @@ function startSession() {
   els.pxpinBelowOpacity.value = '100';
   els.pxpinAboveOpacityValue.textContent = '100%';
   els.pxpinBelowOpacityValue.textContent = '100%';
-  session.tool = 'pin';
-  session.brush = 1;
   els.pxpinModal.hidden = false;
 
   sizeCanvas();
@@ -209,6 +218,7 @@ function render() {
   const canvas = els.pxpinCanvas;
   const ctx = canvas.getContext('2d');
   const { cam, above, below, aboveAt, belowAt } = session;
+  if (!above || !below) { endSession(); return; } // a layer went away under us
 
   ctx.setTransform(session.dpr, 0, 0, session.dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
@@ -261,58 +271,153 @@ function render() {
 function renderTools() {
   els.pxpinToolPinBtn.setAttribute('aria-pressed', String(session.tool === 'pin'));
   els.pxpinToolEraseBtn.setAttribute('aria-pressed', String(session.tool === 'erase'));
-  els.pxpinBrushBtn.textContent = session.brush === 1 ? '1 px' : '2×2 px';
+  els.pxpinBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
+  els.pxpinBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
+  els.pxpinBrushMenu.hidden = !session.brushMenuOpen;
+
+  // Same size list for both tools -- a bigger brush just covers a bigger
+  // square per touch-point, pinning or erasing identically.
+  els.pxpinBrushMenu.replaceChildren();
+  for (let size = 1; size <= MAX_BRUSH; size++) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'px-pin__brush';
+    button.textContent = `${size}×${size}`;
+    button.setAttribute('aria-pressed', String(session.brush === size));
+    button.addEventListener('click', () => {
+      session.brush = size;
+      session.brushMenuOpen = false;
+      renderTools();
+    });
+    els.pxpinBrushMenu.appendChild(button);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Input
+//
+// ONE FINGER PAINTS, TWO FINGERS MOVE THE VIEW.
+//
+// Pressing down starts a stroke and every texel the finger crosses is
+// pinned (or erased) as it goes, like any paint tool -- tapping each pixel
+// individually was the wrong amount of work for pinning a collar. That
+// leaves the camera to two fingers, which is where pinch already lived, so
+// nothing needed a mode switch.
+//
+// A second finger arriving mid-stroke means the user meant to pinch all
+// along and simply landed one finger first, so the stroke is UNDONE rather
+// than left behind as a stray pin. The whole stroke is one undo step.
 
 function canvasPoint(event) {
   const rect = els.pxpinCanvas.getBoundingClientRect();
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
-function applyTap(point) {
-  const { above, aboveAt, cam, tool, brush } = session;
-  const sceneX = (point.x - cam.panX) / cam.zoom;
-  const sceneY = (point.y - cam.panY) / cam.zoom;
-  const u = Math.floor((sceneX - aboveAt.x) / above.scale);
-  const v = Math.floor((sceneY - aboveAt.y) / above.scale);
+// The ABOVE layer's texel under a point in the window, or null off-layer.
+function texelAt(point) {
+  const { above, aboveAt, cam } = session;
+  const u = Math.floor(((point.x - cam.panX) / cam.zoom - aboveAt.x) / above.scale);
+  const v = Math.floor(((point.y - cam.panY) / cam.zoom - aboveAt.y) / above.scale);
+  return { u, v };
+}
 
+// The brush's square of texel indices, centred on (u, v).
+function brushIndices(u, v) {
+  const size = session.brush;
+  const origin = Math.floor((size - 1) / 2);
   const indices = [];
-  for (let dv = 0; dv < brush; dv++) {
-    for (let du = 0; du < brush; du++) {
-      const index = above.texelIndex(u + du, v + dv);
+  for (let dv = 0; dv < size; dv++) {
+    for (let du = 0; du < size; du++) {
+      const index = session.above.texelIndex(u - origin + du, v - origin + dv);
       if (index >= 0) indices.push(index);
     }
   }
+  return indices;
+}
+
+// Applies the brush at one texel, remembering what each index was so the
+// whole stroke can be rolled back if it turns out to be a pinch.
+function stampAt(u, v) {
+  const { above, stroke } = session;
+  const pinning = session.tool === 'pin';
+  const indices = brushIndices(u, v).filter((index) =>
+    (pinning ? !above.pins.has(index) : above.pins.has(index)));
   if (indices.length === 0) return;
 
-  const pinning = tool === 'pin';
-  // Only record an undo step when something will actually change: tapping
-  // an already-pinned pixel with Pin (or a clean one with Eraser) is a
-  // no-op, not a history entry.
-  const wouldChange = indices.some((index) => (pinning ? !above.pins.has(index) : above.pins.has(index)));
-  if (!wouldChange) return;
+  for (const index of indices) if (!stroke.touched.has(index)) stroke.touched.set(index, !pinning);
+  partsStore.setPins(above.id, indices, pinning);
+  stroke.changed = true;
+}
 
-  history.run(pinning ? 'Pin pixels' : 'Erase pins',
-    () => partsStore.setPins(above.id, indices, pinning));
+// Fills in the texels between two samples, so a fast drag paints a line
+// rather than a dotted trail.
+function stampLine(from, to) {
+  const steps = Math.max(Math.abs(to.u - from.u), Math.abs(to.v - from.v));
+  if (steps <= 1) { stampAt(to.u, to.v); return; }
+  for (let i = 1; i <= steps; i++) {
+    stampAt(
+      Math.round(from.u + ((to.u - from.u) * i) / steps),
+      Math.round(from.v + ((to.v - from.v) * i) / steps)
+    );
+  }
+}
+
+function beginStroke(point) {
+  session.stroke = {
+    token: history.capture(session.tool === 'pin' ? 'Pin pixels' : 'Erase pins'),
+    touched: new Map(), // index -> what it was before this stroke
+    last: null,
+    changed: false,
+  };
+  const texel = texelAt(point);
+  stampAt(texel.u, texel.v);
+  session.stroke.last = texel;
+  render();
+}
+
+function extendStroke(point) {
+  const texel = texelAt(point);
+  const last = session.stroke.last;
+  if (last && texel.u === last.u && texel.v === last.v) return;
+  if (last) stampLine(last, texel); else stampAt(texel.u, texel.v);
+  session.stroke.last = texel;
+  render();
+}
+
+function endStroke() {
+  const stroke = session.stroke;
+  session.stroke = null;
+  if (!stroke) return;
+  history.commitCapture(stroke.token, stroke.changed);
+}
+
+// A pinch was intended: put back everything this stroke changed and drop
+// its history entry, so a two-finger gesture never leaves a stray pin.
+function abandonStroke() {
+  const stroke = session.stroke;
+  session.stroke = null;
+  if (!stroke) return;
+  for (const [index, wasPinned] of stroke.touched) {
+    partsStore.setPins(session.above.id, [index], wasPinned);
+  }
+  history.commitCapture(stroke.token, false);
   render();
 }
 
 function onPointerDown(event) {
   if (!session) return;
   event.preventDefault();
-  // Capture keeps a drag delivering when the finger leaves the canvas; a
+  // Capture keeps a stroke delivering when the finger leaves the canvas; a
   // synthetic event (tests) has no active pointer to capture, which is
   // fine -- the gesture logic below works either way.
   try { els.pxpinCanvas.setPointerCapture(event.pointerId); } catch { /* no-op */ }
   session.pointers.set(event.pointerId, canvasPoint(event));
 
   if (session.pointers.size === 1) {
-    session.drag = { start: canvasPoint(event), panned: false };
     session.pinch = null;
+    beginStroke(canvasPoint(event));
   } else if (session.pointers.size === 2) {
+    abandonStroke(); // two fingers is the camera, never paint
     const [a, b] = [...session.pointers.values()];
     session.pinch = {
       distance: Math.hypot(b.x - a.x, b.y - a.y),
@@ -321,7 +426,6 @@ function onPointerDown(event) {
       panX: session.cam.panX,
       panY: session.cam.panY,
     };
-    session.drag = null; // two fingers is the camera, never a tap
   }
 }
 
@@ -329,7 +433,6 @@ function onPointerMove(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
   event.preventDefault();
   const point = canvasPoint(event);
-  const previous = session.pointers.get(event.pointerId);
   session.pointers.set(event.pointerId, point);
 
   if (session.pointers.size === 2 && session.pinch) {
@@ -338,7 +441,8 @@ function onPointerMove(event) {
     const factor = distance / Math.max(1, session.pinch.distance);
     const zoom = Math.min(MAX_ZOOM, Math.max(session.minZoom, session.pinch.zoom * factor));
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    // Keep the scene point under the pinch midpoint fixed while zooming.
+    // Keep the scene point under the pinch midpoint fixed while zooming;
+    // two fingers moving together therefore pan.
     const scale = zoom / session.pinch.zoom;
     session.cam.zoom = zoom;
     session.cam.panX = mid.x - (session.pinch.mid.x - session.pinch.panX) * scale;
@@ -347,26 +451,14 @@ function onPointerMove(event) {
     return;
   }
 
-  if (session.pointers.size === 1 && session.drag) {
-    const moved = Math.hypot(point.x - session.drag.start.x, point.y - session.drag.start.y);
-    if (moved > TAP_SLOP_PX) session.drag.panned = true;
-    if (session.drag.panned) {
-      session.cam.panX += point.x - previous.x;
-      session.cam.panY += point.y - previous.y;
-      render();
-    }
-  }
+  if (session.pointers.size === 1 && session.stroke) extendStroke(point);
 }
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
-  const wasTap = session.pointers.size === 1 && session.drag && !session.drag.panned && !session.pinch;
-  const point = canvasPoint(event);
   session.pointers.delete(event.pointerId);
   if (session.pointers.size < 2) session.pinch = null;
-  if (session.pointers.size === 0) session.drag = null;
-
-  if (wasTap) applyTap(point);
+  if (session.pointers.size === 0) endStroke();
 }
 
 // Read-only window into the private camera, for tests: proving the zoom
@@ -382,6 +474,7 @@ export function pxpinDebug() {
     belowAt: { ...session.belowAt },
     tool: session.tool,
     brush: session.brush,
+    brushMenuOpen: session.brushMenuOpen,
   };
 }
 
@@ -400,7 +493,7 @@ export function initPxPin() {
   els.pxpinToolEraseBtn.addEventListener('click', () => { if (session) { session.tool = 'erase'; renderTools(); } });
   els.pxpinBrushBtn.addEventListener('click', () => {
     if (!session) return;
-    session.brush = session.brush === 1 ? 2 : 1;
+    session.brushMenuOpen = !session.brushMenuOpen;
     renderTools();
   });
 

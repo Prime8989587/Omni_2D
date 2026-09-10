@@ -636,6 +636,39 @@ button {
   color: #000000;
 }
 
+/* The brush-size menu the size button drops open: 1x1 up to 10x10, laid
+   out like the row asides elsewhere in the app. */
+.px-pin__brushes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 2px solid var(--color-accent);
+  border-radius: 10px;
+  background: rgba(255, 46, 147, 0.08);
+}
+
+.px-pin__brush {
+  -webkit-tap-highlight-color: transparent;
+  flex: 1 1 calc(20% - 5px);
+  min-width: 56px;
+  min-height: 42px;
+  border: 2px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-accent);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.px-pin__brush[aria-pressed="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
 .px-pin__hint {
   margin: 4px 0 0;
   color: rgba(255, 255, 255, 0.45);
