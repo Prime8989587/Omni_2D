@@ -5,7 +5,7 @@
 
 import { appState, AppState } from './state.js';
 import {
-  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth,
+  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics,
 } from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
@@ -136,7 +136,9 @@ function cacheElements() {
   els.deletePartCancelBtn = document.getElementById('deletePartCancelBtn');
   for (const id of [
     'pierceModal', 'pierceLayerName', 'pierceRoleNoneBtn', 'pierceRolePiercerBtn',
-    'pierceRoleInteractiveBtn', 'pierceRoleHint', 'pierceDepthSummary',
+    'pierceRolePiercedBtn', 'pierceRoleHint', 'pierceDepthSummary',
+    'piercePhysicsRow', 'piercePhysicsPiercerBtn', 'piercePhysicsPiercedBtn',
+    'piercePhysicsBothBtn', 'piercePhysicsHint',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
@@ -1115,7 +1117,7 @@ function handleDuplicatePart() {
 // ---- Pierce ------------------------------------------------------------
 //
 // A pierce is a relationship between exactly two KINDS of layer: a
-// PIERCER (which carries a painted tip and two depths) and an INTERACTIVE
+// PIERCER (which carries a painted tip and two depths) and a PIERCED
 // layer (which carries a painted pierceable area). Both sides are set
 // here, by hand, on the layer's own settings panel.
 //
@@ -1124,6 +1126,19 @@ function handleDuplicatePart() {
 // displaced; both questions are answered by this stored flag alone. No
 // amount of painted region data, overlap or proximity makes a layer a
 // piercer -- only the user saying so here.
+
+// Which side's movement may deepen a contact. The measurement itself is
+// symmetric -- either layer moving changes the gap by the same amount --
+// so this is a choice rather than a capability, and the hints say which
+// way round each option leaves it.
+const PIERCE_PHYSICS_HINTS = {
+  [PiercePhysics.PIERCER]: 'Only this piercer moving deepens the contact. A pierced ' +
+    'layer moved onto it keeps whatever contact it has, but cannot push further in.',
+  [PiercePhysics.PIERCED]: 'The reverse: only the pierced layer moving deepens the ' +
+    'contact. Driving this piercer further in stops having any effect.',
+  [PiercePhysics.BOTH]: 'Either one moving deepens the contact, by however much it ' +
+    'closed the gap — so the two add up rather than competing.',
+};
 
 const PIERCE_TIP_SEEN_KEY = 'omni2d.pierce.tipSeen';
 const PIERCE_OVERLAY_KEY = 'omni2d.pierce.overlay';
@@ -1155,7 +1170,7 @@ const PIERCE_ROLE_HINTS = {
   [PierceRole.NONE]: 'Not part of a pierce. This layer behaves exactly as normal.',
   [PierceRole.PIERCER]: 'This layer does the piercing. Paint its tip, and set how ' +
     'close it has to get before the other layer starts to move.',
-  [PierceRole.INTERACTIVE]: 'This layer gets pierced. Paint the area a piercer is ' +
+  [PierceRole.PIERCED]: 'This layer gets pierced. Paint the area a piercer is ' +
     'allowed to push into. Its own bones and physics keep running as normal.',
 };
 
@@ -1166,12 +1181,20 @@ function renderPierceModal() {
   els.pierceLayerName.textContent = part.name;
   els.pierceRoleNoneBtn.setAttribute('aria-pressed', String(part.pierceRole === PierceRole.NONE));
   els.pierceRolePiercerBtn.setAttribute('aria-pressed', String(part.isPiercer));
-  els.pierceRoleInteractiveBtn.setAttribute('aria-pressed', String(part.isInteractive));
+  els.pierceRolePiercedBtn.setAttribute('aria-pressed', String(part.isPierced));
   els.pierceRoleHint.textContent = PIERCE_ROLE_HINTS[part.pierceRole];
 
-  // Depths belong to the piercer side of the relationship, so they only
-  // appear on a piercer.
+  // Depths and the physics direction belong to the piercer side of the
+  // relationship, so they only appear on a piercer.
   els.pierceDepthSummary.hidden = !part.isPiercer;
+  els.piercePhysicsRow.hidden = !part.isPiercer;
+  if (part.isPiercer) {
+    const physics = part.piercePhysics || PiercePhysics.PIERCER;
+    els.piercePhysicsPiercerBtn.setAttribute('aria-pressed', String(physics === PiercePhysics.PIERCER));
+    els.piercePhysicsPiercedBtn.setAttribute('aria-pressed', String(physics === PiercePhysics.PIERCED));
+    els.piercePhysicsBothBtn.setAttribute('aria-pressed', String(physics === PiercePhysics.BOTH));
+    els.piercePhysicsHint.textContent = PIERCE_PHYSICS_HINTS[physics];
+  }
   if (part.isPiercer) {
     els.pierceDepthReadout.textContent =
       `Enter ${part.pierceEnter} px · End ${part.pierceEnd} px — contact starts ` +
@@ -1180,12 +1203,12 @@ function renderPierceModal() {
 
   const painted = part.pierceRegion.size;
   els.piercePaintBtn.hidden = !part.hasPierceRole;
-  // On an interactive layer the second number is the one that decides how
+  // On an pierced layer the second number is the one that decides how
   // much of that area actually gives way, and "all" is what an unpainted
   // deformable mask means -- worth saying, because a blank count there
   // would read as "nothing will move".
   const walls = part.pierceBarrierRegion.size;
-  const soft = part.isInteractive
+  const soft = part.isPierced
     ? ` · ${part.pierceDeformRegion.size || 'all'} deformable${walls ? ` · ${walls} wall` : ''}`
     : '';
   els.piercePaintBtn.textContent = painted
@@ -1238,7 +1261,7 @@ function choosePierceRole(role) {
 
   history.run('Set pierce role', () => partsStore.setPierceRole(part.id, role));
   renderPierceModal();
-  showToast(`"${part.name}" is now Interactive. Paint the pierceable area next — Paint regions….`);
+  showToast(`"${part.name}" is now Pierced. Paint the pierceable area next — Paint regions….`);
 }
 
 function removePierceRole(partId) {
@@ -1614,16 +1637,16 @@ function showPierceTipOnce() {
 }
 
 // Opens the region painter for this layer, paired with the opposite side
-// of the relationship (a piercer pairs with an interactive layer and vice
+// of the relationship (a piercer pairs with an pierced layer and vice
 // versa), so both are visible at their real relative positions while
 // painting. Defined in section 2.
 function handleOpenPiercePainter() {
   const part = piercePart();
   if (!part) return;
-  const partner = part.isPiercer ? partsStore.interactives[0] : partsStore.piercers[0];
+  const partner = part.isPiercer ? partsStore.piercedLayers[0] : partsStore.piercers[0];
   if (!partner) {
     showToast(part.isPiercer
-      ? 'No Interactive layer yet — set one on the layer that should get pierced.'
+      ? 'No Pierced layer yet — set one on the layer that should get pierced.'
       : 'No Piercer layer yet — set one on the layer that should do the piercing.');
     return;
   }
@@ -1683,12 +1706,12 @@ function handleDeletePart() {
 // The layers whose pierce role would be left with nothing to pair with if
 // `part` went away. A role survives as long as at least one layer on the
 // other side remains, so deleting one of two piercers strands nobody --
-// deleting the last one strands every interactive layer.
+// deleting the last one strands every pierced layer.
 function pierceOrphansOf(part) {
   if (!part.hasPierceRole) return [];
-  const sameSide = part.isPiercer ? partsStore.piercers : partsStore.interactives;
+  const sameSide = part.isPiercer ? partsStore.piercers : partsStore.piercedLayers;
   if (sameSide.length > 1) return [];
-  return part.isPiercer ? partsStore.interactives : partsStore.piercers;
+  return part.isPiercer ? partsStore.piercedLayers : partsStore.piercers;
 }
 
 function completeDeletePart(alsoDeleteBones) {
@@ -2320,10 +2343,22 @@ function bindEvents() {
 
   els.pierceRoleNoneBtn.addEventListener('click', () => choosePierceRole(PierceRole.NONE));
   els.pierceRolePiercerBtn.addEventListener('click', () => choosePierceRole(PierceRole.PIERCER));
-  els.pierceRoleInteractiveBtn.addEventListener('click', () => choosePierceRole(PierceRole.INTERACTIVE));
+  els.pierceRolePiercedBtn.addEventListener('click', () => choosePierceRole(PierceRole.PIERCED));
   els.pierceEditDepthsBtn.addEventListener('click', () => openPierceDepthModal('edit'));
   els.pierceRemoveBtn.addEventListener('click', () => removePierceRole(pierceModalPartId));
   els.piercePaintBtn.addEventListener('click', handleOpenPiercePainter);
+  for (const [btn, physics] of [
+    [els.piercePhysicsPiercerBtn, PiercePhysics.PIERCER],
+    [els.piercePhysicsPiercedBtn, PiercePhysics.PIERCED],
+    [els.piercePhysicsBothBtn, PiercePhysics.BOTH],
+  ]) {
+    btn.addEventListener('click', () => {
+      const part = piercePart();
+      if (!part) return;
+      history.run('Set physics direction', () => partsStore.setPiercePhysics(part.id, physics));
+      renderPierceModal();
+    });
+  }
   els.pierceOverlayBtn.addEventListener('click', togglePierceOverlay);
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
   const onDepthTyped = () => {

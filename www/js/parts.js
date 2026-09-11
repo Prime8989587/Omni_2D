@@ -40,10 +40,35 @@ export const MAX_PART_SCALE = 16;
 export const PierceRole = Object.freeze({
   NONE: 'none',
   PIERCER: 'piercer',
-  INTERACTIVE: 'interactive',
+  PIERCED: 'pierced',
 });
 
 export const PIERCE_ROLES = new Set(Object.values(PierceRole));
+
+// WHOSE MOVEMENT DRIVES THE CONTACT
+//
+// The geometry is symmetric and always was: the gap is measured between
+// two painted regions, so the flesh sliding onto a still needle reads
+// exactly the same as the needle driven into still flesh -- measured,
+// byte for byte, depth 1/11/15 and a push of 0.29/9.58/13.06 px either
+// way round. What was missing was not the reverse direction but any say
+// in it. This is that say.
+//
+// PIERCER -- only the piercer closing the gap deepens the contact. Moving
+//            the pierced layer onto a parked piercer does nothing further.
+// PIERCED -- the reverse: only the pierced layer's own movement deepens it.
+// BOTH    -- either does, which is the symmetric behaviour described above.
+//
+// "Deepens" is the precise word. Whichever side is excluded still takes
+// part in the contact it is already in -- the depth it has, the z-order,
+// the springs settling -- it simply stops being able to push it further.
+export const PiercePhysics = Object.freeze({
+  PIERCER: 'piercer',
+  PIERCED: 'pierced',
+  BOTH: 'both',
+});
+
+export const PIERCE_PHYSICS = new Set(Object.values(PiercePhysics));
 
 // Enter and End are depths in SCENE PIXELS, measured from the piercer's
 // painted tip to the nearest painted pierceable pixel:
@@ -116,7 +141,7 @@ export class Part {
     // Pierce. The role is the explicit flag everything else reads; the
     // region is texel indices in THIS layer's own pixel grid, exactly like
     // pins -- the piercing TIP on a piercer, the PIERCEABLE area on an
-    // interactive layer. Enter/End are the piercer's depths and are
+    // pierced layer. Enter/End are the piercer's depths and are
     // meaningless on any other role.
     this.pierceRole = PierceRole.NONE;
     this.pierceRegion = new Set();
@@ -128,7 +153,7 @@ export class Part {
     //
     // pierceRegion answers "can a piercer make contact here". This answers
     // the separate question "and may this pixel then MOVE" -- so an
-    // interactive layer can register a pierce across its whole surface
+    // pierced layer can register a pierce across its whole surface
     // while only part of that surface actually dents. Bone, a fingernail,
     // a belt buckle: contact happens, the z-order swap happens, and the
     // pixels themselves hold firm.
@@ -157,14 +182,19 @@ export class Part {
     // before this existed.
     this.pierceBarrierRegion = new Set();
     this.pierceBarrierRegionVersion = 0;
+
+    // Which side's movement may deepen this piercer's contacts. Lives on
+    // the piercer with Enter and End, because like them it describes the
+    // relationship rather than the artwork.
+    this.piercePhysics = PiercePhysics.PIERCER;
   }
 
   get isPiercer() {
     return this.pierceRole === PierceRole.PIERCER;
   }
 
-  get isInteractive() {
-    return this.pierceRole === PierceRole.INTERACTIVE;
+  get isPierced() {
+    return this.pierceRole === PierceRole.PIERCED;
   }
 
   get hasPierceRole() {
@@ -429,8 +459,8 @@ class PartsStore {
     return this._parts.filter((part) => part.isPiercer);
   }
 
-  get interactives() {
-    return this._parts.filter((part) => part.isInteractive);
+  get piercedLayers() {
+    return this._parts.filter((part) => part.isPierced);
   }
 
   get hasPierce() {
@@ -451,10 +481,19 @@ class PartsStore {
       part.pierceDeformRegionVersion++;
       part.pierceBarrierRegion = new Set();
       part.pierceBarrierRegionVersion++;
+      part.piercePhysics = PiercePhysics.PIERCER;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
     }
     this._emit('structure');
+    return true;
+  }
+
+  setPiercePhysics(id, physics) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || !PIERCE_PHYSICS.has(physics) || part.piercePhysics === physics) return false;
+    part.piercePhysics = physics;
+    this._emit('transform');
     return true;
   }
 

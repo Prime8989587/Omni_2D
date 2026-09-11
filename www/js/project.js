@@ -18,6 +18,7 @@ import {
   Part, partsStore, reservePartId,
   PierceRole, PIERCE_ROLES, clampPierceDepth,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
+  PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
 import { MeshVertex, PartMesh } from './mesh.js';
@@ -101,6 +102,7 @@ function serializePart(part, copyPixels) {
     pierceRegion: [...part.pierceRegion],
     pierceDeformRegion: [...part.pierceDeformRegion],
     pierceBarrierRegion: [...part.pierceBarrierRegion],
+    piercePhysics: part.piercePhysics,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
     mesh: serializeMesh(part.mesh),
@@ -129,7 +131,12 @@ function deserializePart(data) {
   part.pins = new Set(data.pins || []); // absent in older saves: no pins
   // Absent in saves made before Pierce existed, which is exactly a layer
   // with no role -- the defaults already say that.
-  part.pierceRole = PIERCE_ROLES.has(data.pierceRole) ? data.pierceRole : PierceRole.NONE;
+  // The PIERCED role was called "interactive" when these projects were
+  // saved. The name changed; what it means did not, so a project from
+  // before the rename opens with its roles intact rather than silently
+  // losing them.
+  const role = data.pierceRole === 'interactive' ? PierceRole.PIERCED : data.pierceRole;
+  part.pierceRole = PIERCE_ROLES.has(role) ? role : PierceRole.NONE;
   part.pierceRegion = new Set(data.pierceRegion || []);
   // Absent in projects saved before the deformable mask existed, and an
   // empty one means "all of the pierceable area gives way" -- which is
@@ -138,6 +145,10 @@ function deserializePart(data) {
   // Absent before barriers existed; empty means no walls, which is how
   // those projects behaved.
   part.pierceBarrierRegion = new Set(data.pierceBarrierRegion || []);
+  // Absent before the setting existed, and its default is the behaviour
+  // those projects were saved under.
+  part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)
+    ? data.piercePhysics : PiercePhysics.PIERCER;
   part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
   part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
   part.mesh = deserializeMesh(data.mesh);

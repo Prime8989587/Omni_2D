@@ -1501,6 +1501,20 @@ where some mesh vertices are — the very same lever bone skinning already
 pulls — which is why backing the piercer out restores the artwork exactly,
 with nothing to undo or restore.
 
+### Piercer and Pierced
+
+**Piercer** is the layer that does the poking. **Pierced** is the layer
+that receives it. The second was called *Interactive* until this pass; the
+name said nothing about what it did, so it was renamed throughout — every
+label, hint, toast, painter caption and internal identifier. A search for
+`interactive`, case-insensitive, across `www/js`, `www/index.html` and
+`www/css` now returns **nothing**.
+
+The stored value changed with it, so a project saved before the rename
+would have lost its roles on load. It does not: deserialization maps the
+old `interactive` onto `PIERCED` on the way in, because the name changed
+and what it means did not.
+
 ### Roles are chosen, never guessed
 
 Pierce does nothing until you say which layer is which. From a layer row's
@@ -1746,6 +1760,88 @@ sideways: the contained tip reached 137 and stayed at 137 at every step,
 never past the wall at 140, while the raw position tracked the finger from
 128 to 168 throughout.
 
+### A wall is the pixels that were painted
+
+The first version of Barrier treated a wall pixel as blocking everything
+within the **tip's own half-extent** of it. That is a simplification, and
+it quietly invented walls nobody painted: two barriers down the sides of a
+cavity, each inflated by the tip's spread, meet in the middle of anything
+narrower than twice that spread — and the inflation reaches up past the
+topmost painted pixel too, roofing over an entrance left wide open.
+Measured on a 20 px cavity with a tip of spread 12.3 and **nothing painted
+across its front**, entry straight down the middle stalled at depth 9 of
+16, stopped by a ceiling that existed only in the collision function. The
+same inflation made the test O(radius²) per sample, building a fresh string
+key for each — hundreds of thousands of them a frame near a wall.
+
+It is now the honest test. The contained position is a point; it is blocked
+exactly when the scene cell it lands in was painted, as one integer-keyed
+set lookup. An unpainted direction has nothing in it, so it stays open.
+
+Two details that matter:
+
+- **The contained point is the tip's leading EDGE, not its middle.** On
+  anything but a very shallow tip the middle sits well behind the part that
+  actually goes in, and a wall running down the side of a cavity starts
+  below it — so the middle glides over the wall's top and out the far side
+  without ever entering a painted pixel. Measured against walls occupying
+  rows 121–144, the middle sat at row 120 the whole way and sailed past.
+- **A flat tip's leading edge is a tie.** Every texel across its front is
+  the same distance along the axis, and picking any single winner picks a
+  corner — a corner of a tip wider than the cavity starts out already
+  inside the wall, which blocked entry down a completely open channel. The
+  midpoint of the leading edge is the one point that means the same thing
+  for a flat tip and a pointed one.
+
+Verified: entering straight down an open front is unheld at every step and
+reaches full depth 16; sliding sideways stops dead at the painted wall and
+stays there through a 40 px drag; and a frame costs 0.17–0.2 ms with the
+drag 800 px past the wall, flat with distance rather than growing.
+
+### Containment holds back; it never pulls forward
+
+Nothing in this feature moves a piercer's own coordinates — the only writes
+are the drag itself. What *can* move its artwork is the hold, and a hold
+pointing along the approach axis would draw the piercer deeper than the
+finger asked: a needle appearing to be sucked in, or to stick when pulled
+out. The sweep starts from where the tip was last frame, so a withdrawal
+whose path clipped a wall could stop short and leave it deeper than the
+drag now wants.
+
+The along-axis component of the hold is therefore clamped to zero or
+negative: whatever the walls say sideways, it can only ever lag the drag,
+never lead it. Swept across 448 positions with and without walls, the
+forward component measures **exactly 0** at every one.
+
+### Physics Direction: which side's movement counts
+
+The gap is a measurement between two painted regions, so it has no opinion
+about which of them moved. Measured: flesh sliding onto a parked needle
+gives depth 1/11/15 and a push of 0.29/9.58/13.06 px — **byte-identical**
+to the needle driven into parked flesh. The reverse direction was never
+missing; what was missing was any say in it, and the behaviour shipped as
+"Piercer" was in fact "Both".
+
+**Physics** here means the interaction: contact triggering displacement and
+the springs settling afterwards — not parenting. The setting lives on the
+piercer beside Enter and End, because like them it describes the
+relationship rather than the artwork:
+
+| | |
+| --- | --- |
+| **Piercer** | only the piercer closing the gap deepens the contact |
+| **Pierced** | the reverse — only the pierced layer's own movement does |
+| **Both** | either does, which is the symmetric behaviour above |
+
+It works by accounting rather than gating: each frame the excluded side's
+contribution to the change in gap is accumulated and added straight back,
+so its movement nets out to nothing while the other side's passes through
+untouched. **Deepens** is the precise word — whichever side is excluded
+keeps the contact it is already in, its depth, its z-order and its springs.
+It simply stops being able to push it further. The accumulator is
+re-baselined whenever the pair drifts out of range, so it cannot wander
+over a long session.
+
 ### Setting Enter and End by hand, on the piercer
 
 The depth window still has both numeric fields, and now also draws the
@@ -1928,7 +2024,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Six browser suites cover this, all passing:
+Eight browser suites cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -1961,6 +2057,22 @@ Six browser suites cover this, all passing:
   leaving the unpainted body and shaft untouched to the pixel, the readout
   tracking `OUT → IN → AT END / tip sunk`, and switching it off restoring
   the artwork exactly.
+- **Walls as painted pixels** (10 checks) — a 20 px cavity with barriers
+  on its left and right only and a tip whose own spread is 12.3 px, the
+  geometry that used to seal itself shut: entry straight down the open
+  front unheld at every step (0.00 px held) and reaching full depth 16;
+  sideways motion stopped dead at the painted wall and staying there
+  through a 40 px drag, never onto a painted cell, while the raw drag
+  tracked the finger throughout; and a frame at 0.17–0.2 ms with the drag
+  40, 200 and 800 px past the wall — flat with distance rather than
+  growing.
+- **Physics Direction** (12 checks) — in Piercer mode the piercer driven in
+  reaches depth 16 while the pierced layer moved onto a parked piercer
+  reaches 0; in Pierced mode exactly the reverse; in Both, either side
+  reaches 16. Plus the control appearing on a piercer, the choice storing
+  and surviving a save/load round trip, the role buttons reading
+  None / Piercer / Pierced, and a project written with the pre-rename
+  `interactive` value still loading its role.
 - **Barrier, deformable and drawn depths** (24 checks) — a needle dragged
   40 px sideways out of a walled channel with its contained tip reaching
   137 and staying at 137 at every step, never past the wall at 140, while
@@ -2526,6 +2638,49 @@ back to whatever font the browser picks per missing glyph, `.btn--icon`,
 the flower marks explicitly keep the original system font stack. They
 were plain, colourless glyph icons before this pass and still are —
 nothing about them needed to become "pixel text".
+
+### What "8×8" actually means for each of these fonts
+
+The type looked compressed and uneven rather than crisply blocky. Measured
+rather than guessed, by taking the gcd of every glyph coordinate in each
+vendored file:
+
+| Font | gcd of glyph coords | What that means |
+| --- | --- | --- |
+| Press Start 2P | **125** of a 1000-unit em | a true 1/8 em grid — a real pixel font |
+| VT323 | **1** | not on a grid at all |
+
+So Press Start 2P is crisp at multiples of **8px**, where one design pixel
+is a whole number of CSS pixels. It was already 16px, and stays there.
+
+**VT323 is not a pixel font.** It is a vector face styled to look like a
+terminal font, with outlines on arbitrary coordinates — which is exactly
+why it reads as uneven beside the other one. No font size can fix that,
+and rounding it to a multiple of 8 would only make it worse: its advance is
+0.4em, so 16px gives a 6.4px cell where 20px gives a clean 8px one.
+
+What *can* be made exact is its cell. Every advance is 0.4em, so a size
+that is a multiple of 5 puts each glyph cell on a whole CSS pixel and stops
+the glyph-to-glyph rhythm drifting. Body went 18px → **20px** (8px cell)
+and labels 16px → **15px** (6px cell); buttons were already 20px.
+
+Tracking was em-based, which undid the same thing from the other end:
+0.05em of 15px is 0.75px, so the second glyph landed three quarters of a
+pixel along, the third one and a half, and every glyph after the first
+somewhere different within the pixel. All nine declarations are now `1px`.
+
+Checked for non-uniform scaling while there: there is no `transform:
+scale()`, no `scaleX`/`scaleY` and no `font-stretch` anywhere in the
+stylesheet, so nothing is being squeezed in one axis. The remaining
+one-off sizes (10, 14, 16, 18, 20, 34px) are all on `--font-fallback` or
+`--font-mono` — the system stack used for arrows, chevrons and the flower,
+which neither pixel font ships glyphs for — and are deliberately outside
+this rule.
+
+Full compliance for body text would mean replacing VT323 with a genuinely
+grid-drawn face at a similar advance. That is a font-licensing and
+vendoring decision rather than a code change, so it is flagged rather than
+done.
 
 ### Custom pixel-art icons, replacing every actual emoji
 

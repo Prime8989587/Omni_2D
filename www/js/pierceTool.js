@@ -6,7 +6,7 @@
 // camera. What is painted here is two sets of texels --
 //
 //   on the PIERCER      the tip: the pixels that actually do the piercing
-//   on the INTERACTIVE  the pierceable area: the pixels a tip may push into
+//   on the PIERCED      the pierceable area: the pixels a tip may push into
 //
 // -- each stored as texel indices in ITS OWN layer's pixel grid, exactly
 // like Px Pin's pins. Local coordinates are the whole point: a region
@@ -62,7 +62,7 @@ function cacheElements() {
     'pierceTargetBarrierBtn', 'pierceToolPaintBtn',
     'pierceToolEraseBtn', 'pierceBrushBtn', 'pierceBrushMenu',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
-    'pierceInteractiveOpacity', 'pierceInteractiveOpacityValue',
+    'piercePiercedOpacity', 'piercePiercedOpacityValue',
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -105,37 +105,37 @@ export function openPiercePainter(partId, partnerId) {
   if (!a || !b) return;
 
   const piercer = a.isPiercer ? a : b;
-  const interactive = a.isInteractive ? a : b;
-  if (!piercer || !interactive || piercer.id === interactive.id) return;
+  const pierced = a.isPierced ? a : b;
+  if (!piercer || !pierced || piercer.id === pierced.id) return;
 
   session = {
     piercerId: piercer.id,
-    interactiveId: interactive.id,
+    piercedId: pierced.id,
     get piercer() { return partsStore.parts.find((part) => part.id === this.piercerId); },
-    get interactive() { return partsStore.parts.find((part) => part.id === this.interactiveId); },
+    get pierced() { return partsStore.parts.find((part) => part.id === this.piercedId); },
     piercerAt: layerPlacement(piercer),
-    interactiveAt: layerPlacement(interactive),
+    piercedAt: layerPlacement(pierced),
     piercerCanvas: layerCanvas(piercer),
-    interactiveCanvas: layerCanvas(interactive),
+    piercedCanvas: layerCanvas(pierced),
     cam: { zoom: 1, panX: 0, panY: 0 },
     // Which region the brush writes into: the piercer's tip, or the
-    // interactive layer's pierceable area. Opens on the side the user
+    // pierced layer's pierceable area. Opens on the side the user
     // came from, since that is the one they were just configuring.
     target: a.isPiercer ? 'tip' : 'area',
     tool: 'paint',
     brush: 1,
     brushMenuOpen: false,
     piercerOpacity: 1,
-    interactiveOpacity: 1,
+    piercedOpacity: 1,
     pointers: new Map(),
     pinch: null,
     stroke: null,
   };
 
   els.piercePiercerOpacity.value = '100';
-  els.pierceInteractiveOpacity.value = '100';
+  els.piercePiercedOpacity.value = '100';
   els.piercePiercerOpacityValue.textContent = '100%';
-  els.pierceInteractiveOpacityValue.textContent = '100%';
+  els.piercePiercedOpacityValue.textContent = '100%';
   els.pierceWindow.hidden = false;
 
   sizeCanvas();
@@ -150,7 +150,7 @@ function endSession() {
 }
 
 // The three masks the brush can write into. Tip lives on the piercer;
-// pierceable and deformable BOTH live on the interactive layer, which is
+// pierceable and deformable BOTH live on the pierced layer, which is
 // why the target rather than the layer has to decide which Set is being
 // edited -- two of them share a part.
 const MASKS = {
@@ -182,11 +182,11 @@ function targetMask() {
 
 // The layer the brush is currently writing into, and the one it is not.
 function targetPart() {
-  return session.target === 'tip' ? session.piercer : session.interactive;
+  return session.target === 'tip' ? session.piercer : session.pierced;
 }
 
 function targetPlacement() {
-  return session.target === 'tip' ? session.piercerAt : session.interactiveAt;
+  return session.target === 'tip' ? session.piercerAt : session.piercedAt;
 }
 
 function sizeCanvas() {
@@ -203,11 +203,11 @@ function sizeCanvas() {
 // Fit both layers on screen with a margin; that zoom is also the floor,
 // so the user can always come back out to the overview.
 function fitCamera() {
-  const { piercer, interactive, piercerAt, interactiveAt, cam } = session;
-  const x0 = Math.min(piercerAt.x, interactiveAt.x);
-  const y0 = Math.min(piercerAt.y, interactiveAt.y);
-  const x1 = Math.max(piercerAt.x + piercer.sceneWidth, interactiveAt.x + interactive.sceneWidth);
-  const y1 = Math.max(piercerAt.y + piercer.sceneHeight, interactiveAt.y + interactive.sceneHeight);
+  const { piercer, pierced, piercerAt, piercedAt, cam } = session;
+  const x0 = Math.min(piercerAt.x, piercedAt.x);
+  const y0 = Math.min(piercerAt.y, piercedAt.y);
+  const x1 = Math.max(piercerAt.x + piercer.sceneWidth, piercedAt.x + pierced.sceneWidth);
+  const y1 = Math.max(piercerAt.y + piercer.sceneHeight, piercedAt.y + pierced.sceneHeight);
   const spanX = Math.max(1, x1 - x0);
   const spanY = Math.max(1, y1 - y0);
   const zoom = Math.min(session.cssWidth / spanX, session.cssHeight / spanY) * 0.9;
@@ -260,15 +260,15 @@ function render() {
   if (!session) return;
   const canvas = els.pierceCanvas;
   const ctx = canvas.getContext('2d');
-  const { cam, piercer, interactive, piercerAt, interactiveAt } = session;
-  if (!piercer || !interactive) { endSession(); return; } // a layer went away under us
+  const { cam, piercer, pierced, piercerAt, piercedAt } = session;
+  if (!piercer || !pierced) { endSession(); return; } // a layer went away under us
 
   ctx.setTransform(session.dpr, 0, 0, session.dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#101014';
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
 
-  drawLayer(ctx, session.interactiveCanvas, interactiveAt, interactive, session.interactiveOpacity);
+  drawLayer(ctx, session.piercedCanvas, piercedAt, pierced, session.piercedOpacity);
   drawLayer(ctx, session.piercerCanvas, piercerAt, piercer, session.piercerOpacity);
 
   // The texel grid of the layer being painted, once its cells are big
@@ -293,21 +293,21 @@ function render() {
     ctx.stroke();
   }
 
-  drawRegion(ctx, interactive, interactiveAt, AREA_COLOR, AREA_EDGE);
+  drawRegion(ctx, pierced, piercedAt, AREA_COLOR, AREA_EDGE);
   // On top of the pierceable area, because it is a part of it.
-  drawRegion(ctx, interactive, interactiveAt, DEFORM_COLOR, DEFORM_EDGE, interactive.pierceDeformRegion);
+  drawRegion(ctx, pierced, piercedAt, DEFORM_COLOR, DEFORM_EDGE, pierced.pierceDeformRegion);
   // Walls last of the three: they are what the tip is stopped by, so they
   // belong on top of whatever they are bounding.
-  drawRegion(ctx, interactive, interactiveAt, BARRIER_COLOR, BARRIER_EDGE, interactive.pierceBarrierRegion);
+  drawRegion(ctx, pierced, piercedAt, BARRIER_COLOR, BARRIER_EDGE, pierced.pierceBarrierRegion);
   drawRegion(ctx, piercer, piercerAt, TIP_COLOR, TIP_EDGE);
 
   els.pierceWindowTarget.textContent = session.target === 'tip'
     ? `${piercer.name} · tip`
-    : `${interactive.name} · ${targetMask().label}`;
-  const deform = interactive.pierceDeformRegion.size;
+    : `${pierced.name} · ${targetMask().label}`;
+  const deform = pierced.pierceDeformRegion.size;
   els.pierceWindowStatus.textContent =
-    `tip ${piercer.pierceRegion.size} px · flesh ${interactive.pierceRegion.size} px · ` +
-    `soft ${deform || 'all'} · wall ${interactive.pierceBarrierRegion.size} · ` +
+    `tip ${piercer.pierceRegion.size} px · flesh ${pierced.pierceRegion.size} px · ` +
+    `soft ${deform || 'all'} · wall ${pierced.pierceBarrierRegion.size} · ` +
     `${Math.round(cam.zoom * 100)}%`;
 }
 
@@ -533,7 +533,7 @@ export function pierceToolDebug() {
     panX: session.cam.panX,
     panY: session.cam.panY,
     piercerAt: { ...session.piercerAt },
-    interactiveAt: { ...session.interactiveAt },
+    piercedAt: { ...session.piercedAt },
     target: session.target,
     tool: session.tool,
     brush: session.brush,
@@ -590,10 +590,10 @@ export function initPierceTool() {
     els.piercePiercerOpacityValue.textContent = `${els.piercePiercerOpacity.value}%`;
     render();
   });
-  els.pierceInteractiveOpacity.addEventListener('input', () => {
+  els.piercePiercedOpacity.addEventListener('input', () => {
     if (!session) return;
-    session.interactiveOpacity = Number(els.pierceInteractiveOpacity.value) / 100;
-    els.pierceInteractiveOpacityValue.textContent = `${els.pierceInteractiveOpacity.value}%`;
+    session.piercedOpacity = Number(els.piercePiercedOpacity.value) / 100;
+    els.piercePiercedOpacityValue.textContent = `${els.piercePiercedOpacity.value}%`;
     render();
   });
 

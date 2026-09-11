@@ -37,7 +37,7 @@ export function pierceStateFor(partId, vertexCount) {
 // advanced them too, the simulation would run once per redraw rather than
 // once per frame, and would speed up on a busy screen.
 export function pierceOffsets(part) {
-  if (!part || !part.isInteractive || !part.mesh) return null;
+  if (!part || !part.isPierced || !part.mesh) return null;
   const entry = state.get(part.id);
   if (!entry || entry.count !== part.mesh.vertices.length) return null;
   return entry;

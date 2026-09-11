@@ -4,7 +4,7 @@
 //
 // It never removes a pixel, never hides one, never makes one transparent
 // and never punches a hole. There is no second rendering pass and no
-// stencil. Every pixel the interactive layer had before contact is still
+// stencil. Every pixel the pierced layer had before contact is still
 // drawn afterwards, through the same rasterizer, in the same single pass.
 // The ONLY thing that changes is where some mesh vertices are, which is
 // exactly the same lever bone skinning already pulls -- so the effect is
@@ -76,7 +76,7 @@
 // component of the motion stops having a visible effect. Sideways motion
 // and pulling back out track the finger one-for-one as they always did.
 
-import { partsStore } from './parts.js';
+import { partsStore, PiercePhysics } from './parts.js';
 import { bonesStore, DEFAULT_STIFFNESS, DEFAULT_DAMPING } from './bones.js';
 import { localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
@@ -162,109 +162,80 @@ function regionPoints(part, transforms, which = 'pierce') {
 // cavity. Two passes, so a corner (two walls at once) resolves against
 // both instead of sliding along one into the other.
 //
-// The radius is the tip's own reach, so a broad tip is stopped further
-// from a wall than a needle is -- the same way the push's reach already
-// falls out of the painted artwork rather than a number to guess at.
-//
-// This resolves an overlap that already exists, and it is only half the
-// story: pushing out of the NEAREST wall pixel sends a tip that has got
-// past a wall's midline further out rather than back where it came from.
-// Measured on a 24 px channel with walls at its edges, a tip 2 px beyond
-// the wall was pushed to 145.3 -- through the wall and out the far side,
-// which is the bug rather than the fix. So this is used only to recover a
-// tip that somehow starts inside a wall; the containment that actually
-// holds is the swept one below, which never lets it get there.
-function containLaterally(tip, walls, radius) {
-  if (walls.length === 0) return tip;
-  let out = tip;
-  for (let pass = 0; pass < 2; pass++) {
-    let worst = 0;
-    let push = null;
-    for (const w of walls) {
-      const dx = out.x - w.x;
-      const dy = out.y - w.y;
-      const distance = Math.hypot(dx, dy);
-      if (distance >= radius) continue;
-      const overlap = radius - distance;
-      if (overlap <= worst) continue;
-      worst = overlap;
-      // Sitting exactly on a wall pixel gives no direction to leave by;
-      // the next-nearest wall in the same pass will supply one, and if
-      // none does the tip simply stays put rather than jumping somewhere
-      // arbitrary.
-      push = distance > 1e-6
-        ? { x: (dx / distance) * overlap, y: (dy / distance) * overlap }
-        : null;
-    }
-    if (!push) break;
-    out = { x: out.x + push.x, y: out.y + push.y };
-  }
-  return out;
-}
-
-// A wall is only a wall if you cannot walk through it, and "am I
-// overlapping one right now" cannot express that: it has no memory of
-// which side you were on. So containment is SWEPT. The tip's contained
-// position moves from where it was last frame toward where the drag has
-// now put it, and stops at the first sample that would be inside a wall.
-// It can therefore never end up on the far side of one, however fast the
-// drag, and it slides along a wall it is pressed against instead of
-// popping through.
-//
-// The walls are rasterized into a set of scene cells once per distinct
-// points array -- which regionPoints already caches, so the grid is built
-// when the paint or the layer moves and never per frame.
 const wallGrids = new WeakMap();
+
+// One number per blocked scene cell, so the lookup allocates nothing. The
+// string keys this used to build were the single most expensive thing in a
+// frame near a wall: a long sweep asked hundreds of thousands of times and
+// made a fresh string for every one of them.
+const GRID_BIAS = 8192;
+const cellKey = (x, y) => (x + GRID_BIAS) * 65536 + (y + GRID_BIAS);
 
 function wallGridFor(walls) {
   let grid = wallGrids.get(walls);
   if (!grid) {
     grid = new Set();
-    for (const w of walls) grid.add(`${Math.round(w.x)},${Math.round(w.y)}`);
+    for (const w of walls) grid.add(cellKey(Math.round(w.x), Math.round(w.y)));
     wallGrids.set(walls, grid);
   }
   return grid;
 }
 
-function blockedAt(grid, x, y, radius) {
-  const reach = Math.ceil(radius);
-  const limit = radius * radius;
-  const cx = Math.round(x);
-  const cy = Math.round(y);
-  for (let dy = -reach; dy <= reach; dy++) {
-    for (let dx = -reach; dx <= reach; dx++) {
-      if (dx * dx + dy * dy > limit) continue;
-      if (grid.has(`${cx + dx},${cy + dy}`)) return true;
-    }
-  }
-  return false;
+// A WALL IS THE PIXELS THAT WERE PAINTED, AND NOTHING ELSE
+//
+// This used to treat a wall pixel as blocking everything within the TIP'S
+// OWN half-extent of it, which is a simplification that quietly invents
+// walls nobody painted. Two barriers down the sides of a cavity, each
+// inflated by the tip's spread, meet in the middle of anything narrower
+// than twice that spread -- and the inflation reaches up past the topmost
+// painted pixel too, roofing over an entrance that was left wide open.
+// Measured on a 20 px cavity with a tip of spread 12.3 and NOTHING painted
+// across its front: entry straight down the middle stalled at depth 9 of
+// 16, blocked by a ceiling that existed only in this function.
+//
+// So the test is now the honest one: the contained position is a point,
+// and it is blocked exactly when the scene cell it lands in was painted.
+// An unpainted direction has nothing in it, so it stays open.
+function blockedAt(grid, x, y) {
+  return grid.has(cellKey(Math.round(x), Math.round(y)));
 }
 
-function sweepContain(from, to, walls, radius) {
+function sweepContain(from, to, walls) {
   const grid = wallGridFor(walls);
-  // Starting inside a wall means something put it there without passing
-  // through -- a layer moved under it, a project loaded mid-pierce. Pop it
-  // out first so the sweep has somewhere legal to start from.
-  let start = from;
-  if (blockedAt(grid, start.x, start.y, radius)) {
-    start = containLaterally(start, walls, radius);
-    if (blockedAt(grid, start.x, start.y, radius)) return to;
-  }
+  // Already standing on a painted pixel means something put the tip there
+  // without crossing anything -- a layer moved out from under it, a
+  // project loaded mid-pierce. Containment simply stands down for the
+  // frame rather than hunting for a way out: failing OPEN leaves the user
+  // holding a piercer that still answers the drag, and the next frame
+  // re-establishes containment normally once it is off the pixel.
+  if (blockedAt(grid, from.x, from.y)) return to;
 
-  const dx = to.x - start.x;
-  const dy = to.y - start.y;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
   const distance = Math.hypot(dx, dy);
-  if (distance < 1e-6) return start;
+  if (distance < 1e-6) return from;
 
-  // Half a scene pixel a step: finer than anything the grid can express,
-  // so nothing can slip between two samples.
-  const steps = Math.max(1, Math.ceil(distance * 2));
-  let reached = start;
+  // Half a scene pixel a step, so no cell along the path is stepped over.
+  // Capped, because the drag can be arbitrarily far from where the tip is
+  // pinned and no amount of sampling past a wall changes the answer.
+  const steps = Math.min(4096, Math.max(1, Math.ceil(distance * 2)));
+  let reached = from;
+  let lastX = Math.round(from.x);
+  let lastY = Math.round(from.y);
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    const x = start.x + dx * t;
-    const y = start.y + dy * t;
-    if (blockedAt(grid, x, y, radius)) break;
+    const x = from.x + dx * t;
+    const y = from.y + dy * t;
+    const cx = Math.round(x);
+    const cy = Math.round(y);
+    if (grid.has(cellKey(cx, cy))) break;
+    // A diagonal step changes both coordinates at once and would slip
+    // through the corner between two painted pixels. Treat that corner as
+    // closed by testing the two cells it cuts between.
+    if (cx !== lastX && cy !== lastY &&
+        (grid.has(cellKey(cx, lastY)) || grid.has(cellKey(lastX, cy)))) break;
+    lastX = cx;
+    lastY = cy;
     reached = { x, y };
   }
   return reached;
@@ -277,8 +248,41 @@ function sweepContain(from, to, walls, radius) {
 // stale point would teleport it on re-entry.
 const containedTips = new Map();
 
+// WHOSE MOVEMENT COUNTS
+//
+// The gap is a measurement between two painted regions, so it has no
+// opinion about which of them moved -- flesh sliding onto a parked needle
+// reads identically to a needle driven into parked flesh. The Physics
+// Direction setting is the opinion, and this is where it is applied:
+// each frame the excluded side's contribution to the change in gap is
+// accumulated and added straight back, so its movement nets out to
+// nothing while the other side's passes through untouched.
+//
+// It cancels DEEPENING, not participation. A contact already established
+// keeps its depth, its z-order and its springs whichever side is excluded;
+// the excluded one simply cannot drive it further in. The accumulator is
+// re-baselined whenever the pair drifts out of range, so it can never
+// wander off over a long session.
+const motionState = new Map();
+const IN_PLAY_MARGIN = 4;
+
 export function resetPierceContainment() {
   containedTips.clear();
+  motionState.clear();
+}
+
+// The middle of a region, cached against the points array regionPoints
+// already keeps -- so this is recomputed when the layer moves or its paint
+// changes, not per frame.
+const centroids = new WeakMap();
+
+function centroidOf(points) {
+  let middle = centroids.get(points);
+  if (!middle) {
+    middle = centroid(points);
+    centroids.set(points, middle);
+  }
+  return middle;
 }
 
 // The layer's own centre in scene space. Local (0,0) IS that centre --
@@ -307,7 +311,7 @@ function spread(points, middle) {
   return worst;
 }
 
-// The live contact between one piercer and one interactive layer. Null
+// The live contact between one piercer and one pierced layer. Null
 // when either side has nothing painted -- an unpainted region is not a
 // contact of size zero, it is no contact at all, and reporting it as one
 // would let an unconfigured pair start deforming.
@@ -390,7 +394,7 @@ function axialGap(tip, flesh, tipMiddle, tipSpread, axis) {
 
 // A DISPLACEMENT NEEDS SOMEWHERE TO LIVE
 //
-// The offsets this solver produces are PER VERTEX, so an interactive layer
+// The offsets this solver produces are PER VERTEX, so an pierced layer
 // with no mesh has nowhere to put them. Until now such a layer was simply
 // skipped, which meant the whole feature quietly did nothing unless the
 // user had first rigged a skeleton and bound the flesh to it in Bind mode
@@ -409,10 +413,10 @@ function meshFor(part) {
   return part.mesh;
 }
 
-export function contactOf(piercer, interactive, transforms) {
-  if (!piercer || !interactive) return null;
+export function contactOf(piercer, pierced, transforms) {
+  if (!piercer || !pierced) return null;
   const tip = regionPoints(piercer, transforms);
-  const flesh = regionPoints(interactive, transforms);
+  const flesh = regionPoints(pierced, transforms);
   if (tip.length === 0 || flesh.length === 0) return null;
 
   const tipMiddle = centroid(tip);
@@ -422,10 +426,40 @@ export function contactOf(piercer, interactive, transforms) {
   // Off the path, or a piercer with no readable direction: report the real
   // separation, but nothing engages off a measurement that has no sign.
   const rawInPath = axial !== null;
-  const rawGap = rawInPath ? axial : nearestSeparation(tip, flesh);
+  const measured = rawInPath ? axial : nearestSeparation(tip, flesh);
 
   const enter = piercer.pierceEnter;
   const end = Math.max(1, piercer.pierceEnd);
+  const pair = `${piercer.id}:${pierced.id}`;
+
+  // Apply the Physics Direction. The gap the rest of this function works
+  // from is the measured one plus everything the excluded side has moved
+  // it by since this pair came into range -- which is to say, the gap as
+  // it would be if that side had stayed where it was.
+  const mode = piercer.piercePhysics || PiercePhysics.PIERCER;
+  let rawGap = measured;
+  if (axis && rawInPath && mode !== PiercePhysics.BOTH) {
+    const along = (p) => p.x * axis.x + p.y * axis.y;
+    const tipAlong = along(tipMiddle);
+    const fleshAlong = along(centroidOf(flesh));
+    const inPlay = measured < enter + IN_PLAY_MARGIN;
+    const previous = motionState.get(pair);
+    let ignored = 0;
+    if (inPlay && previous) {
+      // A tip advancing by d shrinks the gap by d, so cancelling it means
+      // adding d back. Flesh advancing by d grows the gap by d, so
+      // cancelling that means taking d away.
+      ignored = previous.ignored + (mode === PiercePhysics.PIERCED
+        ? tipAlong - previous.tipAlong
+        : previous.fleshAlong - fleshAlong);
+    }
+    if (inPlay) motionState.set(pair, { tipAlong, fleshAlong, ignored });
+    else motionState.delete(pair);
+    rawGap = measured + ignored;
+  } else {
+    motionState.delete(pair);
+  }
+
   const rawDepth = rawInPath ? Math.min(end, Math.max(0, enter - rawGap)) : 0;
 
   // Past End the contact's GEOMETRY has to stop advancing as well, not
@@ -459,14 +493,66 @@ export function contactOf(piercer, interactive, transforms) {
   // it stays held. Pulling back out along the axis is what ends it -- the
   // sweep follows the retreat freely, the gap opens past Enter, and the
   // contact drops for the ordinary reason.
-  const pair = `${piercer.id}:${interactive.id}`;
   const sticky = containedTips.has(pair);
-  const walls = rawDepth > 0 || sticky ? regionPoints(interactive, transforms, 'barrier') : [];
+  const walls = rawDepth > 0 || sticky ? regionPoints(pierced, transforms, 'barrier') : [];
 
   let contained = depthClamped;
-  if (walls.length > 0) {
+  if (walls.length > 0 && axis) {
+    // WHICH POINT IS THE ONE THAT MUST NOT CROSS
+    //
+    // Not the tip's middle. On anything but a very shallow tip the middle
+    // sits well behind the part that actually goes in, and a wall running
+    // down the side of a cavity starts BELOW it -- so the middle glides
+    // over the top of the wall and out the other side without ever
+    // entering a painted pixel. Measured on a 10-row tip against walls
+    // occupying rows 121..144: the middle sat at 120 the whole way and
+    // sailed straight past.
+    //
+    // The leading point does the entering, so it is the one contained.
+    // Everything else about the tip is carried by the same correction,
+    // which is how the middle -- still what the displacement radiates
+    // from -- ends up where it belongs.
+    // A flat tip has a whole ROW at the same distance along the axis, so
+    // "the furthest one" is a tie between every texel across its front.
+    // Picking any single winner picks a corner -- and a corner of a tip
+    // wider than the cavity starts out already inside the wall, which
+    // blocked entry down a completely open channel. The leading EDGE's
+    // midpoint is the one point that means the same thing for a flat tip
+    // and a pointed one.
+    let best = -Infinity;
+    for (const p of tip) best = Math.max(best, p.x * axis.x + p.y * axis.y);
+    let leadSumX = 0;
+    let leadSumY = 0;
+    let leadCount = 0;
+    for (const p of tip) {
+      if (best - (p.x * axis.x + p.y * axis.y) > 0.5) continue;
+      leadSumX += p.x;
+      leadSumY += p.y;
+      leadCount++;
+    }
+    const leadX = leadCount ? leadSumX / leadCount - tipMiddle.x : 0;
+    const leadY = leadCount ? leadSumY / leadCount - tipMiddle.y : 0;
+
     const previous = containedTips.get(pair);
-    contained = sweepContain(previous || depthClamped, depthClamped, walls, Math.max(1, tipSpread));
+    const target = { x: depthClamped.x + leadX, y: depthClamped.y + leadY };
+    let held = sweepContain(previous || target, target, walls);
+
+    // CONTAINMENT HOLDS BACK; IT NEVER PULLS FORWARD
+    //
+    // The sweep starts from where the tip was last frame, so a withdrawal
+    // whose path clips a wall could stop short and leave the tip deeper
+    // than the finger is now asking for. Drawn, that is a piercer sliding
+    // INTO the flesh on its own -- the needle appearing to be sucked in,
+    // or to stick when pulled. Nothing here is allowed to do that: whatever
+    // the walls say sideways, the along-axis component can only ever lag
+    // the drag, never lead it.
+    const ahead = (held.x - target.x) * axis.x + (held.y - target.y) * axis.y;
+    if (ahead > 0) {
+      held = { x: held.x - axis.x * ahead, y: held.y - axis.y * ahead };
+    }
+
+    contained = { x: held.x - leadX, y: held.y - leadY };
+    containedTips.set(pair, held);
   }
 
   let inPath = rawInPath;
@@ -485,8 +571,7 @@ export function contactOf(piercer, interactive, transforms) {
   }
 
   const engaged = depth > 0;
-  if (engaged && walls.length > 0) containedTips.set(pair, contained);
-  else containedTips.delete(pair);
+  if (!engaged || walls.length === 0) containedTips.delete(pair);
 
   return {
     piercer,
@@ -513,7 +598,7 @@ export function contactOf(piercer, interactive, transforms) {
   };
 }
 
-// Every measurable contact in the scene: each interactive layer paired
+// Every measurable contact in the scene: each pierced layer paired
 // with the one piercer that matters to it. One piece of flesh being pushed
 // by two needles at once is not a thing this models, so exactly one is
 // chosen, by a single rule: deepest wins, and when nothing is in yet (both
@@ -528,20 +613,20 @@ export function contactOf(piercer, interactive, transforms) {
 // as far as the springs are concerned.
 function activeContacts(transforms) {
   const piercers = partsStore.piercers;
-  const interactives = partsStore.interactives;
+  const piercedLayers = partsStore.piercedLayers;
   const contacts = [];
-  for (const interactive of interactives) {
-    meshFor(interactive);
+  for (const pierced of piercedLayers) {
+    meshFor(pierced);
     let best = null;
     for (const piercer of piercers) {
-      const contact = contactOf(piercer, interactive, transforms);
+      const contact = contactOf(piercer, pierced, transforms);
       if (!contact) continue;
       if (!best || contact.depth > best.depth ||
           (contact.depth === best.depth && contact.gap < best.gap)) {
         best = contact;
       }
     }
-    contacts.push({ interactive, contact: best });
+    contacts.push({ pierced, contact: best });
   }
   return contacts;
 }
@@ -566,7 +651,7 @@ function activeContacts(transforms) {
 // integrated from, in the same pass. There is one contact test, and both
 // effects read its answer, so the tip cannot sink a frame before the flesh
 // gives way or stay sunk a frame after it lets go.
-let occlusion = new Map(); // piercer id -> the interactive part to sink beneath
+let occlusion = new Map(); // piercer id -> the pierced part to sink beneath
 let hold = new Map();      // piercer id -> how far to hold its artwork back
 let occlusionStale = true;
 let readout = [];
@@ -574,12 +659,12 @@ let readout = [];
 function publishOcclusion(contacts) {
   const next = new Map();
   const held = new Map();
-  for (const { interactive, contact } of contacts) {
+  for (const { pierced, contact } of contacts) {
     if (!contact || !contact.engaged) continue;
     const current = next.get(contact.piercer.id);
     // Beneath the LOWEST layer it is inside, so every one of them draws
     // over it rather than just the topmost.
-    if (!current || interactive.zIndex < current.zIndex) next.set(contact.piercer.id, interactive);
+    if (!current || pierced.zIndex < current.zIndex) next.set(contact.piercer.id, pierced);
 
     // THE END POINT IS A LIMIT ON THE PIERCER, NOT JUST ON THE PUSH
     //
@@ -616,8 +701,8 @@ function publishOcclusion(contacts) {
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
   // second measurement that could disagree with it.
-  readout = contacts.map(({ interactive, contact }) => ({
-    interactive: interactive.name,
+  readout = contacts.map(({ pierced, contact }) => ({
+    pierced: pierced.name,
     piercer: contact ? contact.piercer.name : null,
     gap: contact ? contact.gap : null,
     inPath: Boolean(contact && contact.inPath),
@@ -946,10 +1031,10 @@ export function stepPierce(dt) {
   const h = clamped / steps;
 
   let active = false;
-  for (const { interactive, contact } of contacts) {
-    const mesh = interactive.mesh;
+  for (const { pierced, contact } of contacts) {
+    const mesh = pierced.mesh;
     const count = mesh.vertices.length;
-    const entry = pierceStateFor(interactive.id, count);
+    const entry = pierceStateFor(pierced.id, count);
 
     // With no contact -- or one still short of the Enter Point -- every
     // target is zero, which is precisely "spring back to where the bones
@@ -958,7 +1043,7 @@ export function stepPierce(dt) {
     const targetX = new Float64Array(count);
     const targetY = new Float64Array(count);
     if (contact && contact.engaged) {
-      writeTargets(mesh, interactive, contact, transforms, targetX, targetY);
+      writeTargets(mesh, pierced, contact, transforms, targetX, targetY);
     }
 
     for (let s = 0; s < steps; s++) {
@@ -992,8 +1077,8 @@ export function stepPierce(dt) {
 // at Enter, caps at End and returns to zero is the whole verification.
 export function pierceDebug() {
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  return activeContacts(transforms).map(({ interactive, contact }) => {
-    const entry = peekPierceState(interactive.id);
+  return activeContacts(transforms).map(({ pierced, contact }) => {
+    const entry = peekPierceState(pierced.id);
     let worst = 0;
     if (entry) {
       for (let i = 0; i < entry.count; i++) {
@@ -1001,7 +1086,7 @@ export function pierceDebug() {
       }
     }
     return {
-      interactive: interactive.name,
+      pierced: pierced.name,
       // The measured separation is reported whether or not it is close
       // enough to do anything; null means there was nothing to measure at
       // all (a region on either side still unpainted).

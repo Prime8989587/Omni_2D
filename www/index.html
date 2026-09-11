@@ -268,9 +268,19 @@
         <div class="segmented" role="group" aria-label="Pierce role">
           <button id="pierceRoleNoneBtn" class="segmented__btn" type="button" aria-pressed="true">None</button>
           <button id="pierceRolePiercerBtn" class="segmented__btn" type="button" aria-pressed="false">Piercer</button>
-          <button id="pierceRoleInteractiveBtn" class="segmented__btn" type="button" aria-pressed="false">Interactive</button>
+          <button id="pierceRolePiercedBtn" class="segmented__btn" type="button" aria-pressed="false">Pierced</button>
         </div>
         <p id="pierceRoleHint" class="joint-hint"></p>
+
+        <div id="piercePhysicsRow" hidden>
+          <div class="field-label">Physics direction</div>
+          <div class="segmented" role="group" aria-label="Which side's movement drives the contact">
+            <button id="piercePhysicsPiercerBtn" class="segmented__btn" type="button" aria-pressed="true">Piercer</button>
+            <button id="piercePhysicsPiercedBtn" class="segmented__btn" type="button" aria-pressed="false">Pierced</button>
+            <button id="piercePhysicsBothBtn" class="segmented__btn" type="button" aria-pressed="false">Both</button>
+          </div>
+          <p id="piercePhysicsHint" class="joint-hint"></p>
+        </div>
 
         <div id="pierceDepthSummary" hidden>
           <div class="field-label">Depths</div>
@@ -524,8 +534,8 @@
           <input id="piercePiercerOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
         </label>
         <label class="slider-field slider-field--wide">
-          <span>Interactive opacity <b id="pierceInteractiveOpacityValue">100%</b></span>
-          <input id="pierceInteractiveOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
+          <span>Pierced opacity <b id="piercePiercedOpacityValue">100%</b></span>
+          <input id="piercePiercedOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
         </label>
         <p class="px-pin__hint">Drag one finger to paint · two fingers pan · pinch to zoom</p>
       </footer>

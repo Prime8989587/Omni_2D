@@ -51,16 +51,37 @@
   --font-header: 'Press Start 2P', var(--font-fallback);
   --font-body: 'VT323', var(--font-fallback);
 
-  /* Three fixed sizes, one per tier -- not four "close enough" numbers
-     freely chosen per element. Press Start 2P is tuned to its native 8px
-     grid; VT323 is a normal outline font so "crisp" mostly means an
-     integer size with smoothing off, but staying to a small fixed set
-     keeps the whole app reading as one consistent scale rather than
-     dozens of one-off sizes that happen to be pixel fonts. */
-  --text-header: 16px;   /* Press Start 2P: modal titles only */
+  /* SIZES THAT LAND ON EACH FONT'S OWN GRID
+     Measured rather than assumed, by taking the gcd of every glyph
+     coordinate in each file:
+
+       Press Start 2P  gcd 125 of a 1000-unit em -> a true 1/8 em grid.
+                       Crisp at multiples of 8px, where one design pixel
+                       is a whole number of CSS pixels (2px at 16px).
+       VT323           gcd 1. It is NOT drawn on a pixel grid at all --
+                       a vector face STYLED like a terminal font, with
+                       outlines on arbitrary coordinates. No font size
+                       makes its strokes land whole, which is exactly why
+                       it reads as uneven next to the other one. What can
+                       be made exact is its CELL: every advance is 0.4em,
+                       so a size that is a multiple of 5 puts each glyph
+                       cell on a whole CSS pixel (8px at 20px, 6px at
+                       15px) and stops the glyph-to-glyph rhythm drifting.
+
+     So the Press Start 2P tier is a multiple of 8, and the VT323 tiers
+     are multiples of 5. Both scale 1:1 -- there is no transform, no
+     font-stretch and no separate horizontal scale anywhere in this file,
+     so nothing is compressed in one axis. */
+  --text-header: 16px;   /* Press Start 2P: modal titles only. 8 x 2 */
   --text-button: 20px;   /* VT323: primary buttons, list-row titles */
-  --text-body: 18px;     /* VT323: paragraph/dialog text, most labels */
-  --text-label: 16px;    /* VT323: small hints, tags, field labels */
+  --text-body: 20px;     /* VT323: paragraph/dialog text */
+  --text-label: 15px;    /* VT323: small hints, tags, field labels */
+
+  /* Tracking is in whole pixels for the same reason the sizes are on a
+     grid: an em-based value (0.05em of 15px is 0.75px) puts the second
+     glyph three quarters of a pixel along, the third one and a half, and
+     so on -- every glyph after the first landing somewhere different
+     within the pixel. One pixel is the smallest step that does not. */
 
   /* One shared corner cut, in two reaches: a stair-stepped notch instead
      of a smooth curve, applied to every bordered box in the app. Written
@@ -155,7 +176,7 @@ button, input, select {
   color: var(--color-accent);
   font-size: var(--text-label);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 1px;
 }
 
 .mode-label__dot {
@@ -183,7 +204,7 @@ button, input, select {
   color: var(--color-accent);
   opacity: 0.85;
   font-size: var(--text-label);
-  letter-spacing: 0.02em;
+  letter-spacing: 1px;
 }
 
 /* ---------- Canvas ---------- */
@@ -280,7 +301,7 @@ button, input, select {
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   font-size: var(--text-button);
-  letter-spacing: 0.02em;
+  letter-spacing: 1px;
   min-height: 48px;
   min-width: 48px;
   padding: 12px 20px;
@@ -485,7 +506,7 @@ button, input, select {
   color: var(--color-accent);
   font-size: var(--text-label);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 1px;
   cursor: pointer;
 }
 
@@ -651,7 +672,7 @@ button, input, select {
   color: var(--color-accent);
   font-size: var(--text-label);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 1px;
 }
 
 .slider-field--wide {
@@ -972,7 +993,7 @@ button, input, select {
   color: var(--color-accent);
   font-size: var(--text-label);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 1px;
 }
 
 .text-input {
@@ -1062,7 +1083,7 @@ button, input, select {
 
 .scene-part__tag {
   font-size: var(--text-label);
-  letter-spacing: 0.04em;
+  letter-spacing: 1px;
   opacity: 0.75;
 }
 
@@ -1309,7 +1330,7 @@ button, input, select {
 .move-pad__label {
   padding: 0 16px;
   font-size: var(--text-label);
-  letter-spacing: 0.03em;
+  letter-spacing: 1px;
   opacity: 0.85;
 }
 
@@ -1340,7 +1361,7 @@ button, input, select {
   border-bottom: 1px solid rgba(255, 46, 147, 0.35);
   color: var(--color-accent);
   font-size: var(--text-label);
-  letter-spacing: 0.08em;
+  letter-spacing: 1px;
   text-transform: uppercase;
   opacity: 0.65;
 }
