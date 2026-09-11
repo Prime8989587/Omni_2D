@@ -55,7 +55,8 @@ www/js/state.js         The app's state machine (home/rig/animating/recording) �
 www/js/scene.js         The canvas itself: its size in pixels (8–3072 per side) and presets
 www/js/view.js          The camera: zoom and pan between the pixel grid and the screen
 www/js/raster.js        Software rasterizer that draws (deformed) triangles straight onto
-                         the pixel grid one whole pixel at a time — no gaps, no blur
+                         the pixel grid one whole pixel at a time — no gaps, no blur,
+                         optionally masked to a subset of the source texels
 www/js/parts.js         The scene model: the Part object (whole-pixel position and scale,
                          plus its decoded pixels) and the store holding them
 www/js/bones.js         The skeleton: Bone objects, the parent/child tree, and the
@@ -78,7 +79,9 @@ www/js/poseTool.js      Free Move: the drag that moves the whole character, from
 www/js/pxpin.js         Px Pin: the pixel-pinning window — its own camera, the
                          paint strokes, and the brush-size menu
 www/js/pierce.js        Pierce: the contact measurement and the spring that pushes
-                         flesh aside — never a hole, only displaced vertices
+                         flesh aside — never a hole, only displaced vertices.
+                         Also publishes which tips are currently inside which
+                         flesh, so the renderer can draw them underneath it
 www/js/pierceState.js   The pierce springs' per-vertex state, in a module of its
                          own so pierce.js and mesh.js can both reach it
 www/js/pierceTool.js    The Pierce region painter: the tip and the pierceable
@@ -1652,6 +1655,101 @@ screen.
 pinned pixel on the interactive layer stays exactly where it was even at
 full depth, and the two features compose instead of fighting.
 
+### No skeleton required
+
+A displacement is *per vertex*, so an interactive layer needs a mesh to
+put one on. Layers used to get a mesh only by being bound to a skeleton in
+Bind mode — which meant that unless you had already rigged and bound the
+flesh, the whole feature silently did nothing. Nothing in the Pierce UI
+ever asked for a rig, and piercing has nothing to do with bones.
+
+It was silent, not broken-looking, which is the worst way for it to fail.
+Measured on a two-layer scene with both roles assigned and both regions
+painted: the contact read perfectly the whole way in — gap `31 → 7 → -1 →
+-7 → -13`, depth rising and capping at End, `engaged` true — while the
+displacement sat at **0.000 px at every depth**, because the layer never
+reached the solver at all.
+
+The solver now builds the mesh itself, the first time it looks at a
+pierceable layer. An unbound mesh has no bind pose and no weights, so
+skinning it is the identity: the layer renders exactly as the flat sprite
+did, and the pierce offsets are the only thing that ever moves it. Binding
+the layer later replaces the mesh as usual. Gaining one is invisible —
+every fixture colour renders at an identical pixel count before and after.
+
+**A second bug surfaced once the first was fixed.** A vertex sitting
+*exactly* on the tip has no outward direction of its own, so it borrows the
+piercer's heading — but the substitute was already a unit vector and was
+then normalized a second time by the epsilon standing in for the distance,
+multiplying the target by a million. One such vertex drove the layer's
+displacement to **1.3 × 10⁷ px** and took the spring with it. Direction and
+distance are now kept apart, and the borrowed heading is the piercer's real
+axis. The bound path never hit this because no vertex happened to land on
+the tip; the unbound mesh puts one there.
+
+### Going in, not lying on top
+
+A 2D stack does not imply depth. A piercer drawn above the flesh it has
+entered goes on looking like it is lying *on* the surface however far in
+the numbers say it is, because draw order is the only depth cue the scene
+bitmap has. So while a tip is actually in contact, it is drawn **beneath**
+the layer it has entered and the surface closes over it — the same
+information a 3D renderer would take from a depth buffer, taken from the
+one place this app actually knows it.
+
+Only the painted **tip** moves. The rest of the piercer — the shaft of a
+needle, the finger behind a nail — has not entered anything and stays
+exactly where it was in the stack, so the artwork reads as one object going
+in rather than the whole sprite ducking under. The split is by *texel*, not
+by geometry: both halves are drawn from the same vertices through the same
+triangles, differing only in which texels each pass may touch, so they
+cannot drift apart or open a seam between them.
+
+The switch is driven by `contact.engaged` — the very same reading the
+displacement is integrated from, published in the same pass. There is one
+contact test and both effects read its answer, so the tip cannot sink a
+frame before the flesh gives way or stay sunk a frame after it lets go. A
+piercer already below its target is left alone; there is nothing to fix.
+
+Making the renderer read that state meant it might need the measurement
+before the frame loop has taken its step, which profiling turned into a
+useful accident: the contact test was costing **3.1 ms** on a 160-texel tip
+against a 1024-texel area, every frame the loop was awake, and all of it
+was the fallback used when the piercer is *not* aimed at the flesh — a
+plain every-pair nearest-pixel search. It now culls each tip point against
+the flesh's bounding box first, which is exact (checked to the last bit
+against a brute-force search across 675 placements and rotations) and
+brings the same case to **0.48 ms**. A piercer actually aimed at flesh —
+the case that matters — measures in **0.005 ms**, so the renderer's extra
+look costs nothing worth counting.
+
+Measured at full depth: **648 tip pixels on screen out of contact, 0 in**,
+with the shaft unchanged at 2808 pixels either way, and the tip back to all
+648 one pixel outside the Enter Point.
+
+### Seeing the painted regions (a testing aid)
+
+Which pixels the app thinks are painted is invisible once the painter is
+closed, so *"nothing is happening"* and *"the regions are not where I think
+they are"* look identical. **Show painted regions on the canvas**, in the
+Pierce window, tints every painted tip pink and every pierceable area cyan
+— the painter's own two colours — directly on the artwork, and puts a live
+contact reading in the corner of the canvas:
+
+```
+P_needle -> P_flesh
+  gap -4.0px  enter 12  end 16
+  depth 16.0  AT END  tip sunk
+```
+
+The gap is reported whether or not it is close enough to do anything, which
+is the point: *"the tip is 14 px out and nothing is moving"* has to be
+distinguishable from a solver that is not running. The tint rides the
+layer's own triangles with the same texel mask as the artwork, so it
+follows every deformation exactly, and a sunk tip's tint is occluded
+exactly as the tip is. It is off by default, remembered across a reload,
+and switching it off restores the artwork to an identical pixel count.
+
 ### A one-time tip
 
 The first time a Pierce role is assigned, a dismissible note explains that
@@ -1660,7 +1758,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Three browser suites cover this, all passing:
+Four browser suites cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -1681,6 +1779,18 @@ Three browser suites cover this, all passing:
   moved 15.37 px, rendering at the identical row in contact and at rest;
   and the interactive layer's own spring bone still swinging 0.17 rad and
   settling while a contact is engaged.
+- **Visual** (26 checks) — the whole suite run on a scene with **no
+  skeleton in it at all**: the flesh moving `0.34 → 3.20 → 9.37 → 15.37` px
+  as the tip goes in, capped within 0.5 px of End from 0 to 40 px past it,
+  and never diverging; every fixture colour at an identical pixel count
+  before and after the layer gains a mesh; the tip at 648 rendered pixels
+  out of contact and **0** at full depth, with the shaft unchanged at 2808
+  either way and the flesh losing none of its own; the sink and the
+  displacement flipping on the same reading one pixel either side of Enter;
+  the overlay tinting the painted band to 0 remaining yellow pixels while
+  leaving the unpainted body and shaft untouched to the pixel, the readout
+  tracking `OUT → IN → AT END / tip sunk`, and switching it off restoring
+  the artwork exactly.
 
 ---
 

@@ -211,6 +211,27 @@ button, input, select {
   border-color: var(--color-accent);
 }
 
+/* The pierce contact readout. A testing aid, so it is deliberately plain
+   and deliberately out of the way: top-left, small, and never clickable,
+   so it cannot eat a drag meant for the artwork underneath it. */
+.pierce-probe {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  margin: 0;
+  padding: 4px 6px;
+  max-width: calc(100% - 12px);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre;
+  color: #b9f6ff;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(46, 230, 255, 0.5);
+  pointer-events: none;
+  z-index: 3;
+}
+
 .canvas-wrap.is-recording {
   border-color: var(--color-danger);
   /* box-shadow would be cut off at the clip-path boundary -- a glow drawn

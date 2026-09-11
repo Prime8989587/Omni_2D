@@ -27,6 +27,7 @@ import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
+import { pierceOverlayEnabled, setPierceOverlay } from './pierce.js';
 import * as psaver from './psaver.js';
 
 const TOAST_DURATION_MS = 4000;
@@ -136,7 +137,7 @@ function cacheElements() {
   for (const id of [
     'pierceModal', 'pierceLayerName', 'pierceRoleNoneBtn', 'pierceRolePiercerBtn',
     'pierceRoleInteractiveBtn', 'pierceRoleHint', 'pierceDepthSummary',
-    'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceRemoveBtn',
+    'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
     'pierceDepthLegend', 'pierceDepthOkBtn', 'pierceDepthCancelBtn',
@@ -1124,6 +1125,7 @@ function handleDuplicatePart() {
 // piercer -- only the user saying so here.
 
 const PIERCE_TIP_SEEN_KEY = 'omni2d.pierce.tipSeen';
+const PIERCE_OVERLAY_KEY = 'omni2d.pierce.overlay';
 
 let pierceModalPartId = null;
 // How the depth popup was opened, which decides what Cancel means:
@@ -1180,7 +1182,32 @@ function renderPierceModal() {
   els.piercePaintBtn.textContent = painted
     ? `Paint regions… (${painted} px marked)`
     : 'Paint regions…';
+  els.pierceOverlayBtn.setAttribute('aria-pressed', String(pierceOverlayEnabled()));
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;
+}
+
+// The overlay is a property of the whole scene, not of the layer whose
+// popup happens to be open -- it tints every painted region there is, so
+// that both halves of a pierce can be checked against each other at once.
+function togglePierceOverlay() {
+  setPierceOverlay(!pierceOverlayEnabled());
+  const on = pierceOverlayEnabled();
+  try {
+    window.localStorage.setItem(PIERCE_OVERLAY_KEY, on ? '1' : '0');
+  } catch { /* storage blocked: the toggle still works for this session */ }
+  renderPierceModal();
+  canvasEngine.requestRender();
+  showToast(on
+    ? 'Painted regions are tinted on the canvas — pink tip, cyan pierceable.'
+    : 'Region tinting is off.');
+}
+
+// Restored on launch so a testing session survives a reload, which is
+// exactly when the overlay is most wanted.
+function restorePierceOverlay() {
+  try {
+    setPierceOverlay(window.localStorage.getItem(PIERCE_OVERLAY_KEY) === '1');
+  } catch { /* no-op */ }
 }
 
 // Assigning PIERCER is not complete until its two depths exist, so the
@@ -2015,6 +2042,7 @@ function bindEvents() {
   els.pierceEditDepthsBtn.addEventListener('click', () => openPierceDepthModal('edit'));
   els.pierceRemoveBtn.addEventListener('click', () => removePierceRole(pierceModalPartId));
   els.piercePaintBtn.addEventListener('click', handleOpenPiercePainter);
+  els.pierceOverlayBtn.addEventListener('click', togglePierceOverlay);
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
   els.pierceEnterInput.addEventListener('input', renderPierceDepthBar);
   els.pierceEndInput.addEventListener('input', renderPierceDepthBar);
@@ -2124,6 +2152,7 @@ export function initUI() {
 
   initPxPin();
   initPierceTool();
+  restorePierceOverlay();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();
   loadRestorePointFromStorage();

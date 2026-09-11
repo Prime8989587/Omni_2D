@@ -10,7 +10,7 @@
 
 import { bonesStore } from './bones.js';
 import { partsStore } from './parts.js';
-import { stepPierce } from './pierce.js';
+import { stepPierce, markPierceStale } from './pierce.js';
 import { requestRender } from './canvas.js';
 
 const FALLBACK_DT = 1 / 60;
@@ -63,4 +63,12 @@ export function initPhysics() {
   // And any layer change may have moved a piercer, which is what starts
   // and ends contact. Same reasoning: the loop emits nothing itself.
   partsStore.subscribe(wakePhysics);
+
+  // The renderer reads the solver's contact state to decide whether a tip
+  // is drawn under the flesh. Marking it stale on the same changes that
+  // wake the loop means the very first frame after a drag re-measures
+  // rather than drawing one frame of the previous answer -- the loop's own
+  // step lands after the render in that frame, not before it.
+  bonesStore.subscribe(markPierceStale);
+  partsStore.subscribe(markPierceStale);
 }

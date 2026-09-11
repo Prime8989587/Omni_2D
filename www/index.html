@@ -40,6 +40,12 @@
         No rig loaded yet.<br />Tap Import to add character parts.
       </p>
       <!--
+        Live contact readout, shown only while the pierce region overlay is
+        on. Says what the solver is actually measuring, so "nothing is
+        happening" can be told apart from "nothing should be happening yet".
+      -->
+      <pre id="pierceProbe" class="pierce-probe" hidden></pre>
+      <!--
         FUTURE HOOK: bone/mesh/skeleton rendering, drag-handle overlays,
         and animation playback will draw onto #canvas via js/canvas.js.
         This screen intentionally shows a blank canvas for now.
@@ -273,6 +279,12 @@
         </div>
 
         <button id="piercePaintBtn" class="toggle-chip toggle-chip--wide" type="button">Paint regions…</button>
+        <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show painted regions on the canvas</button>
+        <p class="joint-hint">
+          A testing aid: tints every painted tip pink and every pierceable area
+          cyan, right on the artwork, and shows the live contact reading. Leave
+          it off for normal work.
+        </p>
         <button id="pierceRemoveBtn" class="btn btn--sm btn--danger px-pin-launch" type="button">Remove Pierce Role</button>
 
         <div class="modal__actions">

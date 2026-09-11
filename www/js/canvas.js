@@ -19,6 +19,10 @@ import { deformVerticesSnapped, partQuad } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
+import {
+  pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture, pierceOffsets,
+  pierceReadout,
+} from './pierce.js';
 
 const ACCENT = '#FF2E93';
 const SELECTION_OUTLINE_PX = 2;
@@ -46,6 +50,7 @@ const MESH_WIRE = 'rgba(255, 143, 196, 0.4)';
 const SNAP_CELL_FILL = 'rgba(255, 46, 147, 0.45)';
 
 let canvasEl = null;
+let probeEl = null;
 let ctx = null;
 let viewWidth = 0;
 let viewHeight = 0;
@@ -110,14 +115,51 @@ function unionBounds(a, b) {
 // the skinning; unbound ones are a plain quad. Either way the positions
 // are already whole grid coordinates.
 function partGeometry(part, boneTransforms) {
-  if (part.mesh && part.mesh.isBound && boneTransforms) {
-    return {
-      positions: deformVerticesSnapped(part.mesh, part, boneTransforms),
-      uvs: part.mesh.vertices,
-      triangles: part.mesh.triangles,
-    };
-  }
+  const through = (transforms) => ({
+    positions: deformVerticesSnapped(part.mesh, part, transforms),
+    uvs: part.mesh.vertices,
+    triangles: part.mesh.triangles,
+  });
+
+  if (part.mesh && part.mesh.isBound && boneTransforms) return through(boneTransforms);
+
+  // A pierceable layer deforms whether or not it was ever bound to a
+  // skeleton -- the solver gives it a mesh precisely so it can -- so it is
+  // drawn through that mesh too. Skinning with no transforms is the
+  // identity (every weight finds no bone and the vertex falls back to its
+  // rest position), which leaves the pierce offsets as the only thing
+  // moving it. An EMPTY set rather than the null above, because a layer
+  // bound to bones that have since been deleted still reports isBound and
+  // would otherwise read a bone out of null.
+  if (part.mesh && pierceOffsets(part)) return through(boneTransforms || {});
+
   return partQuad(part);
+}
+
+// The draw order, with any piercer currently inside a layer split in two:
+// its painted tip moved down beneath that layer, the rest of it left where
+// it was. Both halves keep the SAME geometry and differ only by which
+// texels they are allowed to touch, so the split cannot open a seam.
+function buildDrawList(boneTransforms) {
+  const entries = partsStore.partsBottomFirst
+    .filter((part) => part.visible)
+    .map((part) => {
+      const geometry = partGeometry(part, boneTransforms);
+      return { part, geometry, mask: null, bounds: boundsOf(geometry.positions) };
+    });
+
+  for (const [piercerId, interactive] of pierceOcclusion()) {
+    const from = entries.findIndex((entry) => entry.part.id === piercerId);
+    const to = entries.findIndex((entry) => entry.part.id === interactive.id);
+    // Already below the flesh: the stack is doing the job unaided, and
+    // moving anything would be a change with nothing to show for it.
+    if (from < 0 || to < 0 || from < to) continue;
+    const masks = pierceMasks(entries[from].part);
+    if (!masks) continue;
+    entries[from].mask = masks.rest;
+    entries.splice(to, 0, { ...entries[from], mask: masks.region });
+  }
+  return entries;
 }
 
 // Rasterizes every part into the scene bitmap, bottom-first so a higher
@@ -130,10 +172,7 @@ function renderScene(boneTransforms) {
   // Hidden layers keep all their data but are not drawn. Their previous
   // footprint is still cleared, because last frame's bounds are carried in
   // `dirty` and unioned into the region wiped below.
-  const drawList = partsStore.partsBottomFirst.filter((part) => part.visible).map((part) => {
-    const geometry = partGeometry(part, boneTransforms);
-    return { part, geometry, bounds: boundsOf(geometry.positions) };
-  });
+  const drawList = buildDrawList(boneTransforms);
 
   let touched = dirty;
   for (const entry of drawList) touched = unionBounds(touched, entry.bounds);
@@ -141,18 +180,26 @@ function renderScene(boneTransforms) {
 
   clearRegion(buffer, sceneWidth, sceneHeight, touched.x0, touched.y0, touched.x1, touched.y1);
 
-  for (const { part, geometry } of drawList) {
+  const overlay = pierceOverlayEnabled();
+  for (const { part, geometry, mask } of drawList) {
     const { positions, uvs, triangles } = geometry;
-    for (let i = 0; i < triangles.length; i += 3) {
-      const a = triangles[i];
-      const b = triangles[i + 1];
-      const c = triangles[i + 2];
-      rasterizeTriangle(
-        buffer, sceneWidth, sceneHeight,
-        part.pixels, part.naturalWidth, part.naturalHeight,
-        positions[a], positions[b], positions[c],
-        uvs[a], uvs[b], uvs[c]
-      );
+    // The region tint rides the same triangles and the same mask, drawn
+    // straight after the artwork it belongs to -- so a sunk tip's overlay
+    // is occluded exactly as the tip is, and the overlay never claims a
+    // pixel the artwork did not.
+    const tint = overlay && part.hasPierceRole ? pierceOverlayTexture(part) : null;
+    for (const source of tint ? [part.pixels, tint] : [part.pixels]) {
+      for (let i = 0; i < triangles.length; i += 3) {
+        const a = triangles[i];
+        const b = triangles[i + 1];
+        const c = triangles[i + 2];
+        rasterizeTriangle(
+          buffer, sceneWidth, sceneHeight,
+          source, part.naturalWidth, part.naturalHeight,
+          positions[a], positions[b], positions[c],
+          uvs[a], uvs[b], uvs[c], mask
+        );
+      }
     }
   }
 
@@ -431,7 +478,32 @@ function render() {
   const selected = appState.state === AppState.HOME ? partsStore.selected : null;
   if (selected) drawPartOutline(selected);
 
+  drawPierceProbe();
+
   // FUTURE HOOK: animation playback draws here.
+}
+
+// The contact readout, in the same frame as the pixels it describes.
+// Reports the gap whether or not it is close enough to do anything -- the
+// case worth being able to check is "the tip is 14 px out and nothing is
+// moving", which needs the 14 on screen to be distinguishable from a
+// solver that is not running at all.
+function drawPierceProbe() {
+  if (!probeEl) return;
+  if (!pierceOverlayEnabled()) {
+    probeEl.hidden = true;
+    return;
+  }
+  const lines = pierceReadout().map((r) => {
+    if (!r.piercer) return `${r.interactive}: no piercer with a painted tip`;
+    const gap = r.inPath ? `${r.gap.toFixed(1)}px` : `${r.gap.toFixed(1)}px off-axis`;
+    const zone = r.engaged ? (r.depth >= r.end ? 'AT END' : 'IN') : 'OUT';
+    return `${r.piercer} -> ${r.interactive}\n` +
+      `  gap ${gap}  enter ${r.enter}  end ${r.end}\n` +
+      `  depth ${r.depth.toFixed(1)}  ${zone}${r.sunk ? '  tip sunk' : ''}`;
+  });
+  probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no interactive layer';
+  probeEl.hidden = false;
 }
 
 export function requestRender() {
@@ -462,6 +534,7 @@ function resize() {
 
 export function initCanvas(canvas) {
   canvasEl = canvas;
+  probeEl = document.getElementById('pierceProbe');
   ctx = canvasEl.getContext('2d');
 
   // Watch the container, not just the window: the canvas also changes size

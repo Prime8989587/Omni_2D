@@ -70,7 +70,7 @@
 
 import { partsStore } from './parts.js';
 import { bonesStore, DEFAULT_STIFFNESS, DEFAULT_DAMPING } from './bones.js';
-import { localToWorld, pinCarriageOffset, pinInfluence } from './mesh.js';
+import { localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
@@ -92,9 +92,30 @@ const MAX_SUBSTEP = 1 / 120;
 // same reason pins are -- a tip that jittered with its own spring would
 // make the contact point jitter with it, and the depth reading along with
 // it.
+//
+// Mapping every painted texel through the layer's transform is the single
+// most expensive thing this file does -- a thousand painted pixels is a
+// thousand rotations -- and it is asked for twice in a frame where the
+// renderer has to re-measure before the frame loop has stepped. Measured
+// at 3.1 ms a call for a 160-texel tip against a 1024-texel area, which is
+// most of a frame's budget on a phone and was being paid every frame even
+// when nothing had moved.
+//
+// So the answer is kept until something that could change it changes: the
+// layer's own placement, what is painted on it, or where its bones are
+// carrying it. Everything the result depends on is in that key, which is
+// why it is safe to trust -- and why the carriage, the one part of it that
+// is not a plain field, is still computed on every call.
+const pointsCache = new Map();
+
 function regionPoints(part, transforms) {
   if (!part || part.pierceRegion.size === 0) return [];
   const carriage = pinCarriageOffset(part, transforms);
+  const key = `${part.x},${part.y},${part.rotation},${part.scale},` +
+    `${part.pierceRegionVersion},${part.pierceRegion.size},${carriage.x},${carriage.y}`;
+  const cached = pointsCache.get(part.id);
+  if (cached && cached.key === key) return cached.points;
+
   const halfW = part.naturalWidth / 2;
   const halfH = part.naturalHeight / 2;
   const points = [];
@@ -104,6 +125,7 @@ function regionPoints(part, transforms) {
     const world = localToWorld(part, { x: u + 0.5 - halfW, y: v + 0.5 - halfH });
     points.push({ x: world.x + carriage.x, y: world.y + carriage.y });
   }
+  pointsCache.set(part.id, { key, points });
   return points;
 }
 
@@ -156,9 +178,31 @@ function pierceAxis(piercer, tipMiddle, transforms) {
 // the header), but it is the honest answer to "how far apart are these
 // two regions" when the piercer is not pointed at the flesh at all, and
 // that is the number worth reporting in that case.
+//
+// Exact, but it does not look at every pair unless it has to. The naive
+// double loop is O(tip x flesh) -- 3.1 ms for a 160-texel tip against a
+// 1024-texel area, paid every frame the loop is awake -- and this is the
+// case where the piercer is NOT aimed at the flesh, which is most of the
+// time. A tip point whose distance to the flesh's bounding box already
+// exceeds the best pair found so far cannot beat it, so it is skipped
+// whole. The answer is identical; only the work is smaller.
 function nearestSeparation(tip, flesh) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const b of flesh) {
+    if (b.x < x0) x0 = b.x;
+    if (b.y < y0) y0 = b.y;
+    if (b.x > x1) x1 = b.x;
+    if (b.y > y1) y1 = b.y;
+  }
+
   let nearest = Infinity;
   for (const a of tip) {
+    const dx = Math.max(x0 - a.x, 0, a.x - x1);
+    const dy = Math.max(y0 - a.y, 0, a.y - y1);
+    if (Math.hypot(dx, dy) >= nearest) continue;
     for (const b of flesh) {
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (d < nearest) nearest = d;
@@ -192,6 +236,27 @@ function axialGap(tip, flesh, tipMiddle, tipSpread, axis) {
   return surface - lead;
 }
 
+// A DISPLACEMENT NEEDS SOMEWHERE TO LIVE
+//
+// The offsets this solver produces are PER VERTEX, so an interactive layer
+// with no mesh has nowhere to put them. Until now such a layer was simply
+// skipped, which meant the whole feature quietly did nothing unless the
+// user had first rigged a skeleton and bound the flesh to it in Bind mode
+// -- a prerequisite nothing in the Pierce UI ever mentions, and one that
+// has nothing to do with piercing. Measured on a two-layer scene with
+// roles assigned and regions painted: the contact read perfectly (gap 31
+// down to -13, depth capped at End) while the displacement stayed at
+// 0.000 px at every depth, because the layer never reached the solver.
+//
+// So the mesh is built here, on demand. An unbound mesh has no bind pose
+// and no weights, so skinning it is the identity -- it renders exactly as
+// the flat sprite did -- and it exists purely as the surface a pierce can
+// push on. Binding the layer later replaces it as usual.
+function meshFor(part) {
+  if (!part.mesh) part.mesh = generateMesh(part, defaultDensity(part));
+  return part.mesh;
+}
+
 export function contactOf(piercer, interactive, transforms) {
   if (!piercer || !interactive) return null;
   const tip = regionPoints(piercer, transforms);
@@ -221,6 +286,8 @@ export function contactOf(piercer, interactive, transforms) {
   // than End look identical to End, which is what a hard limit means.
   const overshoot = inPath ? Math.max(0, (enter - end) - gap) : 0;
   return {
+    piercer,
+    axis,
     tip: overshoot > 0
       ? { x: tipMiddle.x - axis.x * overshoot, y: tipMiddle.y - axis.y * overshoot }
       : tipMiddle,
@@ -254,7 +321,7 @@ function activeContacts(transforms) {
   const interactives = partsStore.interactives;
   const contacts = [];
   for (const interactive of interactives) {
-    if (!interactive.mesh) continue;
+    meshFor(interactive);
     let best = null;
     for (const piercer of piercers) {
       const contact = contactOf(piercer, interactive, transforms);
@@ -267,6 +334,163 @@ function activeContacts(transforms) {
     contacts.push({ interactive, contact: best });
   }
   return contacts;
+}
+
+// ---------------------------------------------------------------------------
+// What the renderer needs: who is inside whom, and which texels are which
+
+// A 2D stack does not imply depth. A piercer drawn above the flesh it has
+// entered goes on looking like it is lying ON the surface however far in
+// the numbers say it is, because painter's-algorithm order is the only
+// depth cue the scene bitmap has. So while a tip is actually in contact,
+// it is drawn BENEATH the layer it has entered and the surface closes over
+// it -- which is the same information a 3D renderer would get from a depth
+// buffer, taken from the one place this app actually knows it.
+//
+// Only the painted TIP moves. The rest of the piercer -- the shaft of a
+// needle, the finger behind a nail -- has not entered anything and stays
+// exactly where it was in the stack, so the artwork reads as one object
+// going in rather than the whole sprite ducking under.
+//
+// This map is written from the SAME contact objects the displacement is
+// integrated from, in the same pass. There is one contact test, and both
+// effects read its answer, so the tip cannot sink a frame before the flesh
+// gives way or stay sunk a frame after it lets go.
+let occlusion = new Map(); // piercer id -> the interactive part to sink beneath
+let occlusionStale = true;
+let readout = [];
+
+function publishOcclusion(contacts) {
+  const next = new Map();
+  for (const { interactive, contact } of contacts) {
+    if (!contact || !contact.engaged) continue;
+    const current = next.get(contact.piercer.id);
+    // Beneath the LOWEST layer it is inside, so every one of them draws
+    // over it rather than just the topmost.
+    if (!current || interactive.zIndex < current.zIndex) next.set(contact.piercer.id, interactive);
+  }
+  occlusion = next;
+  // Taken from the same contacts in the same pass, so the on-screen
+  // numbers are the ones the frame was actually drawn from rather than a
+  // second measurement that could disagree with it.
+  readout = contacts.map(({ interactive, contact }) => ({
+    interactive: interactive.name,
+    piercer: contact ? contact.piercer.name : null,
+    gap: contact ? contact.gap : null,
+    inPath: Boolean(contact && contact.inPath),
+    enter: contact ? contact.piercer.pierceEnter : null,
+    end: contact ? contact.end : null,
+    depth: contact ? contact.depth : 0,
+    engaged: Boolean(contact && contact.engaged),
+    sunk: Boolean(contact && next.has(contact.piercer.id)),
+  }));
+  occlusionStale = false;
+}
+
+// What the solver currently reads, for the on-screen probe. Goes through
+// pierceOcclusion() so a stale answer is re-measured first.
+export function pierceReadout() {
+  pierceOcclusion();
+  return readout;
+}
+
+// Anything that can move a piercer or a layer invalidates this. The frame
+// loop republishes on every step it takes, so while something is moving
+// the answer is always this frame's; when the loop is asleep nothing is
+// moving and the last answer still stands. This flag covers the gap
+// between the two -- the first frame after a drag, where the renderer runs
+// before the loop has stepped.
+export function markPierceStale() {
+  occlusionStale = true;
+}
+
+export function pierceOcclusion() {
+  if (occlusionStale) {
+    const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
+    publishOcclusion(partsStore.hasPierce ? activeContacts(transforms) : []);
+  }
+  return occlusion;
+}
+
+// One byte per source texel, splitting a layer's artwork into its painted
+// region and everything else. Cached against the region version, so
+// painting rebuilds them and a frame never does.
+const maskCache = new Map();
+
+export function pierceMasks(part) {
+  if (!part || part.pierceRegion.size === 0) return null;
+  const size = part.naturalWidth * part.naturalHeight;
+  const version = part.pierceRegionVersion || 0;
+  const cached = maskCache.get(part.id);
+  if (cached && cached.version === version && cached.region.length === size) return cached;
+
+  const region = new Uint8Array(size);
+  const rest = new Uint8Array(size).fill(1);
+  for (const index of part.pierceRegion) {
+    if (index < 0 || index >= size) continue;
+    region[index] = 1;
+    rest[index] = 0;
+  }
+  const entry = { version, region, rest };
+  maskCache.set(part.id, entry);
+  return entry;
+}
+
+// ---------------------------------------------------------------------------
+// The region overlay: a testing aid, off by default
+
+// Which pixels the app thinks are painted is invisible once the painter is
+// closed, so "nothing is happening" and "the regions are not where I think
+// they are" look identical. This draws them back onto the artwork, in the
+// painter's own two colours, through the layer's own geometry -- so it
+// follows every deformation exactly and cannot drift out of step with what
+// it is reporting on.
+//
+// The colours are the painter's own, laid on harder than it lays them: the
+// painter can dim the artwork underneath with its opacity sliders, and
+// here the artwork is at full strength. So the hue still reads as pink or cyan over
+// bright pixel art instead of washing out to a pale tint of whatever is
+// beneath it. Opaque enough to identify, sheer enough to still see the
+// artwork it is describing.
+const OVERLAY_TIP = [255, 46, 147, 185];
+const OVERLAY_AREA = [46, 230, 255, 185];
+
+let overlayOn = false;
+const overlayCache = new Map();
+
+export function pierceOverlayEnabled() {
+  return overlayOn;
+}
+
+export function setPierceOverlay(on) {
+  overlayOn = Boolean(on);
+}
+
+// A texture the size of the layer's artwork: the region's colour where the
+// user painted, fully transparent everywhere else. Drawn over the layer
+// through the same triangles with the same mask, so it lands on exactly
+// the texels it is describing.
+export function pierceOverlayTexture(part) {
+  if (!part || part.pierceRegion.size === 0) return null;
+  const size = part.naturalWidth * part.naturalHeight;
+  const version = part.pierceRegionVersion || 0;
+  const cached = overlayCache.get(part.id);
+  if (cached && cached.version === version && cached.role === part.pierceRole && cached.pixels.length === size * 4) {
+    return cached.pixels;
+  }
+
+  const [r, g, b, a] = part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA;
+  const pixels = new Uint8ClampedArray(size * 4);
+  for (const index of part.pierceRegion) {
+    if (index < 0 || index >= size) continue;
+    const o = index * 4;
+    pixels[o] = r;
+    pixels[o + 1] = g;
+    pixels[o + 2] = b;
+    pixels[o + 3] = a;
+  }
+  overlayCache.set(part.id, { version, role: part.pierceRole, pixels });
+  return pixels;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,24 +587,34 @@ function writeTargets(mesh, part, contact, transforms, targetX, targetY) {
     const x = rest.x + carriage.x;
     const y = rest.y + carriage.y;
 
-    let dx = x - contact.tip.x;
-    let dy = y - contact.tip.y;
-    let distance = Math.hypot(dx, dy);
+    const dx = x - contact.tip.x;
+    const dy = y - contact.tip.y;
+    const distance = Math.hypot(dx, dy);
     if (distance >= reach) continue;
-    if (distance < 1e-6) {
-      // A vertex sitting exactly on the tip has no outward direction of
-      // its own; push it along the tip's own travel instead of dividing
-      // by zero.
-      dx = 0;
-      dy = -1;
-      distance = 1e-6;
+
+    // Direction and distance are kept apart on purpose. A vertex sitting
+    // exactly on the tip has no outward direction of its own, so it
+    // borrows the piercer's own heading -- but the substitute is ALREADY a
+    // unit vector, and normalizing it a second time by the epsilon that
+    // stood in for the distance is what turns "no direction" into a target
+    // a million times too long. That is not a rounding error: measured on
+    // a needle one pixel into flesh, a single such vertex drove the whole
+    // layer's displacement to 1.3e7 px and took the spring with it.
+    let dirX = 0;
+    let dirY = -1;
+    if (distance >= 1e-6) {
+      dirX = dx / distance;
+      dirY = dy / distance;
+    } else if (contact.axis) {
+      dirX = contact.axis.x;
+      dirY = contact.axis.y;
     }
 
     const near = 1 - distance / reach;
     const proximity = near * near * (3 - 2 * near); // smoothstep, same as the fields above
     const push = contact.end * contact.t * proximity * region * (1 - pinned);
-    targetX[i] = (dx / distance) * push;
-    targetY[i] = (dy / distance) * push;
+    targetX[i] = dirX * push;
+    targetY[i] = dirY * push;
   }
 }
 
@@ -392,10 +626,17 @@ function writeTargets(mesh, part, contact, transforms, targetX, targetY) {
 // may sleep -- including the whole spring-back after the piercer leaves,
 // which is motion nobody is driving any more.
 export function stepPierce(dt) {
-  if (!partsStore.hasPierce) return false;
+  if (!partsStore.hasPierce) {
+    publishOcclusion([]);
+    return false;
+  }
 
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
   const contacts = activeContacts(transforms);
+  // Published on every path, including the ones that return early: an
+  // empty answer is still this frame's answer, and a stale one would leave
+  // a tip sunk under flesh it is no longer touching.
+  publishOcclusion(contacts);
   if (contacts.length === 0) return false;
 
   const clamped = Math.min(Math.max(dt, 0), MAX_FRAME_DT);

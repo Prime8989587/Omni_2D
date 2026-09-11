@@ -29,10 +29,18 @@ function edge(ax, ay, bx, by, px, py) {
 // targetHeight). p0..p2 are the triangle's corners in scene pixels --
 // callers snap them to integers first. uv0..uv2 are the matching source
 // texel coordinates in `source` (RGBA, sourceWidth x sourceHeight).
+//
+// `mask`, when given, is one byte per source texel: a zero there is
+// treated exactly like a fully transparent texel. It exists so one layer
+// can be drawn in two passes at two different depths -- see canvas.js,
+// where a piercer's painted tip is drawn underneath the flesh it has
+// entered while the rest of it stays on top. Splitting by texel rather
+// than by geometry keeps both passes on the SAME vertices, so the two
+// halves cannot drift apart or leave a seam between them.
 export function rasterizeTriangle(
   target, targetWidth, targetHeight,
   source, sourceWidth, sourceHeight,
-  p0, p1, p2, uv0, uv1, uv2
+  p0, p1, p2, uv0, uv1, uv2, mask = null
 ) {
   let area = edge(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
   if (area === 0) return; // degenerate: no pixels have their centre inside
@@ -72,7 +80,9 @@ export function rasterizeTriangle(
       // Nearest neighbour: the single texel whose cell contains (u, v).
       const texelX = Math.min(maxTexelX, Math.max(0, Math.floor(u)));
       const texelY = Math.min(maxTexelY, Math.max(0, Math.floor(v)));
-      const s = (texelY * sourceWidth + texelX) * 4;
+      const texel = texelY * sourceWidth + texelX;
+      if (mask && mask[texel] === 0) continue;
+      const s = texel * 4;
       const alpha = source[s + 3];
       if (alpha === 0) continue;
 
