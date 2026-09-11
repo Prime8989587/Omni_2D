@@ -47,7 +47,10 @@ a real, installable Android APK.
 
 ```
 www/index.html          App shell markup (screens, buttons, panels, export modal)
-www/css/style.css       The black/pink theme, layout, and button states
+www/css/style.css       The dark plum/pink pixel-art theme: fonts, palette, pixel-stepped
+                         borders, layout and button states
+www/fonts/               The two vendored pixel fonts (OFL-licensed, no CDN dependency)
+www/icons/               Custom pixel-art icons standing in for the app's former emoji
 www/js/state.js         The app's state machine (home/rig/animating/recording) — no DOM
 www/js/scene.js         The canvas itself: its size in pixels (8–3072 per side) and presets
 www/js/view.js          The camera: zoom and pan between the pixel grid and the screen
@@ -1958,6 +1961,171 @@ Stop → (export modal appears) → Save as GIF → back in Animate mode →
 cancel straight back to Home, and disabled buttons (**Stop** on the
 Animating screen, **Start** on the Recording screen) should be visibly
 greyed out and not respond to taps.
+
+---
+
+## Visual identity: pixel fonts, pixel icons, pixel borders, a layered palette
+
+A polish pass across the whole app's chrome — not a rendering or logic
+change. Nothing here touches a bone, a mesh, a pixel of imported artwork,
+or any data structure; it only restyles the buttons, panels, dialogs and
+text drawn around them.
+
+### Pixel fonts, and why there are two of them
+
+Every piece of UI text now renders in a genuine pixel font instead of the
+system sans-serif — buttons, headers, dialogs, the Scene Parts and
+Skeleton lists, hints, everything. Two fonts, though, not one, both
+vendored locally as `.woff2` files in `www/fonts/` (OFL-licensed, no CDN
+— this app has to work with no network at all):
+
+- **Press Start 2P** — a true 8×8-grid arcade font, used ONLY for modal
+  titles (`.modal__title`, e.g. "Save Project", "Restore unsaved work?").
+  Its glyphs each advance a full 1em, so a sentence set in it is roughly
+  2.5× wider than the same sentence in an ordinary font — fine for a
+  handful of words, but "Restore unsaved work?" at a readable size would
+  not fit a phone screen if it were used everywhere.
+- **VT323** — also genuinely pixel-drawn, but a normal ~0.4em advance per
+  glyph, the same ballpark as an ordinary condensed font. Used for
+  everything else: every button, every list row, every hint and every
+  paragraph of dialog text. It is a fixed-width terminal font, which is
+  also why it now does double duty as the PSaver export-path readout that
+  used to sit in a separate system-monospace face — one pixel-font system
+  instead of two unrelated ones.
+
+Three fixed sizes, not text freely scaled to whatever fit each element
+before: **16px** (Press Start 2P, headers only), **20px** (VT323, buttons
+and primary list-row titles), **18px** (VT323, paragraph/dialog text and
+most labels) — plus a **16px** VT323 tier reused for the smallest hints
+and tags. Pixel fonts drawn as vector outlines only look genuinely crisp
+with smoothing switched off, so `-webkit-font-smoothing: none` and
+`font-smooth: never` are set globally, and `font-synthesis: none`
+stops the browser from fake-bolding either face (neither ships a bold
+weight — a synthetic one would smear the outline, undoing the crispness).
+
+**Icon-only glyphs are the deliberate exception.** Neither font contains
+the arrows and dingbats used as compact icon buttons throughout the
+app — fit `⤢`, undo/redo `↺ ↻`, nudge arrows, chevrons, the rotating
+flower mark, the move-pad's `✥`. Rather than let each one silently fall
+back to whatever font the browser picks per missing glyph, `.btn--icon`,
+`.btn--nudge`, `.row-btn`, `.scene-panel__chevron`, `.move-pad__glyph` and
+the flower marks explicitly keep the original system font stack. They
+were plain, colourless glyph icons before this pass and still are —
+nothing about them needed to become "pixel text".
+
+### Custom pixel-art icons, replacing every actual emoji
+
+Before touching anything, every character in the app that is a genuine
+colour emoji — a pictograph the OS renders from its own emoji font,
+immune to CSS `color` — was inventoried. There were exactly **seven**,
+all in the layer-management list and the Px Pin tool:
+
+| Emoji | Meant | Where |
+|---|---|---|
+| ✏️ | Rename | Layer row's "⋮" menu |
+| 👁 | Show (visible) | Layer row's "⋮" menu, bone list |
+| 🚫 | Hide (hidden) | Layer row's "⋮" menu, bone list |
+| 🔒 | Locked | Layer row's "⋮" menu |
+| 🔓 | Unlocked | Layer row's "⋮" menu |
+| 🗑 | Delete project | Open Project list |
+| 📌 | Pin tool | Px Pin's tool picker |
+
+All seven are now custom-drawn 16×16 pixel-art PNGs in `www/icons/`,
+rendered through `image-rendering: pixelated` — the exact nearest-neighbour
+rule already used for imported character art, so an icon and a piece of
+actual artwork are drawn by the same rule. `appendGlyph()` in `ui.js` is
+the one place that knows the mapping; every call site that used to write
+an emoji character now goes through it, so a button ends up with a small
+`<img class="pixel-icon">` for these seven and plain text for everything
+else. **Nothing else was touched.** The app's other icon-like characters
+(`✕ ⋮ ▲ ▼ ⌄ ⌫ ⇄ ↺ ↻ ⤢ ✿`, the mirror toggle, the eraser tool, the move-pad
+mark) are ordinary Unicode symbols, not emoji — they already rendered as
+flat, colourless glyphs before this pass, so there was nothing to replace
+there, and no new icon was invented that was not already present.
+
+### Pixel-stepped borders, everywhere a box has one
+
+Every bordered box in the app — buttons, list rows, panels, dropdowns,
+dialogs, the layer and Px Pin brush-size popovers, the canvas viewport
+itself — used to have a smoothly rounded corner (`border-radius`). All of
+them now cut a hard, stair-stepped notch instead, via `clip-path`, the
+same shape at two sizes:
+
+```
+--pixel-clip     a 2-step, 4px-reach notch: buttons, inputs, list rows,
+                 chips, small popovers
+--pixel-clip-lg  a 2-step, 6px-reach notch: modals, the app menu, the
+                 layer/Px Pin popovers, the canvas viewport, the move pad
+```
+
+Both are declared once as CSS custom properties and referenced by every
+bordered element, so a compact 38px icon button and a 360px-wide modal
+cut their corners with the exact same motif — `clip-path`'s
+`calc(100% - Npx)` points work at any box size, so one definition serves
+both without per-element tuning. The treatment applies uniformly
+regardless of border colour: pink accent borders and the app's other
+(red, not literally orange — see below) destructive/cancel borders get
+identical stepped corners.
+
+One real interaction this surfaced: `clip-path` clips a box's `box-shadow`
+along with everything else, since a shadow drawn outside the clipped
+region is cut off with it. Every soft shadow or focus glow in the app
+(the modal lift, the kebab-popover glow, the recording-mode ring, the
+text-input focus glow) is now `filter: drop-shadow(...)` instead, which is
+computed from the element's actual rendered — already pixel-clipped —
+shape rather than its rectangular geometry, so the glow follows the
+stepped outline instead of fighting it.
+
+*A note on "orange":* the app has no separate orange accent. Its two
+accent colours are the pink `--color-accent` and a system red
+`--color-danger` (`#F44336`), used identically for every destructive or
+cancel action (Discard, the recovery dialog's Discard button, Delete). The
+pixel-border treatment applies the same way to both; only the pink/red
+distinction the app already had is preserved.
+
+### The rotating flower
+
+The small pixel-flower mark (✿) on primary buttons and dialog CTAs now
+rotates continuously — one slow 360° turn every 10 seconds, linear, so it
+reads as gentle ambient motion rather than a spinner. It is one CSS
+keyframe animation shared by every instance: the two flowers glued to
+`.btn--flourish` buttons via `::before`/`::after` and the four explicit
+corner flowers on the Animate button. Anywhere a flourish already
+appeared — which includes every flourish-bearing dialog CTA (Restore,
+Save, Export, Apply, Open...) — it now turns; none were added where they
+were not already present. `prefers-reduced-motion: reduce` turns the
+animation off for anyone who has asked their device for less motion.
+
+### A layered dark palette, not flat black
+
+The old background was pure `#000000`. It is now:
+
+```
+--color-bg:      #181117   base background
+--color-surface: #2A1E28   elevated surface (buttons, panels, dialogs, popovers)
+```
+
+Both are a very dark charcoal with a warm plum undertone — chosen with
+red ≥ blue in the RGB values specifically so the background reads as
+related to the pink accent rather than neutral or blue-leaning. (Checked,
+not eyeballed: `--color-bg` keeps an 18.6:1 contrast ratio against white
+text and 5.4:1 against the pink accent, both comfortably past WCAG AA.)
+
+`--color-surface` is one deliberate step lighter, same family, and is
+where every raised UI surface now renders instead of the base colour:
+button fills, the Scene Parts and Skeleton list rows, the app menu and
+every kebab-style popover, modal dialogs, text inputs, toasts. The
+canvas viewport and the full-bleed page background are the two things
+that stay at base `--color-bg` — they are the "floor" everything else
+sits on, not a raised surface themselves. Kebab-style popovers (the app
+menu, a layer row's "⋮" panel, the Px Pin brush menu) and modal dialogs
+additionally carry a faint `filter: drop-shadow` glow underneath them, to
+read as sitting slightly off the surface below rather than flush with it
+— subtle by design, not a heavy card shadow.
+
+The pink accent (`--color-accent`) and the red danger colour
+(`--color-danger`) are unchanged in hue throughout; only the background
+and surface colours, and the border shape, moved.
 
 ---
 

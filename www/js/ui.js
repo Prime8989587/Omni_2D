@@ -28,6 +28,39 @@ const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
 const NUDGE_STEP_RADIANS = (2 * Math.PI) / 180;
 
+// Visual identity pass: every TRUE emoji the app used (colour pictographs
+// the OS renders from its own emoji font, immune to CSS `color`) is drawn
+// here instead, at the same low resolution and nearest-neighbour rule as
+// imported character art. Plain symbol/arrow glyphs elsewhere (✕ ⋮ ▲ ▼ ⌄
+// ⌫ ⇄ ↺ ↻ ⤢ ✿ ...) are not emoji -- they already render as flat, colourless
+// icon glyphs today -- and are left as text.
+const EMOJI_ICONS = {
+  '✏️': 'icon-pencil',
+  '👁': 'icon-eye',
+  '🚫': 'icon-hidden',
+  '🔒': 'icon-lock',
+  '🔓': 'icon-unlock',
+  '🗑': 'icon-trash',
+  '📌': 'icon-pin',
+};
+
+// Appends `glyph` to `el`: a small pixel-art <img> if it is one of the
+// emoji above, or a plain text node otherwise (so callers can pass either
+// kind without caring which one they have).
+function appendGlyph(el, glyph) {
+  const icon = EMOJI_ICONS[glyph];
+  if (icon) {
+    const img = document.createElement('img');
+    img.className = 'pixel-icon';
+    img.src = `icons/${icon}.png`;
+    img.alt = glyph;
+    img.setAttribute('aria-hidden', 'true');
+    el.appendChild(img);
+  } else {
+    el.appendChild(document.createTextNode(glyph));
+  }
+}
+
 const els = {};
 let currentState = AppState.HOME;
 let scenePanelOpen = true;
@@ -869,7 +902,7 @@ function iconButton({ label, glyph, pressed = null, disabled = false, onClick })
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'row-btn';
-  button.textContent = glyph;
+  appendGlyph(button, glyph);
   button.setAttribute('aria-label', label);
   button.title = label;
   if (pressed !== null) button.setAttribute('aria-pressed', String(pressed));
@@ -959,7 +992,8 @@ function partRowAside(part, index, total) {
     button.className = 'row-aside__btn';
     if (extra.pressed !== undefined) button.setAttribute('aria-pressed', String(extra.pressed));
     button.disabled = Boolean(extra.disabled);
-    button.textContent = `${glyph} ${label}`;
+    appendGlyph(button, glyph);
+    button.appendChild(document.createTextNode(` ${label}`));
     button.addEventListener('click', onClick);
     aside.appendChild(button);
   };

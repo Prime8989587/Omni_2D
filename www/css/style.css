@@ -1,10 +1,92 @@
+/* ---------- Pixel fonts ----------
+   Two fonts, not one, and that split is deliberate rather than an
+   oversight. Press Start 2P is a true 8x8-grid display font -- gorgeous
+   for a handful of words, but its glyphs advance a full 1em EACH, so
+   "Restore unsaved work?" set in it at a readable size is wider than a
+   phone. VT323 is also pixel-drawn but a normal 0.4em advance per glyph,
+   the same ballpark as an ordinary condensed font -- readable at button
+   and paragraph lengths without wrapping every line. So: Press Start 2P
+   for the few short dialog HEADERS only; VT323 for every button, list
+   row, hint and paragraph -- still unmistakably pixel type throughout,
+   just not trying to set prose in an arcade marquee font.
+
+   Both are vendored locally (www/fonts/, OFL-licensed) rather than
+   pulled from a CDN: this app has to work with no network at all. */
+@font-face {
+  font-family: 'Press Start 2P';
+  src: url('../fonts/press-start-2p-latin-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'VT323';
+  src: url('../fonts/vt323-latin-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --color-bg: #000000;
+  /* A very dark charcoal with a warm plum undertone (R and B close, both
+     well above G) -- related to the pink accent instead of a neutral or
+     blue-leaning black sitting unrelated next to it. */
+  --color-bg: #181117;
+  /* One step lighter, same family: every panel, card, button fill and
+     popover renders here instead of --color-bg, so raised surfaces read
+     as sitting ON the background rather than being flush with it. */
+  --color-surface: #2A1E28;
   --color-accent: #FF2E93;
   --color-text: #FFFFFF;
   --color-danger: #F44336; /* standard system red, cancel/destructive only */
   --color-disabled: #4d4d4d;
   --color-disabled-bg: #0d0d0d;
+
+  /* Neither font ships the arrows/dingbats used as compact icon glyphs
+     throughout the app (fit ⤢, undo/redo ↺↻, chevrons, nudge arrows...),
+     so those stay on the ORIGINAL system stack rather than silently
+     falling back to whatever the browser picks per missing glyph. */
+  --font-fallback: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-header: 'Press Start 2P', var(--font-fallback);
+  --font-body: 'VT323', var(--font-fallback);
+
+  /* Three fixed sizes, one per tier -- not four "close enough" numbers
+     freely chosen per element. Press Start 2P is tuned to its native 8px
+     grid; VT323 is a normal outline font so "crisp" mostly means an
+     integer size with smoothing off, but staying to a small fixed set
+     keeps the whole app reading as one consistent scale rather than
+     dozens of one-off sizes that happen to be pixel fonts. */
+  --text-header: 16px;   /* Press Start 2P: modal titles only */
+  --text-button: 20px;   /* VT323: primary buttons, list-row titles */
+  --text-body: 18px;     /* VT323: paragraph/dialog text, most labels */
+  --text-label: 16px;    /* VT323: small hints, tags, field labels */
+
+  /* One shared corner cut, in two reaches: a stair-stepped notch instead
+     of a smooth curve, applied to every bordered box in the app. Written
+     once and referenced everywhere, so every button, panel and dialog
+     cuts its corners exactly the same way regardless of border colour or
+     size -- a small compact button and a big modal use the SAME motif,
+     just at a size that reads clearly on each. clip-path values are
+     resolution-independent (calc(100% - Npx) works at any box size), so
+     one definition covers a 38px icon button and a 512px canvas wrapper
+     alike. */
+  --pixel-clip: polygon(
+    4px 0, calc(100% - 4px) 0, calc(100% - 4px) 2px, calc(100% - 2px) 2px,
+    calc(100% - 2px) 4px, 100% 4px, 100% calc(100% - 4px),
+    calc(100% - 2px) calc(100% - 4px), calc(100% - 2px) calc(100% - 2px),
+    calc(100% - 4px) calc(100% - 2px), calc(100% - 4px) 100%, 4px 100%,
+    4px calc(100% - 2px), 2px calc(100% - 2px), 2px calc(100% - 4px),
+    0 calc(100% - 4px), 0 4px, 2px 4px, 2px 2px, 4px 2px
+  );
+  --pixel-clip-lg: polygon(
+    6px 0, calc(100% - 6px) 0, calc(100% - 6px) 3px, calc(100% - 3px) 3px,
+    calc(100% - 3px) 6px, 100% 6px, 100% calc(100% - 6px),
+    calc(100% - 3px) calc(100% - 6px), calc(100% - 3px) calc(100% - 3px),
+    calc(100% - 6px) calc(100% - 3px), calc(100% - 6px) 100%, 6px 100%,
+    6px calc(100% - 3px), 3px calc(100% - 3px), 3px calc(100% - 6px),
+    0 calc(100% - 6px), 0 6px, 3px 6px, 3px 3px, 6px 3px
+  );
 }
 
 * {
@@ -18,13 +100,27 @@ html, body {
   height: 100%;
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  /* Neither font ships a bold face; without this the browser fake-bolds
+     by smearing the outline, which is exactly the blur a pixel font is
+     supposed to avoid. Weight is expressed through size and colour
+     instead. */
+  font-synthesis: none;
+  /* The actual "no anti-aliasing" switch: these fonts are vector outlines
+     drawn to look like bitmaps, and it is smoothing that turns their
+     right-angle strokes back into soft curves. */
+  -webkit-font-smoothing: none;
+  font-smooth: never;
   overflow: hidden;
   -webkit-tap-highlight-color: transparent;
 }
 
-button {
+button, input, select {
   font-family: inherit;
+  font-synthesis: none;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
 }
 
 [hidden] {
@@ -57,8 +153,7 @@ button {
   align-items: center;
   gap: 8px;
   color: var(--color-accent);
-  font-weight: 700;
-  font-size: 14px;
+  font-size: var(--text-label);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -87,8 +182,7 @@ button {
 .logo {
   color: var(--color-accent);
   opacity: 0.85;
-  font-weight: 700;
-  font-size: 15px;
+  font-size: var(--text-label);
   letter-spacing: 0.02em;
 }
 
@@ -106,10 +200,10 @@ button {
   margin: 0 16px;
   min-height: 0;
   border: 2px solid transparent;
-  border-radius: 12px;
+  clip-path: var(--pixel-clip-lg);
   overflow: hidden;
   background: var(--color-bg);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, filter 0.15s ease;
 }
 
 .canvas-wrap.is-animate-mode,
@@ -119,7 +213,10 @@ button {
 
 .canvas-wrap.is-recording {
   border-color: var(--color-danger);
-  box-shadow: 0 0 0 4px rgba(244, 67, 54, 0.15);
+  /* box-shadow would be cut off at the clip-path boundary -- a glow drawn
+     around the box's rendered (post-clip) shape instead of its geometry
+     survives the pixel-stepped corners. */
+  filter: drop-shadow(0 0 5px rgba(244, 67, 54, 0.55));
 }
 
 .canvas {
@@ -150,7 +247,7 @@ button {
   width: 80%;
   text-align: center;
   color: rgba(255, 255, 255, 0.35);
-  font-size: 14px;
+  font-size: var(--text-body);
   line-height: 1.5;
   pointer-events: none;
 }
@@ -161,15 +258,14 @@ button {
   position: relative;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
-  font-weight: 700;
-  font-size: 16px;
+  font-size: var(--text-button);
   letter-spacing: 0.02em;
   min-height: 48px;
   min-width: 48px;
   padding: 12px 20px;
-  border-radius: 10px;
+  clip-path: var(--pixel-clip);
   border: 2px solid var(--color-accent);
-  background: var(--color-bg);
+  background: var(--color-surface);
   color: var(--color-accent);
   display: inline-flex;
   align-items: center;
@@ -185,27 +281,34 @@ button {
 
 .btn--lg {
   min-height: 56px;
-  font-size: 18px;
 }
 
+/* Icon-only buttons hold a single arrow/symbol glyph (fit, undo, redo,
+   exit, the app menu's ≡...) that neither pixel font includes, so they
+   keep the original system glyphs rather than silently falling back one
+   character at a time. */
 .btn--icon {
   padding: 0;
   width: 48px;
   height: 48px;
+  font-family: var(--font-fallback);
   font-size: 20px;
   flex: 0 0 auto;
 }
 
 .btn--sm {
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: var(--text-label);
   flex: 0 0 auto;
 }
 
+/* Nudge buttons are also pure glyphs (arrows, rotate icons) -- same
+   reasoning as .btn--icon. */
 .btn--nudge {
   flex: 1;
   min-width: 0;
   padding: 12px 4px;
+  font-family: var(--font-fallback);
   font-size: 18px;
 }
 
@@ -238,7 +341,14 @@ button {
    Animate, Save as GIF/MP4), matching the app's visual identity. Utility
    icon buttons (Exit) and destructive actions (Cancel) intentionally have
    none, same as in the reference design. Purely decorative -- hidden from
-   screen readers and never intercepts taps. */
+   screen readers and never intercepts taps.
+
+   They rotate continuously and slowly: a small bit of ambient life on
+   every screen that carries one, dialogs included, rather than a static
+   mark. The character itself (U+273F) is not in either pixel font, so
+   the flourish keeps the original system glyph on purpose -- it is
+   hand-drawn pixel-art-styled already and was never part of the running
+   text this task restyles. */
 
 .btn--flourish::before,
 .btn--flourish::after {
@@ -249,11 +359,27 @@ button {
 .btn--flourish::after,
 .flourish {
   position: absolute;
+  font-family: var(--font-fallback);
   font-size: 14px;
   line-height: 1;
   color: var(--color-accent);
   pointer-events: none;
   user-select: none;
+  transform-origin: center;
+  animation: flower-spin 10s linear infinite;
+}
+
+@keyframes flower-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn--flourish::before,
+  .btn--flourish::after,
+  .flourish {
+    animation: none;
+  }
 }
 
 .btn--flourish::before {
@@ -321,8 +447,7 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-accent);
-  font-weight: 700;
-  font-size: 14px;
+  font-size: var(--text-body);
 }
 
 .scene-panel__header {
@@ -334,17 +459,17 @@ button {
   min-height: 48px;
   padding: 12px 14px;
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-accent);
-  font-weight: 700;
-  font-size: 13px;
+  font-size: var(--text-label);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   cursor: pointer;
 }
 
 .scene-panel__chevron {
+  font-family: var(--font-fallback);
   font-size: 14px;
 }
 
@@ -367,10 +492,10 @@ button {
   min-height: 48px;
   padding: 12px 14px;
   border: 2px solid rgba(255, 46, 147, 0.35);
-  border-radius: 10px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-text);
-  font-size: 15px;
+  font-size: var(--text-button);
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -381,7 +506,6 @@ button {
 .scene-part.is-selected {
   border-color: var(--color-accent);
   color: var(--color-accent);
-  font-weight: 700;
 }
 
 .scene-part:active {
@@ -394,7 +518,7 @@ button {
 .rig-hint {
   margin: 0 0 10px;
   color: var(--color-accent);
-  font-size: 13px;
+  font-size: var(--text-label);
   line-height: 1.4;
   text-align: center;
 }
@@ -432,7 +556,7 @@ button {
 }
 
 .joint-picker .segmented__btn {
-  font-size: 14px;
+  font-size: var(--text-label);
 }
 
 /* Scoped to the picker, and outweighing .segmented__btn.is-active further
@@ -447,7 +571,7 @@ button {
 .joint-hint {
   margin: 0 0 10px;
   color: rgba(255, 255, 255, 0.55);
-  font-size: 12px;
+  font-size: var(--text-label);
   line-height: 1.4;
   text-align: center;
 }
@@ -455,29 +579,37 @@ button {
 .bone-readout {
   margin: 8px 0;
   color: rgba(255, 255, 255, 0.55);
-  font-size: 13px;
+  font-size: var(--text-label);
   text-align: center;
 }
 
 /* Indent marker showing a bone's depth in the hierarchy list. */
 .scene-part__depth {
   color: rgba(255, 143, 196, 0.7);
-  font-weight: 400;
+}
+
+.modal__title {
+  margin: 0 0 16px;
+  color: var(--color-text);
+  font-family: var(--font-header);
+  font-size: var(--text-header);
+  line-height: 1.6;
 }
 
 .modal__text {
   margin: 0 0 20px;
   color: var(--color-text);
-  font-size: 15px;
+  font-size: var(--text-body);
   line-height: 1.5;
 }
 
 /* Where a PSaver export actually landed. A path is the one thing here the
    user may have to read character by character and retype into a file
-   manager, so it gets a monospace face and is allowed to wrap anywhere. */
+   manager -- VT323 is already a fixed-width terminal-style face, so it
+   keeps that legibility without leaving the app's pixel-font system for
+   a separate UI-monospace stack. */
 .modal__text--mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--color-accent);
   overflow-wrap: anywhere;
 }
@@ -496,8 +628,7 @@ button {
   min-width: 0;
   display: block;
   color: var(--color-accent);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--text-label);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -509,7 +640,6 @@ button {
 
 .slider-field b {
   color: var(--color-text);
-  font-weight: 700;
 }
 
 .slider {
@@ -531,11 +661,10 @@ button {
   flex: 1;
   min-height: 44px;
   border: 2px solid rgba(255, 46, 147, 0.35);
-  border-radius: 10px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-text);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: var(--text-label);
   cursor: pointer;
 }
 
@@ -551,7 +680,7 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: rgba(255, 255, 255, 0.55);
-  font-size: 13px;
+  font-size: var(--text-label);
 }
 
 /* ---------- Canvas size ---------- */
@@ -574,7 +703,7 @@ button {
 }
 
 .preset-grid .segmented__btn {
-  font-size: 13px;
+  font-size: var(--text-label);
 }
 
 /* ---------- Px Pin ---------- */
@@ -603,8 +732,7 @@ button {
 
 .px-pin__title {
   color: var(--color-accent);
-  font-weight: 700;
-  font-size: 14px;
+  font-size: var(--text-label);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -614,7 +742,7 @@ button {
   flex: 1;
   min-width: 0;
   color: rgba(255, 255, 255, 0.55);
-  font-size: 12px;
+  font-size: var(--text-label);
   text-align: right;
   white-space: nowrap;
   overflow: hidden;
@@ -647,7 +775,9 @@ button {
 }
 
 /* The brush-size menu the size button drops open: 1x1 up to 10x10, laid
-   out like the row asides elsewhere in the app. */
+   out like the row asides elsewhere in the app. Acts as a popover, same
+   as .row-aside, so it gets the same larger corner cut and a faint glow
+   underneath it. */
 .px-pin__brushes {
   display: flex;
   flex-wrap: wrap;
@@ -655,8 +785,9 @@ button {
   margin-bottom: 10px;
   padding: 8px;
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
+  clip-path: var(--pixel-clip-lg);
   background: rgba(255, 46, 147, 0.08);
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
 }
 
 .px-pin__brush {
@@ -665,12 +796,11 @@ button {
   min-width: 56px;
   min-height: 42px;
   border: 2px solid var(--color-accent);
-  border-radius: 8px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-accent);
   font-family: inherit;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--text-label);
   cursor: pointer;
 }
 
@@ -682,7 +812,7 @@ button {
 .px-pin__hint {
   margin: 4px 0 0;
   color: rgba(255, 255, 255, 0.45);
-  font-size: 11px;
+  font-size: var(--text-label);
   text-align: center;
 }
 
@@ -705,12 +835,13 @@ button {
   z-index: 60;
   padding: 12px 16px;
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-text);
-  font-size: 14px;
+  font-size: var(--text-body);
   line-height: 1.4;
   text-align: center;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
 }
 
 /* ---------- Export modal ---------- */
@@ -729,24 +860,22 @@ button {
 .modal {
   width: 100%;
   max-width: 360px;
-  background: var(--color-bg);
+  background: var(--color-surface);
   border: 2px solid var(--color-accent);
-  border-radius: 14px;
+  clip-path: var(--pixel-clip-lg);
   padding: 24px;
-}
-
-.modal__title {
-  margin: 0 0 16px;
-  color: var(--color-text);
-  font-size: 20px;
+  /* A faint lift off the dimmed backdrop -- subtle, not a heavy drop
+     shadow, and computed from the box's actual (pixel-clipped) shape
+     rather than its rectangular geometry so the glow follows the
+     stepped outline instead of ignoring it. */
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.55));
 }
 
 .field-label {
   display: block;
   margin-bottom: 8px;
   color: var(--color-accent);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--text-label);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -756,11 +885,11 @@ button {
   min-height: 48px;
   padding: 12px 14px;
   margin-bottom: 20px;
-  background: var(--color-bg);
+  background: var(--color-surface);
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
+  clip-path: var(--pixel-clip);
   color: var(--color-text);
-  font-size: 16px;
+  font-size: var(--text-body);
 }
 
 .text-input::placeholder {
@@ -769,7 +898,10 @@ button {
 
 .text-input:focus {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(255, 46, 147, 0.3);
+  /* box-shadow's ring would be cut off outside the clip-path boundary;
+     a drop-shadow glow is computed from the rendered shape instead and
+     survives it. */
+  filter: drop-shadow(0 0 4px rgba(255, 46, 147, 0.7));
 }
 
 .modal__actions {
@@ -802,12 +934,20 @@ button {
   width: 38px;
   height: 38px;
   padding: 0;
-  font-size: 15px;
   line-height: 1;
   border: 2px solid var(--color-accent);
-  border-radius: 8px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Pure glyph buttons (✕ close, ⋮ more) -- same reasoning as .btn--icon. */
+.row-btn {
+  font-family: var(--font-fallback);
+  font-size: 16px;
 }
 
 .row-btn[aria-pressed="true"] {
@@ -826,7 +966,7 @@ button {
 }
 
 .scene-part__tag {
-  font-size: 11px;
+  font-size: var(--text-label);
   letter-spacing: 0.04em;
   opacity: 0.75;
 }
@@ -836,7 +976,9 @@ button {
    (move up/down, show/hide, lock) live here now, plus Rename. Kept open
    across re-renders by tracking the row's id rather than its position, so
    repeated taps (nudging a layer down several slots) don't require
-   reopening the menu each time. */
+   reopening the menu each time. This is the app's "kebab-menu popover":
+   the larger corner cut and a soft glow underneath mark it, and every
+   other kebab-style popover (.px-pin__brushes) matches it. */
 .row-aside {
   display: flex;
   flex-wrap: wrap;
@@ -844,8 +986,9 @@ button {
   margin-top: 6px;
   padding: 8px;
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
+  clip-path: var(--pixel-clip-lg);
   background: rgba(255, 46, 147, 0.08);
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
 }
 
 .row-aside__btn {
@@ -859,11 +1002,10 @@ button {
   gap: 6px;
   padding: 8px 10px;
   border: 2px solid var(--color-accent);
-  border-radius: 8px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-accent);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--text-label);
   font-family: inherit;
   cursor: pointer;
 }
@@ -877,6 +1019,20 @@ button {
   opacity: 0.35;
 }
 
+/* The small pixel-art icons that replace the layer-row emoji (rename,
+   show/hide, lock/unlock) -- same nearest-neighbour rule as the imported
+   character art, just at icon scale. */
+.pixel-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 2px;
+  vertical-align: middle;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
 /* A small persistent on/off button -- the canvas-size Mirror toggle and
    the Bind list's "Rigged only" filter both use it. */
 .toggle-chip {
@@ -885,11 +1041,10 @@ button {
   padding: 0 14px;
   margin: 8px 0;
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-accent);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--text-label);
   font-family: inherit;
   cursor: pointer;
 }
@@ -909,7 +1064,7 @@ button {
   align-items: center;
   gap: 8px;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: var(--text-label);
   color: var(--color-text);
 }
 
@@ -922,10 +1077,10 @@ button {
   min-width: 0;
   padding: 8px 10px;
   border: 2px solid var(--color-accent);
-  border-radius: 8px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-text);
-  font-size: 14px;
+  font-size: var(--text-body);
   font-family: inherit;
 }
 
@@ -961,21 +1116,20 @@ button {
   gap: 2px;
   padding: 10px 12px;
   border: 2px solid var(--color-accent);
-  border-radius: 10px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
   color: var(--color-text);
   font-family: inherit;
   text-align: left;
 }
 
 .project-open__name {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: var(--text-button);
   color: var(--color-accent);
 }
 
 .project-open__date {
-  font-size: 12px;
+  font-size: var(--text-label);
   opacity: 0.8;
 }
 
@@ -1005,7 +1159,7 @@ button {
 .logo {
   margin-left: auto;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: var(--text-label);
 }
 
 .mode-label {
@@ -1036,7 +1190,7 @@ button {
   margin-top: 12px;
   min-height: 132px;
   border: 2px dashed var(--color-accent);
-  border-radius: 16px;
+  clip-path: var(--pixel-clip-lg);
   background: rgba(255, 46, 147, 0.07);
   color: var(--color-accent);
   text-align: center;
@@ -1052,13 +1206,14 @@ button {
 }
 
 .move-pad__glyph {
+  font-family: var(--font-fallback);
   font-size: 34px;
   line-height: 1;
 }
 
 .move-pad__label {
   padding: 0 16px;
-  font-size: 12px;
+  font-size: var(--text-label);
   letter-spacing: 0.03em;
   opacity: 0.85;
 }
@@ -1067,7 +1222,8 @@ button {
 
 /* Save / Open / Discard hang off the top bar rather than any one mode's
    controls, so they are reachable from Home, Rig, Bind and Free Move
-   alike. Anchored to the bar itself, which is why .topbar is positioned. */
+   alike. Anchored to the bar itself, which is why .topbar is positioned.
+   This is a kebab-menu popover too: larger corner cut, faint glow. */
 .app-menu {
   position: absolute;
   top: calc(100% - 4px);
@@ -1077,10 +1233,10 @@ button {
   display: flex;
   flex-direction: column;
   border: 2px solid var(--color-accent);
-  border-radius: 12px;
-  background: var(--color-bg);
+  clip-path: var(--pixel-clip-lg);
+  background: var(--color-surface);
   overflow: hidden;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.55));
 }
 
 .app-menu__group {
@@ -1088,8 +1244,7 @@ button {
   padding: 10px 18px 6px;
   border-bottom: 1px solid rgba(255, 46, 147, 0.35);
   color: var(--color-accent);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: var(--text-label);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   opacity: 0.65;
@@ -1099,11 +1254,10 @@ button {
   padding: 14px 18px;
   border: 0;
   border-bottom: 1px solid rgba(255, 46, 147, 0.35);
-  background: var(--color-bg);
+  background: transparent;
   color: var(--color-accent);
   font-family: inherit;
-  font-size: 15px;
-  font-weight: 700;
+  font-size: var(--text-button);
   text-align: left;
 }
 
@@ -1123,5 +1277,3 @@ button {
 .app-menu__item--danger {
   color: var(--color-danger);
 }
-
-
