@@ -523,7 +523,8 @@ function drawPierceProbe() {
       : '';
     return `${r.piercer} -> ${r.pierced}\n` +
       `  gap ${gap}  enter ${r.enter}  end ${r.end}\n` +
-      `  depth ${r.depth.toFixed(1)}  ${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
+      `  depth ${r.depth.toFixed(1)}  blend ${(r.t * 100).toFixed(0)}%  ` +
+      `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';
   probeEl.hidden = false;

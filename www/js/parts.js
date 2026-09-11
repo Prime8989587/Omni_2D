@@ -183,6 +183,21 @@ export class Part {
     this.pierceBarrierRegion = new Set();
     this.pierceBarrierRegionVersion = 0;
 
+    // THE SHAPE THIS REGION TAKES AT FULL DEPTH
+    //
+    // The pierceable mask doubles as the REST outline -- the shape with
+    // nothing in it. This is the other end: the outline the artist drew
+    // for maximum depth, the tip opened to receive the piercer. At any
+    // depth between, the rendered outline is a point-for-point blend of
+    // the two, so every frame shows a shape somebody actually drew half of
+    // rather than one computed by shoving vertices about.
+    //
+    // Empty means no morph. Blending needs something to blend toward, and
+    // a region with only a rest shape simply keeps it -- the same way
+    // Enter and End had to be set before a pierce did anything at all.
+    this.pierceEnteredRegion = new Set();
+    this.pierceEnteredRegionVersion = 0;
+
     // Which side's movement may deepen this piercer's contacts. Lives on
     // the piercer with Enter and End, because like them it describes the
     // relationship rather than the artwork.
@@ -481,6 +496,8 @@ class PartsStore {
       part.pierceDeformRegionVersion++;
       part.pierceBarrierRegion = new Set();
       part.pierceBarrierRegionVersion++;
+      part.pierceEnteredRegion = new Set();
+      part.pierceEnteredRegionVersion++;
       part.piercePhysics = PiercePhysics.PIERCER;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
@@ -504,6 +521,24 @@ class PartsStore {
     part.pierceEnd = clampPierceDepth(end);
     this._emit('transform');
     return true;
+  }
+
+  setPierceEnteredRegion(id, indices, marked) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return 0;
+    let changed = 0;
+    for (const index of indices) {
+      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
+      if (marked ? !part.pierceEnteredRegion.has(index) : part.pierceEnteredRegion.has(index)) {
+        if (marked) part.pierceEnteredRegion.add(index); else part.pierceEnteredRegion.delete(index);
+        changed++;
+      }
+    }
+    if (changed) {
+      part.pierceEnteredRegionVersion++;
+      this._emit('transform');
+    }
+    return changed;
   }
 
   setPierceBarrierRegion(id, indices, marked) {

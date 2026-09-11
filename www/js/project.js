@@ -102,6 +102,7 @@ function serializePart(part, copyPixels) {
     pierceRegion: [...part.pierceRegion],
     pierceDeformRegion: [...part.pierceDeformRegion],
     pierceBarrierRegion: [...part.pierceBarrierRegion],
+    pierceEnteredRegion: [...part.pierceEnteredRegion],
     piercePhysics: part.piercePhysics,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
@@ -145,6 +146,9 @@ function deserializePart(data) {
   // Absent before barriers existed; empty means no walls, which is how
   // those projects behaved.
   part.pierceBarrierRegion = new Set(data.pierceBarrierRegion || []);
+  // Absent before the morph existed; empty means the region keeps its rest
+  // shape, which is what those projects looked like.
+  part.pierceEnteredRegion = new Set(data.pierceEnteredRegion || []);
   // Absent before the setting existed, and its default is the behaviour
   // those projects were saved under.
   part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)

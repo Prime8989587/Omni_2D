@@ -27,7 +27,7 @@ import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
-import { pierceOverlayEnabled, setPierceOverlay } from './pierce.js';
+import { pierceOverlayEnabled, setPierceOverlay, pierceMorphIssue } from './pierce.js';
 import * as psaver from './psaver.js';
 
 const TOAST_DURATION_MS = 4000;
@@ -1208,12 +1208,19 @@ function renderPierceModal() {
   // deformable mask means -- worth saying, because a blank count there
   // would read as "nothing will move".
   const walls = part.pierceBarrierRegion.size;
+  // The entered count is the one that says whether a second silhouette has
+  // been drawn at all: with none, the region simply holds its rest shape,
+  // which is a legitimate setup rather than a missing step -- so it is
+  // named only once it exists, and never shown as a reproachful zero.
+  const entered = part.pierceEnteredRegion.size;
   const soft = part.isPierced
-    ? ` · ${part.pierceDeformRegion.size || 'all'} deformable${walls ? ` · ${walls} wall` : ''}`
+    ? ` · ${part.pierceDeformRegion.size || 'all'} deformable${walls ? ` · ${walls} wall` : ''}` +
+      `${entered ? ` · ${entered} entered` : ''}`
     : '';
-  els.piercePaintBtn.textContent = painted
-    ? `Paint regions… (${painted} px marked${soft})`
-    : 'Paint regions…';
+  const issue = pierceMorphIssue(part);
+  els.piercePaintBtn.textContent = issue
+    ? `Paint regions… (⚠ not blending — ${issue})`
+    : (painted ? `Paint regions… (${painted} px marked${soft})` : 'Paint regions…');
   els.pierceOverlayBtn.setAttribute('aria-pressed', String(pierceOverlayEnabled()));
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;
 }
@@ -1546,19 +1553,41 @@ function pierceDepthCanvasPoint(event) {
   };
 }
 
+// EACH HANDLE IS A PLACE, NOT A DISTANCE
+//
+// Both handles sit at absolute positions on the ruler: Enter at `enter`,
+// End at `enter + end`. Writing only `enter` when the Enter handle moves
+// therefore dragged the End handle along with it, because End's position
+// is derived from Enter -- so the pair could be stretched and squeezed but
+// never actually placed, which is what "only the distance between them is
+// adjustable" looks like from the outside.
+//
+// So a drag fixes where the OTHER handle already is and re-derives the
+// stored numbers from the two positions. Dragging is the input; Enter and
+// End are what fall out of it.
 function dragPierceHandle(which, x, y) {
   const plan = depthDraw;
   if (!plan) return;
   const distance = depthDrawDistance(plan, x, y);
   const { enter, end } = readPierceDepthInputs();
+  const min = PIERCE_DEPTH_RANGE.min;
+
   if (which === 'enter') {
-    // Enter cannot pass End: they are two points on one scale, in order.
-    els.pierceEnterInput.value = String(clampPierceDepth(
-      Math.min(distance, enter + end - PIERCE_DEPTH_RANGE.min)
-    ));
+    // Hold End's place on the ruler; Enter takes the finger, and the gap
+    // between them is whatever is left. Enter cannot retreat so far that
+    // the remaining gap would exceed End's own maximum, because then End
+    // would have to shuffle inwards to stay representable -- and a handle
+    // that drags the other one along is the exact bug being fixed here.
+    const endAt = enter + end;
+    const reach = Math.max(endAt - PIERCE_DEPTH_RANGE.max, Math.min(distance, endAt - min));
+    const nextEnter = clampPierceDepth(reach);
+    els.pierceEnterInput.value = String(nextEnter);
+    els.pierceEndInput.value = String(clampPierceDepth(endAt - nextEnter));
   } else {
-    els.pierceEndInput.value = String(clampPierceDepth(distance - enter));
+    // Enter stays put, so End's place is simply how far past it this is.
+    els.pierceEndInput.value = String(clampPierceDepth(Math.max(min, distance - enter)));
   }
+
   renderPierceDepthBar();
   renderPierceDepthCanvas();
 }

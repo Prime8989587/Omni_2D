@@ -11,23 +11,29 @@
 // completely reversible by moving the piercer back out, with nothing to
 // undo or restore.
 //
-// THE SPRING IS THE ONE ALREADY HERE
+// TWO DRAWN SHAPES, NOT A PUSH
 //
-// A displaced vertex is not teleported to its displaced position. It gets
-// a TARGET, and its actual offset springs toward that target under the
-// same damped mass-spring integrated the same way bones.js integrates a
-// physics bone:
+// The shape of the contact is a BLEND between two outlines the artist
+// drew: the pierceable mask as painted (the rest shape) and a second mask
+// painted for maximum depth (the entered shape). At any depth the
+// rendered outline is a point-for-point interpolation between them, and
+// every mesh vertex follows it through mean value coordinates. morph.js
+// holds that machinery and explains it.
 //
-//   acceleration = stiffness * (target - offset) - damping * velocity
-//   velocity += acceleration * h        (semi-implicit / symplectic Euler:
-//   offset   += velocity * h             velocity first, then position)
+// This replaced a per-vertex spring push, and the reason is worth keeping.
+// That version gave each vertex its own radial shove away from the tip
+// with its own smoothstep falloff, so neighbours decided independently --
+// and on the coarse mesh an unbound layer gets, independent neighbours
+// read as a torn, jagged silhouette rather than a shape changing. It is a
+// technique mismatch rather than a tuning problem: nothing in it knew what
+// outline it was supposed to be producing, so no stiffness could have made
+// it produce one.
 //
-// with the same DEFAULT_STIFFNESS / DEFAULT_DAMPING the physics bones use
-// and the same "has it settled yet" test, so flesh pushed aside gives way
-// with weight rather than snapping, and springs back on its own when the
-// piercer withdraws. That is also why this integrates in physics.js's
-// frame loop rather than inside the renderer: a spring has to keep moving
-// after the input that disturbed it stops, which is the whole point.
+// Nothing about the blend is integrated over time. The outline IS the
+// depth, so a given depth always looks the same, there is no state to fall
+// out of step with the drag, and the frame loop has nothing left to settle
+// once the piercer stops. The bones' own springs are untouched and go on
+// reporting for themselves.
 //
 // HOW DEEP IS DEEP
 //
@@ -77,19 +83,14 @@
 // and pulling back out track the finger one-for-one as they always did.
 
 import { partsStore, PiercePhysics } from './parts.js';
-import { bonesStore, DEFAULT_STIFFNESS, DEFAULT_DAMPING } from './bones.js';
+import { bonesStore } from './bones.js';
 import { localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
+import {
+  outlineOf, alignOutline, meanValueWeights, evaluateWeights, blendOutlines, blobCoverage,
+} from './morph.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
-
-// Matching bones.js: distance-from-equilibrium and velocity bounds that
-// decide when a spring has stopped meaningfully moving, so the frame loop
-// may sleep. Expressed in scene pixels here rather than radians.
-const SETTLE_OFFSET = 0.01;
-const SETTLE_VELOCITY = 0.05;
-const MAX_FRAME_DT = 0.1;
-const MAX_SUBSTEP = 1 / 120;
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -698,6 +699,16 @@ function publishOcclusion(contacts) {
   }
   occlusion = next;
   hold = held;
+
+  // The shape at this depth, written here rather than in the frame loop so
+  // that the renderer's own re-measure keeps it current: a frame that
+  // re-measured the contact but drew last frame's shape would lag the drag
+  // by one frame at every depth.
+  for (const { pierced, contact } of contacts) {
+    if (!pierced.mesh) continue;
+    const entry = pierceStateFor(pierced.id, pierced.mesh.vertices.length);
+    writeMorph(pierced.mesh, pierced, contact, entry.offsetX, entry.offsetY);
+  }
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
   // second measurement that could disagree with it.
@@ -709,6 +720,10 @@ function publishOcclusion(contacts) {
     enter: contact ? contact.piercer.pierceEnter : null,
     end: contact ? contact.end : null,
     depth: contact ? contact.depth : 0,
+    // The blend fraction: 0 is the rest shape, 1 the entered one. Worth
+    // reporting now that it IS the shape rather than a scale factor on a
+    // push.
+    t: contact ? contact.t : 0,
     engaged: Boolean(contact && contact.engaged),
     sunk: Boolean(contact && next.has(contact.piercer.id)),
     overshoot: contact ? contact.overshoot : 0,
@@ -808,6 +823,14 @@ const OVERLAY_DEFORM = [255, 176, 46, 190];
 // is not a degree of anything -- it is solid or it is not -- so it reads
 // as the most opaque of the four.
 const OVERLAY_BARRIER = [236, 238, 248, 215];
+// The Entered silhouette, in the painter's violet. Only the texels it adds
+// beyond the rest shape are tinted, deliberately: the question this answers
+// is "is the shape I drew actually different, and which way does it go?",
+// and filling the whole silhouette would paint over the cyan/amber split
+// that the rest of the overlay exists to show. So violet reads as "the
+// outline reaches out to here at full depth", and a pierceable texel with
+// no violet beside it is one the outline pulls in from.
+const OVERLAY_ENTERED = [178, 122, 255, 195];
 
 let overlayOn = false;
 const overlayCache = new Map();
@@ -826,10 +849,11 @@ export function setPierceOverlay(on) {
 // the texels it is describing.
 export function pierceOverlayTexture(part) {
   if (!part) return null;
-  if (part.pierceRegion.size === 0 && part.pierceBarrierRegion.size === 0) return null;
+  if (part.pierceRegion.size === 0 && part.pierceBarrierRegion.size === 0
+    && part.pierceEnteredRegion.size === 0) return null;
   const size = part.naturalWidth * part.naturalHeight;
   const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}:` +
-    `${part.pierceBarrierRegionVersion || 0}`;
+    `${part.pierceBarrierRegionVersion || 0}:${part.pierceEnteredRegionVersion || 0}`;
   const cached = overlayCache.get(part.id);
   if (cached && cached.version === version && cached.role === part.pierceRole && cached.pixels.length === size * 4) {
     return cached.pixels;
@@ -837,6 +861,7 @@ export function pierceOverlayTexture(part) {
 
   const base = part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA;
   const walls = part.isPiercer ? null : part.pierceBarrierRegion;
+  const entered = part.isPiercer ? null : part.pierceEnteredRegion;
   // An unpainted deformable mask means the whole pierceable area gives
   // way, so it is all drawn as deformable -- the overlay says what will
   // actually happen, not what has been painted.
@@ -845,14 +870,22 @@ export function pierceOverlayTexture(part) {
   // Walls are drawn even where they sit outside the pierceable area: a
   // wall's whole job is to be somewhere the tip must not reach, and that
   // is often just beyond the cavity's edge.
-  const marked = walls && walls.size > 0
-    ? new Set([...part.pierceRegion, ...walls])
+  const extra = [];
+  if (walls && walls.size > 0) extra.push(walls);
+  if (entered && entered.size > 0) extra.push(entered);
+  const marked = extra.length > 0
+    ? new Set([...part.pierceRegion, ...extra.flatMap((set) => [...set])])
     : part.pierceRegion;
   for (const index of marked) {
     if (index < 0 || index >= size) continue;
     const wall = walls && walls.has(index);
-    const soft = !wall && !part.isPiercer && (softAll || part.pierceDeformRegion.has(index));
-    const [r, g, b, a] = wall ? OVERLAY_BARRIER : (soft ? OVERLAY_DEFORM : base);
+    const grew = !wall && entered && entered.has(index) && !part.pierceRegion.has(index);
+    const soft = !wall && !grew && !part.isPiercer
+      && part.pierceRegion.has(index) && (softAll || part.pierceDeformRegion.has(index));
+    if (!wall && !grew && !part.pierceRegion.has(index)) continue;
+    const [r, g, b, a] = wall
+      ? OVERLAY_BARRIER
+      : (grew ? OVERLAY_ENTERED : (soft ? OVERLAY_DEFORM : base));
     const o = index * 4;
     pixels[o] = r;
     pixels[o + 1] = g;
@@ -864,9 +897,9 @@ export function pierceOverlayTexture(part) {
 }
 
 // ---------------------------------------------------------------------------
-// The per-vertex target
+// The shape at this depth
 
-// Which vertices may move at all: 1 on painted pierceable artwork, easing
+// Which vertices may move at all: 1 on painted deformable artwork, easing
 // to 0 about a mesh cell outside it. The same shape of field pins use, and
 // for the same reason -- a hard edge between "may move" and "may not"
 // would crease the surface exactly at the boundary of the painted area.
@@ -935,73 +968,103 @@ function regionInfluence(mesh, part) {
   return influence;
 }
 
-// Where each vertex is being pushed to, as an offset from wherever the
-// bones already put it.
+// THE TWO DRAWN OUTLINES, AND EVERY VERTEX'S PLACE BETWEEN THEM
 //
-// Direction is straight out from the tip: a vertex is shoved along the
-// line from the tip through itself, which is what a solid object entering
-// soft material does. Magnitude is the product of three independent
-// fractions, each of which can shut the whole thing off on its own:
-//
-//   t         how deep the tip is between Enter and End
-//   proximity how near this vertex is to the tip
-//   region    whether this vertex is on painted pierceable artwork
-//   (1 - pin) whether Px Pin has nailed this vertex down
-//
-// and scales with `end` -- the depth the piercer is allowed to reach is
-// also how far the flesh it reached is pushed, so the two agree by
-// construction instead of needing a second magnitude to tune.
-function writeTargets(mesh, part, contact, transforms, targetX, targetY) {
+// Tracing the masks and solving the mean value coordinates is the only
+// expensive part of this, and none of it depends on depth -- so it is done
+// once per painted change and kept. What a frame does is the cheap half:
+// blend two point lists and evaluate weights that are already solved.
+const morphCache = new Map();
+
+// A painted shape has to be one piece to have an outline. Below this much
+// of it in a single blob it is two pieces or more, and there is no honest
+// one-to-one pairing to blend along. A speck of overspray is far above it.
+const MIN_COVERAGE = 0.9;
+
+// Why a pierced layer is not morphing, in the user's terms -- null when it
+// is, or when it has simply not been given a second shape yet. The painter
+// and the Pierce window both say this out loud, because a drawing that is
+// quietly ignored is worse than one that is refused.
+export function pierceMorphIssue(part) {
+  if (!part || !part.isPierced || part.pierceEnteredRegion.size === 0) return null;
+  const w = part.naturalWidth;
+  const h = part.naturalHeight;
+  if (part.pierceRegion.size === 0) return 'no pierceable shape to blend from';
+  if (blobCoverage(part.pierceRegion, w, h) < MIN_COVERAGE) {
+    return 'the pierceable shape is painted in separate pieces';
+  }
+  if (blobCoverage(part.pierceEnteredRegion, w, h) < MIN_COVERAGE) {
+    return 'the entered shape is cut into separate pieces';
+  }
+  return null;
+}
+
+function morphFor(part, mesh) {
+  const version = `${part.pierceRegionVersion || 0}:${part.pierceEnteredRegionVersion || 0}:` +
+    `${mesh.vertices.length}`;
+  const cached = morphCache.get(part.id);
+  if (cached && cached.version === version) return cached.data;
+
+  let data = null;
+  // No entered shape means nothing to blend toward, so the region simply
+  // keeps its rest shape. That is a state the user has not finished
+  // configuring, not an error.
+  if (part.pierceRegion.size > 0 && part.pierceEnteredRegion.size > 0
+    && pierceMorphIssue(part) === null) {
+    const rest = outlineOf(part.pierceRegion, part.naturalWidth, part.naturalHeight);
+    const drawn = outlineOf(part.pierceEnteredRegion, part.naturalWidth, part.naturalHeight);
+    if (rest.length > 0 && rest.length === drawn.length) {
+      const entered = alignOutline(rest, drawn);
+      const halfW = part.naturalWidth / 2;
+      const halfH = part.naturalHeight / 2;
+      // In the layer's own texel space, which is where both outlines live
+      // and the one space that does not move when the layer does.
+      const weights = mesh.vertices.map((vertex) => meanValueWeights(
+        { x: vertex.restLocal.x + halfW, y: vertex.restLocal.y + halfH }, rest
+      ));
+      data = { rest, entered, weights };
+    }
+  }
+  morphCache.set(part.id, { version, data });
+  return data;
+}
+
+// Every vertex's offset at this contact's depth: where the blended outline
+// puts it, against where the rest outline did. Nothing here is integrated
+// or springs anywhere -- the shape IS the depth, so a given depth always
+// looks the same and there is no state to get out of step.
+function writeMorph(mesh, part, contact, offsetX, offsetY) {
+  const morph = morphFor(part, mesh);
+  if (!morph) {
+    offsetX.fill(0);
+    offsetY.fill(0);
+    return;
+  }
+
   const influence = regionInfluence(mesh, part);
   const pins = part.pins.size > 0 ? pinInfluence(mesh, part) : null;
-  const carriage = pinCarriageOffset(part, transforms);
-
-  // How far the push reaches around the tip. A blunt tip disturbs a wider
-  // area than a needle, and a deeper push reaches further than a shallow
-  // one; below a couple of pixels there is nothing to resolve anyway.
-  const reach = Math.max(2, contact.tipSpread + contact.end);
+  const shape = blendOutlines(morph.rest, morph.entered, contact ? contact.t : 0);
+  // Texel space to scene space: the layer's integer scale, then its
+  // rotation. The offsets are added to bone-skinned positions, which are
+  // already in scene space.
+  const cos = Math.cos(part.rotation) * part.scale;
+  const sin = Math.sin(part.rotation) * part.scale;
 
   for (let i = 0; i < mesh.vertices.length; i++) {
-    targetX[i] = 0;
-    targetY[i] = 0;
-
     const region = influence[i];
-    if (region <= 0) continue;
     const pinned = pins ? pins[i] : 0;
-    if (pinned >= 1) continue; // Px Pin holds this vertex; nothing may move it
-
-    const rest = localToWorld(part, mesh.vertices[i].restLocal);
-    const x = rest.x + carriage.x;
-    const y = rest.y + carriage.y;
-
-    const dx = x - contact.tip.x;
-    const dy = y - contact.tip.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance >= reach) continue;
-
-    // Direction and distance are kept apart on purpose. A vertex sitting
-    // exactly on the tip has no outward direction of its own, so it
-    // borrows the piercer's own heading -- but the substitute is ALREADY a
-    // unit vector, and normalizing it a second time by the epsilon that
-    // stood in for the distance is what turns "no direction" into a target
-    // a million times too long. That is not a rounding error: measured on
-    // a needle one pixel into flesh, a single such vertex drove the whole
-    // layer's displacement to 1.3e7 px and took the spring with it.
-    let dirX = 0;
-    let dirY = -1;
-    if (distance >= 1e-6) {
-      dirX = dx / distance;
-      dirY = dy / distance;
-    } else if (contact.axis) {
-      dirX = contact.axis.x;
-      dirY = contact.axis.y;
+    const share = region * (1 - pinned);
+    if (share <= 0) {
+      offsetX[i] = 0;
+      offsetY[i] = 0;
+      continue;
     }
-
-    const near = 1 - distance / reach;
-    const proximity = near * near * (3 - 2 * near); // smoothstep, same as the fields above
-    const push = contact.end * contact.t * proximity * region * (1 - pinned);
-    targetX[i] = dirX * push;
-    targetY[i] = dirY * push;
+    const moved = evaluateWeights(morph.weights[i], shape);
+    const rest = evaluateWeights(morph.weights[i], morph.rest);
+    const dx = (moved.x - rest.x) * share;
+    const dy = (moved.y - rest.y) * share;
+    offsetX[i] = dx * cos - dy * sin;
+    offsetY[i] = dx * sin + dy * cos;
   }
 }
 
@@ -1012,64 +1075,25 @@ function writeTargets(mesh, part, contact, transforms, targetX, targetY) {
 // true while anything is still moving, so physics.js's loop knows when it
 // may sleep -- including the whole spring-back after the piercer leaves,
 // which is motion nobody is driving any more.
-export function stepPierce(dt) {
+export function stepPierce() {
   if (!partsStore.hasPierce) {
     publishOcclusion([]);
     return false;
   }
 
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  const contacts = activeContacts(transforms);
-  // Published on every path, including the ones that return early: an
+  // Publishing is what writes the shapes -- see publishOcclusion -- and it
+  // happens on every path, including the ones with nothing in contact: an
   // empty answer is still this frame's answer, and a stale one would leave
   // a tip sunk under flesh it is no longer touching.
-  publishOcclusion(contacts);
-  if (contacts.length === 0) return false;
+  publishOcclusion(activeContacts(transforms));
 
-  const clamped = Math.min(Math.max(dt, 0), MAX_FRAME_DT);
-  const steps = Math.max(1, Math.ceil(clamped / MAX_SUBSTEP));
-  const h = clamped / steps;
-
-  let active = false;
-  for (const { pierced, contact } of contacts) {
-    const mesh = pierced.mesh;
-    const count = mesh.vertices.length;
-    const entry = pierceStateFor(pierced.id, count);
-
-    // With no contact -- or one still short of the Enter Point -- every
-    // target is zero, which is precisely "spring back to where the bones
-    // want you". The retraction needs no separate code path; it is the
-    // same spring with the target released.
-    const targetX = new Float64Array(count);
-    const targetY = new Float64Array(count);
-    if (contact && contact.engaged) {
-      writeTargets(mesh, pierced, contact, transforms, targetX, targetY);
-    }
-
-    for (let s = 0; s < steps; s++) {
-      for (let i = 0; i < count; i++) {
-        const ax = DEFAULT_STIFFNESS * (targetX[i] - entry.offsetX[i]) - DEFAULT_DAMPING * entry.velocityX[i];
-        const ay = DEFAULT_STIFFNESS * (targetY[i] - entry.offsetY[i]) - DEFAULT_DAMPING * entry.velocityY[i];
-        entry.velocityX[i] += ax * h;
-        entry.velocityY[i] += ay * h;
-        entry.offsetX[i] += entry.velocityX[i] * h;
-        entry.offsetY[i] += entry.velocityY[i] * h;
-      }
-    }
-
-    // Still moving? Same test bones.js uses: distance from equilibrium
-    // (acceleration and damping over stiffness) or raw speed.
-    for (let i = 0; i < count; i++) {
-      const restX = Math.abs(targetX[i] - entry.offsetX[i]);
-      const restY = Math.abs(targetY[i] - entry.offsetY[i]);
-      const speed = Math.hypot(entry.velocityX[i], entry.velocityY[i]);
-      if (restX > SETTLE_OFFSET || restY > SETTLE_OFFSET || speed > SETTLE_VELOCITY) {
-        active = true;
-        break;
-      }
-    }
-  }
-  return active;
+  // Nothing here settles. The outline IS the depth, so a given depth
+  // always looks the same and there is no motion left over once the
+  // piercer stops -- which is exactly the property the springs did not
+  // have, and the reason they needed the loop kept awake. The bones' own
+  // springs still drive it; they are untouched and report for themselves.
+  return false;
 }
 
 // Test/debug window into the solver: what the contact currently reads and

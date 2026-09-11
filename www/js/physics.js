@@ -27,7 +27,7 @@ function tick(timestamp) {
   // and its flesh springing back does not pause them either -- they are
   // separate systems sharing only the clock.
   const bonesMoving = bonesStore.stepPhysics(dt);
-  const fleshMoving = stepPierce(dt);
+  const fleshMoving = stepPierce();
   const stillMoving = bonesMoving || fleshMoving;
   requestRender();
 

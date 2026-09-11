@@ -1,4 +1,4 @@
-// The pierce solver's spring state, and nothing else.
+// The pierce solver's per-vertex offsets, and nothing else.
 //
 // This module exists to keep the import graph acyclic. The solver
 // (pierce.js) needs mesh.js's geometry helpers, and mesh.js needs to read
@@ -23,8 +23,6 @@ export function pierceStateFor(partId, vertexCount) {
       count: vertexCount,
       offsetX: new Float64Array(vertexCount),
       offsetY: new Float64Array(vertexCount),
-      velocityX: new Float64Array(vertexCount),
-      velocityY: new Float64Array(vertexCount),
     };
     state.set(partId, entry);
   }

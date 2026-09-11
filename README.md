@@ -85,7 +85,7 @@ www/js/pierce.js        Pierce: the contact measurement and the spring that push
 www/js/pierceState.js   The pierce springs' per-vertex state, in a module of its
                          own so pierce.js and mesh.js can both reach it
 www/js/pierceTool.js    The Pierce region painter, on the Px Pin pattern: the
-                         piercer's tip, and the interactive layer's pierceable
+                         piercer's tip, and the pierced layer's pierceable
                          area, the part of it that gives way, and its walls
 www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
 www/js/project.js       The whole scene as plain data and back — used by both
@@ -1489,7 +1489,7 @@ settles.
 ## Pierce: pushing flesh aside without cutting a hole
 
 A needle pressed into a belly does not cut a hole in it. The belly dents.
-**Pierce** is that dent: a piercing layer pushes an interactive layer's
+**Pierce** is that dent: a piercing layer reshapes a pierced layer's
 pixels out of its way, in proportion to how deep it has come, and they
 spring back when it withdraws.
 
@@ -1508,7 +1508,8 @@ that receives it. The second was called *Interactive* until this pass; the
 name said nothing about what it did, so it was renamed throughout — every
 label, hint, toast, painter caption and internal identifier. A search for
 `interactive`, case-insensitive, across `www/js`, `www/index.html` and
-`www/css` now returns **nothing**.
+`www/css` now returns exactly **two lines**, both in `project.js`: the
+comparison that loads the old stored value, and the comment explaining it.
 
 The stored value changed with it, so a project saved before the rename
 would have lost its roles on load. It does not: deserialization maps the
@@ -1524,7 +1525,7 @@ Pierce does nothing until you say which layer is which. From a layer row's
 | --- | --- |
 | **None** | An ordinary layer. The default, and what every layer starts as. |
 | **Piercer** | The thing that goes in — a needle, a horn, a finger. |
-| **Interactive** | The thing that gives way. |
+| **Pierced** | The thing that gives way. |
 
 Nothing about this is inferred. The app never decides a layer "looks like"
 a piercer because of what has been painted on it, how it is shaped, or
@@ -1547,7 +1548,7 @@ against them.
 
 ### Painting the regions
 
-Which *part* of a piercer is its point, and which part of the interactive
+Which *part* of a piercer is its point, and which part of the pierced
 layer can be pierced, are painted — in a dedicated full-screen window
 built on exactly the Px Pin pattern, not on the main canvas.
 
@@ -1559,7 +1560,7 @@ real transforms are read, never written.
 
 **Painting.** One finger paints. A **target switch** picks which of the
 two you are painting — **Tip** (pink) on the piercer, **Pierceable**
-(cyan) on the interactive layer — and separate **Paint** and **Erase**
+(cyan) on the pierced layer — and separate **Paint** and **Erase**
 tools, explicitly selected rather than hidden toggles, add and remove.
 Brush sizes run **1×1 to 10×10** in the same "⌄" menu the rest of the app
 uses. A stroke fills in the texels between samples rather than leaving a
@@ -1603,9 +1604,9 @@ piercer moved by both would travel twice as far as the finger, and could
 never be brought toward the body at all — the body would run away from it
 at exactly the same speed.
 
-Meanwhile the interactive layer's own physics keeps running. Its spring
-bones swing and settle underneath the contact, and the pierce displacement
-composes with that rather than freezing it.
+Meanwhile the pierced layer's own physics keeps running. Its spring
+bones swing and settle underneath the contact, and the pierce's shape
+change composes with that rather than freezing it.
 
 ### How deep is deep
 
@@ -1616,8 +1617,9 @@ gap   = how far the tip still has to travel to reach the pierceable
 depth = clamp(Enter - gap, 0, End)          t = depth / End
 ```
 
-`t` runs 0 at first touch to 1 at the limit and scales the push, so a tip
-barely in contact moves the flesh barely at all.
+`t` runs 0 at first touch to 1 at the limit and is the blend between the
+region's two drawn shapes, so a tip barely in contact changes the flesh's
+shape barely at all.
 
 The axis is read from the artwork: it points from the middle of the whole
 piercer layer toward the middle of its painted tip — a needle has its
@@ -1639,7 +1641,7 @@ Enter, so the flesh has retreated *ahead* of the tip. Flesh dents away
 from a needle instead of being skewered by it, and Enter is how far ahead
 of itself the needle pushes.
 
-**End is a hard limit, and it binds the piercer as well as the push.**
+**End is a hard limit, and it binds the piercer as well as the shape.**
 Capping the depth was only half of it. The contact's *geometry* also stops
 advancing past End, so the dent holds at its deepest instead of melting
 away — but the piercer's own artwork was still drawn wherever the drag had
@@ -1675,7 +1677,7 @@ Pierceable answers *can a piercer make contact here*. That is a different
 question from *and may this pixel then move*, and the two used to share one
 mask — so anything a piercer could touch was also something that gave way.
 
-They are now two independently painted masks on the interactive layer:
+They are now two independently painted masks on the pierced layer:
 
 | Mask | Decides |
 | --- | --- |
@@ -1695,12 +1697,12 @@ ever takes movement away. The solver intersects it with the pierceable
 mask rather than trusting it alone, so a stray mark somewhere that can
 never be touched cannot make anything deform.
 
-It is painted in the same window as the others, as one of four targets —
-Tip, Pierceable, Deformable, Barrier — with the same brush and the same
-stroke undo.
+It is painted in the same window as the others, as one of five targets —
+Tip, Pierceable, Deformable, Barrier, Entered — with the same brush and the
+same stroke undo.
 
 **On a report that this mask was stored but not respected:** not
-reproducible. Traced through the actual displacement path and measured
+reproducible. Traced through the actual deformation path and measured
 every way it could be set — the real brush in the painter as well as the
 store directly, patches from 6×6 px up to the full region, on a 32 px
 layer and a 96 px one, and through a save/load round trip. Displacement
@@ -1708,7 +1710,7 @@ reads the mask in all of them: a sub-region painted where the tip arrives
 gives way at 15.0 px, and the same pixels left unpainted hold at 0.000 px
 while still registering contact. There is one real limit behind it, and it
 is resolution rather than wiring: the mask is expressed through mesh cells,
-and an interactive layer that was never bound gets an auto-generated mesh
+and a pierced layer that was never bound gets an auto-generated mesh
 6–10 cells across whatever its size — 12 px cells on a 96 px layer. A mask
 painted finer than a cell still works, but gives way at cell resolution. On the canvas debug overlay it is drawn in amber over the pierceable
 cyan, so the split is visible at a glance: cyan is where a pierce
@@ -1727,7 +1729,7 @@ They say nothing about sideways, so a tip driven at an angle slid out
 through the edge of the pierceable shape and sat in open space beyond it —
 a small artifact poking past the region's outline.
 
-**Barrier** is a fourth painted mask on the interactive layer, and its
+**Barrier** is a fourth painted mask on the pierced layer, and its
 pixels are solid. While a tip is in contact its contained position is
 stopped by them, in any direction, so it stays inside the cavity the
 artwork draws.
@@ -1822,8 +1824,9 @@ to the needle driven into parked flesh. The reverse direction was never
 missing; what was missing was any say in it, and the behaviour shipped as
 "Piercer" was in fact "Both".
 
-**Physics** here means the interaction: contact triggering displacement and
-the springs settling afterwards — not parenting. The setting lives on the
+**Physics** here means the interaction: contact changing the pierced
+region's shape and the skeleton's springs settling afterwards — not
+parenting. The setting lives on the
 piercer beside Enter and End, because like them it describes the
 relationship rather than the artwork:
 
@@ -1847,14 +1850,29 @@ over a long session.
 The depth window still has both numeric fields, and now also draws the
 piercer's own artwork with its painted tip tinted and a ruler running out
 along the direction that tip points. The two depths sit on that ruler as
-handles: **Enter** where contact begins, **End** where the push stops
-growing.
+handles: **Enter** where contact begins, **End** where the shape change
+stops growing.
 
 Neither input owns the value — the Part does, and both are views onto it.
 Dragging a handle writes the field; typing in the field moves the handle.
 The ruler is planned when the window opens and when a number is typed, but
 never mid-drag: a ruler that rescaled itself as the handle moved would
 slide out from under the finger holding it.
+
+**Each handle is a place, not a distance.** Enter sits at `enter` along the
+ruler and End at `enter + end`, so writing only `enter` when the Enter
+handle moved dragged the End handle along with it — End's position is
+*derived* from Enter. From the outside that looks exactly like "only the
+distance between the two markers is adjustable, never where either one
+actually sits", which is what it was. A drag now holds the other handle's
+place on the ruler and re-derives both stored numbers from the two
+positions: dragging is the input, and Enter and End are what fall out of
+it. Measured by finding the handles' own colours on the canvas and dragging
+them: moving End 40 px moves End 38.5 px and Enter **0.00 px**; moving
+Enter 30 px moves Enter 28.9 px, leaves End at **0.00 px** of drift, and
+leaves `enter + end` — End's place on the ruler — unchanged at 48. Aiming a
+handle at a spot on the artwork lands it **1.00 px** from the target, and
+the field then reads the ruler distance of where it landed.
 
 The handle positions are projected onto the tip's axis rather than assumed
 horizontal, so this works for a tip pointing in any direction — and the
@@ -1863,35 +1881,105 @@ only the sprite put the End handle 62 px below the bottom edge of a
 480×300 canvas for a needle pointing down, where it could be neither seen
 nor dragged.
 
-### The spring is the one already here
+### Two drawn shapes, not a push
 
-A displaced vertex is not teleported. It gets a *target*, and its actual
-offset springs toward it under the same damped mass-spring, integrated the
-same way, with the same stiffness and damping the physics bones use:
+The shape of a pierce is **drawn, not simulated**. A pierceable region has
+two outlines: **Rest**, which is the pierceable shape already painted, and
+**Entered**, a second shape painted in the same window. What renders at any
+moment is a blend between them, and depth chooses the mix:
 
 ```
-acceleration = stiffness * (target - offset) - damping * velocity
-velocity += acceleration * h      (semi-implicit / symplectic Euler:
-offset   += velocity * h           velocity first, then position)
+t = depth / End                      0 at first touch, 1 at the limit
+shape(k) = rest(k) + t * (entered(k) - rest(k))       for every outline point k
 ```
 
-So flesh gives way with weight rather than snapping, and springs back on
-its own when the piercer withdraws — retraction is not a separate code
-path, it is the same spring with its target released. It steps in
-`physics.js`'s frame loop rather than in the renderer, because a spring
-has to keep moving after the input that disturbed it stops, and because
-advancing it per redraw would make the simulation run faster on a busy
-screen.
+That is morph-target interpolation — the same thing a blend shape is
+anywhere else — and it is why the result cannot tear. Both outlines are
+things a person drew, every intermediate is a straight line between a pair
+of drawn points, and there is no force anywhere to overshoot, oscillate or
+diverge. At `t = 0.5` the silhouette is the exact midpoint of the two
+drawings, measured: **8.92 px** of movement against **17.84 px** at `t = 1`.
 
-**Px Pin wins.** The pierce offset is applied before the pin step, so a
-pinned pixel on the interactive layer stays exactly where it was even at
-full depth, and the two features compose instead of fighting.
+**What it replaced, and why.** Until now each vertex near the tip was given
+a spring target pushing it away from the contact point, and its offset
+sprang toward that target. Every vertex solved its own little problem
+independently, so neighbouring vertices could disagree about where the
+surface was — which is what produced a jagged, torn-looking silhouette over
+a wide area, rather than a shape. No amount of stiffness or damping fixes
+that, because it is not a tuning problem: a per-vertex push has no notion
+of the outline it is supposed to be making. Two drawn shapes do.
+
+**How the outlines are built.** Both masks are traced by Moore-neighbourhood
+border following with Jacob's stopping criterion, resampled to 64 points at
+equal arc length — so point *k* means "a quarter of the way round" on both
+shapes rather than "the 17th texel somebody happened to paint" — and then
+cyclically rotated so the two point lists line up, by the rotation that
+minimises the sum of squared distances between centred pairs.
+
+**How the artwork follows the outline.** Every mesh vertex is expressed once,
+at bind time, in **mean value coordinates** (Floater, 2003) against the rest
+outline: weights that sum to 1 and vary smoothly, computed with the
+half-angle tangent identity so they stay stable on thin shapes. Evaluating
+the same weights against the blended outline is where the vertex goes.
+Because the weights are fixed and the blend is linear, the whole warp is a
+linear function of `t`: it cannot fold, and a one-pixel change in depth
+never moves a vertex more than **1.115 px**. Measured across a full sweep
+from first touch to past the End Point: **zero folds at every depth**, and
+no neighbouring pair torn apart.
+
+**Nothing integrates.** `stepPierce()` takes no timestep and always reports
+"nothing still moving", because there is nothing to still be moving: a given
+depth always looks exactly the same, however it was arrived at, and
+withdrawing is the same blend run backwards. Spring bones are untouched —
+they still integrate in `physics.js`'s frame loop, and the whole-object
+jiggle they produce composes with the blend rather than replacing it.
+
+**Both masks still gate it.** Deformable decides which vertices may move at
+all, and Px Pin still wins over everything, exactly as before. Only the
+local shape-changing effect at the contact point changed.
+
+### Painting the Entered shape
+
+The painter's fifth target. It draws over the pierceable shape in violet,
+so the two read as a before and an after, and the canvas debug overlay
+tints the texels the Entered shape *adds* beyond the rest shape — the
+question worth answering at a glance being "is what I drew actually
+different, and which way does it go?", not "can you fill my region in".
+
+**An unpainted Entered shape is a finished, valid setup**, not a missing
+step: the region holds its rest shape at every depth while contact, the
+depth reading and the z-order swap all carry on normally. Nothing errors
+and nothing warns.
+
+Two things a drawing genuinely cannot be, both caught and both said out
+loud in the painter and on the Pierce window rather than silently ignored:
+
+- **Cut into separate pieces.** A channel taken clean through a region
+  leaves two shapes, and one closed outline can only be paired with one
+  closed outline — blending a whole region toward one of its halves is the
+  torn silhouette this feature exists to avoid. Under 90% of the painted
+  texels in a single piece, the blend is declined and the region stays at
+  rest. A speck of overspray is nowhere near that line (99.5%); a region
+  cut in half is (51%).
+- **Painted from a region with no single outline of its own.** Same test,
+  applied to the pierceable mask.
+
+**One bug found by painting to the edge.** A mask is a flat array of texels,
+so column −1 is the previous row's last texel and column `width` is the
+next row's first. The boundary walk had no bounds test, so a region painted
+right up to the artwork's left or right edge — a band across a whole limb —
+wrapped round at the row end and marched off down the image. On a 32-texel
+sprite that produced an "outline" **1034 texels wide**, a largest-outline
+move of **1020 px** where 17 px was the most anything should have moved, and
+a shape change reaching **4962 px** at the far corner of the layer. Bounds
+are checked on both axes now, and the same band traces `x 0.5..31.5,
+y 0.5..3.5` — exactly the painted rectangle.
 
 ### No skeleton required
 
-A displacement is *per vertex*, so an interactive layer needs a mesh to
-put one on. Layers used to get a mesh only by being bound to a skeleton in
-Bind mode — which meant that unless you had already rigged and bound the
+The blended outline is applied *per vertex*, so a pierced layer needs a
+mesh to carry it. Layers used to get a mesh only by being bound to a
+skeleton in Bind mode — which meant that unless you had already rigged and bound the
 flesh, the whole feature silently did nothing. Nothing in the Pierce UI
 ever asked for a rig, and piercing has nothing to do with bones.
 
@@ -1901,6 +1989,10 @@ painted: the contact read perfectly the whole way in — gap `31 → 7 → -1 �
 -7 → -13`, depth rising and capping at End, `engaged` true — while the
 displacement sat at **0.000 px at every depth**, because the layer never
 reached the solver at all.
+
+(Both bugs in this section belong to the spring displacement that the
+blend-shape morph has since replaced; the mesh they needed is still exactly
+what the morph writes into, so the fixes still carry.)
 
 The solver now builds the mesh itself, the first time it looks at a
 pierceable layer. An unbound mesh has no bind pose and no weights, so
@@ -1938,9 +2030,9 @@ triangles, differing only in which texels each pass may touch, so they
 cannot drift apart or open a seam between them.
 
 The switch is driven by `contact.engaged` — the very same reading the
-displacement is integrated from, published in the same pass. There is one
-contact test and both effects read its answer, so the tip cannot sink a
-frame before the flesh gives way or stay sunk a frame after it lets go. A
+blend is taken from, published in the same pass. There is one contact test
+and both effects read its answer, so the tip cannot sink a frame before the
+flesh gives way or stay sunk a frame after it lets go. A
 piercer already below its target is left alone; there is nothing to fix.
 
 Making the renderer read that state meant it might need the measurement
@@ -1996,7 +2088,7 @@ the bone still responds. That demonstrates the two simulations stay
 **independent** — a pierce does not freeze the skeleton — not that a pierce
 drives it.
 
-Measured directly, with a physics bone on the interactive layer and a
+Measured directly, with a physics bone on the pierced layer and a
 needle driven 60 px in as the only moving thing in the scene:
 
 ```
@@ -2011,6 +2103,15 @@ bone state — it only ever reads `snapshotTransforms()`. The control line is
 the same bone in the same scene responding normally to an actual shove, so
 the bone is live and the measurement is not a dead rig.
 
+**Re-measured after the spring was replaced with blend-shape morphing**, on
+the same scene and the same rig: `0.000e+0 rad`, `0.000e+0 rad/s`, control
+`1.775e-1 rad`. Unchanged, which is the point — the replacement touched
+only the local shape at the contact, and this system was not disturbed by
+it. It was also not brought into existence by it: this remains a feature
+that has never been built, and the "whole-object jiggle reaction" a pierced
+layer does show is its own spring bones responding to being dragged, not to
+being pierced.
+
 Building it would mean coupling the solver into the bone integrator:
 turning the contact's depth and axis into a torque about the bone's head,
 fed in where `bones.js` accumulates acceleration. That is a real feature,
@@ -2024,7 +2125,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Eight browser suites cover this, all passing:
+Ten browser suites and one pure-maths suite cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -2032,31 +2133,34 @@ Eight browser suites cover this, all passing:
 - **Editing** (22 checks) — editing depths and regions after the fact;
   Remove Pierce Role clearing pierce data and only pierce data; the
   delete-layer warning clearing the orphaned partner.
-- **Runtime** (30 checks) — the Piercer tab moving the piercer and *only*
+- **Runtime** (27 checks) — the Piercer tab moving the piercer and *only*
   the piercer (`needle +24`, `root 100.5 -> 100.5`) and Body moving the
   character and *only* the character (`root +36`, `needle 60,20 ->
   60,20`); nothing engaging at 1 px outside Enter and engaging at 1 px
-  inside it; the push rising monotonically with depth
-  (`0.34 < 3.20 < 9.37 < 15.37` px); depth and `t` pinned at End from 0 to
-  40 px past it, with the displacement holding at 15.4 px rather than
-  fading; a flood fill of the rendered frame finding **0 enclosed hole
-  pixels** and no pixels lost at maximum depth; a residual of 0.005 px
-  after retraction; a pinned band displaced 0.01 px where an unpinned one
-  moved 15.37 px, rendering at the identical row in contact and at rest;
-  and the interactive layer's own spring bone still swinging 0.17 rad and
-  settling while a contact is engaged.
-- **Visual** (26 checks) — the whole suite run on a scene with **no
-  skeleton in it at all**: the flesh moving `0.34 → 3.20 → 9.37 → 15.37` px
-  as the tip goes in, capped within 0.5 px of End from 0 to 40 px past it,
-  and never diverging; every fixture colour at an identical pixel count
-  before and after the layer gains a mesh; the tip at 648 rendered pixels
-  out of contact and **0** at full depth, with the shaft unchanged at 2808
-  either way and the flesh losing none of its own; the sink and the
-  displacement flipping on the same reading one pixel either side of Enter;
-  the overlay tinting the painted band to 0 remaining yellow pixels while
-  leaving the unpainted body and shaft untouched to the pixel, the readout
-  tracking `OUT → IN → AT END / tip sunk`, and switching it off restoring
-  the artwork exactly.
+  inside it; the shape change rising monotonically with depth
+  (`0.19 < 0.93 < 1.87 < 2.99` px); depth and `t` pinned at End from 0 to
+  40 px past it, with the shape holding at 2.99 px rather than fading; a
+  flood fill of the rendered frame finding **0 enclosed hole pixels** at
+  maximum depth; a residual of 0.0000 px after retraction; a pinned band
+  at **0.00 px** where an unpinned one moved 2.99 px, rendering at the
+  identical row in contact and at rest; and the pierced layer's own spring
+  bone still swinging 0.178 rad and settling while a contact is engaged.
+- **Visual** (35 checks) — the whole suite run on a scene with **no
+  skeleton in it at all**: the flesh taking the drawn shape
+  `0.19 → 0.93 → 1.87 → 2.99` px as the tip goes in, capped within 0.5 px
+  of End from 0 to 40 px past it, and never diverging; every fixture colour
+  at an identical pixel count before and after the layer gains a mesh; the
+  tip at 648 rendered pixels out of contact and **0** at full depth, with
+  the shaft unchanged at 2808 either way; the z-order accounted for exactly
+  against a control with the pierce switched off — the flesh at 24412 px
+  with the whole needle on top and 25060 px with the tip sunk, **648 px
+  handed back against 648 tip pixels**, so nothing else was lost and no
+  hole was punched; the sink and the shape change flipping on the same
+  reading one pixel either side of Enter; the overlay tinting the painted
+  band to 0 remaining yellow pixels while leaving the unpainted body and
+  shaft untouched to the pixel, the readout tracking
+  `OUT → IN → AT END / tip sunk` with its blend percentage, and switching
+  it off restoring the artwork exactly.
 - **Walls as painted pixels** (10 checks) — a 20 px cavity with barriers
   on its left and right only and a tip whose own spread is 12.3 px, the
   geometry that used to seal itself shut: entry straight down the open
@@ -2073,7 +2177,7 @@ Eight browser suites cover this, all passing:
   and surviving a save/load round trip, the role buttons reading
   None / Piercer / Pierced, and a project written with the pre-rename
   `interactive` value still loading its role.
-- **Barrier, deformable and drawn depths** (24 checks) — a needle dragged
+- **Barrier, deformable and drawn depths** (23 checks) — a needle dragged
   40 px sideways out of a walled channel with its contained tip reaching
   137 and staying at 137 at every step, never past the wall at 140, while
   the raw position tracked the finger 128 → 168 and the artwork stopped
@@ -2081,24 +2185,58 @@ Eight browser suites cover this, all passing:
   past the edge; the depth cap still pinned at End 60 px deeper; a
   pierceable-but-not-deformable area engaging at full depth with the
   z-order swapping while its pixels moved 0.000 px and rendered at their
-  rest row, against 15.0 px once painted deformable; all three masks
+  rest row, against 8.15 px once painted deformable; all four masks
   surviving a serialize/load round trip; and the drawn Enter/End handles
   writing 26 and 5 into the numeric fields, a typed number moving the
   handle back, and the stored values then driving the clamp — nothing
   engaging outside the drawn Enter, contact beginning 1 px inside it, and
   the depth capping at the drawn End 40 px deeper.
-- **Depth cap and deformable mask** (25 checks) — a needle dragged 10, 30,
+- **Depth cap and deformable mask** (24 checks) — a needle dragged 10, 30,
   60 and 100 px past End with the raw `needle.y` travelling 65 → 155 and
   the overshoot tracking it one px per px, while depth stayed at 16 and the
   rendered tip stayed on screen row 435 at every one of them, never
   reaching the flesh's far edge at 590; the hold releasing the moment the
   drag comes back inside End, and sideways motion past End still tracking
   the finger; contact engaging at full depth and the z-order still swapping
-  on a pierceable-but-not-deformable area while those pixels displaced
-  0.005 px and rendered at their exact rest row; the push returning to
-  15.38 px once that area is painted deformable; a deformable mark on
-  non-pierceable pixels moving nothing; the painter's third target; and the
-  mask surviving a serialize/load round trip at 256 px.
+  on a pierceable-but-not-deformable area while those pixels moved
+  **0.000 px** and rendered at their exact rest row; the shape change
+  returning to 13.52 px once that area is painted deformable; a deformable
+  mark on non-pierceable pixels moving nothing; the painter's third target;
+  and the mask surviving a serialize/load round trip at 256 px.
+- **Blend-shape morphing** (20 checks) — a region with no Entered shape
+  painted engaging at full depth while moving **0 px**; with one painted,
+  the shape change running `0 → 1.12 → 4.46 → 8.92 → 13.38 → 17.84` px as
+  `t` runs `0 → 1`, monotonic, stopping at End and still 17.84 px 30 px
+  past it; **zero folds at every one of those depths** and no neighbour
+  torn apart (12 px at rest against a worst of 20.27 px in contact);
+  `t = 0.5` giving 8.92 px against 17.84 px at `t = 1`, the exact half; a
+  one-pixel change of depth never stepping a vertex more than 1.115 px; a
+  region painted edge to edge blending 9.17 px with 0 folds; an Entered
+  shape cut clean through declined at **0 px** with contact and the z-order
+  unaffected and the reason readable; the painter's Entered target naming
+  `P_slab · entered shape`; and 964 texels surviving a save/load round trip.
+- **Enter/End markers** (23 checks) — both handles found by their own
+  colours on the drawing, 77.2 px apart; dragging End 40 px moving End
+  38.5 px and Enter **0.00 px**, with the Enter field untouched at 12;
+  dragging Enter 30 px moving Enter 28.9 px, leaving End at **0.00 px** of
+  drift and `enter + end` unchanged at 48 — against the old behaviour,
+  which dragged End 29 px along with it; both handles pulled back the other
+  way just as freely; a handle aimed at a spot landing **1.00 px** from it
+  with the field reading that spot's ruler distance; typing still moving
+  the handle; Confirm storing exactly what the drawing showed
+  (`{enter: 9, end: 49}`); and the solver then honouring it — nothing
+  engaged outside the placed Enter, depth capping at the placed End.
+- **Morph maths** (23 checks, pure Node, no browser) — outlines at the
+  requested point count, hugging the painted shape rather than its bounding
+  box, evenly spaced to a spread of 0.000; the largest blob winning over a
+  stray speck; a shape painted to the artwork's edge tracing inside the
+  artwork (`x 0.5..39.5`) instead of running off it, and a small drawn
+  change staying a small change (2.83 px); coverage reporting 1 for a whole
+  shape, 0.995 with a speck and 0.513 for one cut in half; mean value
+  weights summing to 1 and reproducing both interior and exterior points to
+  **3e-14**; the halfway blend being the exact midpoint of every
+  corresponding pair; and across a full sweep, **0 folds**, no pair
+  stretched apart, and a biggest step of 0.151 px.
 
 ---
 
