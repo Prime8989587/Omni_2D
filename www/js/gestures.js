@@ -18,6 +18,7 @@
 // ever occupies whole cells, but a slow finger still moves it eventually.
 
 import { partsStore, clampScale, MIN_PART_SCALE, MAX_PART_SCALE } from './parts.js';
+import { pierceHold } from './pierce.js';
 import { appState, AppState } from './state.js';
 import { view } from './view.js';
 import { history } from './history.js';
@@ -116,6 +117,21 @@ function partsAreEditable() {
   return appState.state === AppState.HOME;
 }
 
+// A piercer held at its End Point is DRAWN short of its own coordinates,
+// so a finger aiming at the needle it can see would otherwise miss it and
+// grab the empty grid the coordinates still point at. Shifting the touch
+// by the same hold puts the two back in agreement. Every other layer is
+// drawn exactly where it says it is, and maps to itself.
+function atDrawnPosition(part, x, y) {
+  const back = part.isPiercer ? pierceHold().get(part.id) : null;
+  return back ? { x: x + back.x, y: y + back.y } : { x, y };
+}
+
+function grabs(part, x, y) {
+  const point = atDrawnPosition(part, x, y);
+  return part.containsPoint(point.x, point.y);
+}
+
 export function initGestures(canvasEl) {
   canvasEl.addEventListener('pointerdown', (event) => {
     if (!partsAreEditable()) return;
@@ -134,9 +150,9 @@ export function initGestures(canvasEl) {
       // Only when the finger is off the selected part does the touch
       // fall through to whatever is topmost there (tap-to-select).
       const selected = partsStore.selected;
-      const hit = selected && selected.visible && selected.containsPoint(scenePoint.x, scenePoint.y)
+      const hit = selected && selected.visible && grabs(selected, scenePoint.x, scenePoint.y)
         ? selected
-        : partsStore.hitTest(scenePoint.x, scenePoint.y);
+        : partsStore.hitTest(scenePoint.x, scenePoint.y, atDrawnPosition);
       partsStore.select(hit ? hit.id : null);
       // A locked layer can be selected and inspected but not moved, so the
       // touch drives the camera instead of the artwork.

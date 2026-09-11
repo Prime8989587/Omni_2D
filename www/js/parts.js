@@ -123,6 +123,25 @@ export class Part {
     this.pierceRegionVersion = 0;
     this.pierceEnter = DEFAULT_PIERCE_ENTER;
     this.pierceEnd = DEFAULT_PIERCE_END;
+
+    // WHICH PIERCEABLE PIXELS ARE ALLOWED TO GIVE WAY
+    //
+    // pierceRegion answers "can a piercer make contact here". This answers
+    // the separate question "and may this pixel then MOVE" -- so an
+    // interactive layer can register a pierce across its whole surface
+    // while only part of that surface actually dents. Bone, a fingernail,
+    // a belt buckle: contact happens, the z-order swap happens, and the
+    // pixels themselves hold firm.
+    //
+    // EMPTY MEANS ALL OF IT. A layer that has never had this painted
+    // behaves exactly as it did before the mask existed -- everything
+    // pierceable deforms -- so this only ever takes movement AWAY, and no
+    // existing project changes behaviour by being loaded into a build that
+    // has it. Meaningful only where the pixel is also pierceable; the
+    // solver intersects the two rather than letting a stray mark outside
+    // the pierceable area do anything.
+    this.pierceDeformRegion = new Set();
+    this.pierceDeformRegionVersion = 0;
   }
 
   get isPiercer() {
@@ -413,6 +432,8 @@ class PartsStore {
     if (role === PierceRole.NONE) {
       part.pierceRegion = new Set();
       part.pierceRegionVersion++;
+      part.pierceDeformRegion = new Set();
+      part.pierceDeformRegionVersion++;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
     }
@@ -427,6 +448,27 @@ class PartsStore {
     part.pierceEnd = clampPierceDepth(end);
     this._emit('transform');
     return true;
+  }
+
+  // The deformable sub-mask, painted exactly like the others. Kept beside
+  // setPierceRegion rather than folded into it because the two answer
+  // different questions and are painted in separate passes.
+  setPierceDeformRegion(id, indices, marked) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return 0;
+    let changed = 0;
+    for (const index of indices) {
+      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
+      if (marked ? !part.pierceDeformRegion.has(index) : part.pierceDeformRegion.has(index)) {
+        if (marked) part.pierceDeformRegion.add(index); else part.pierceDeformRegion.delete(index);
+        changed++;
+      }
+    }
+    if (changed) {
+      part.pierceDeformRegionVersion++;
+      this._emit('transform');
+    }
+    return changed;
   }
 
   // Same shape as setPins: a batch of texel indices flipped on or off in
@@ -512,8 +554,18 @@ class PartsStore {
   // Topmost VISIBLE part whose bounds contain the scene-space point, or
   // null. Hidden layers are not pickable: they are not on screen, so a
   // touch that appears to land on empty grid must behave that way.
-  hitTest(x, y) {
-    return this.partsTopFirst.find((part) => part.visible && part.containsPoint(x, y)) || null;
+  //
+  // `mapPoint` exists for the same reason: a part can be DRAWN somewhere
+  // other than its own coordinates say (a piercer held at its End Point
+  // is), and a finger has to be able to grab the artwork it can see. The
+  // caller supplies the mapping because this module has no business
+  // knowing what a pierce is.
+  hitTest(x, y, mapPoint = null) {
+    return this.partsTopFirst.find((part) => {
+      if (!part.visible) return false;
+      const point = mapPoint ? mapPoint(part, x, y) : { x, y };
+      return part.containsPoint(point.x, point.y);
+    }) || null;
   }
 }
 

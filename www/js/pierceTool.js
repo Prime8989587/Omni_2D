@@ -38,6 +38,11 @@ const TIP_COLOR = 'rgba(255, 46, 147, 0.55)';
 const TIP_EDGE = '#FF2E93';
 const AREA_COLOR = 'rgba(46, 230, 255, 0.45)';
 const AREA_EDGE = '#2EE6FF';
+// Deformable is a SUBSET of pierceable and is drawn on top of it, so it
+// needs a colour that reads clearly against cyan rather than blending
+// into it -- amber, the warm opposite of both the other two.
+const DEFORM_COLOR = 'rgba(255, 176, 46, 0.6)';
+const DEFORM_EDGE = '#FFB02E';
 
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -49,7 +54,8 @@ let session = null;
 function cacheElements() {
   for (const id of [
     'pierceWindow', 'pierceWindowTarget', 'pierceWindowStatus', 'pierceWindowDoneBtn',
-    'pierceCanvas', 'pierceTargetTipBtn', 'pierceTargetAreaBtn', 'pierceToolPaintBtn',
+    'pierceCanvas', 'pierceTargetTipBtn', 'pierceTargetAreaBtn', 'pierceTargetDeformBtn',
+    'pierceToolPaintBtn',
     'pierceToolEraseBtn', 'pierceBrushBtn', 'pierceBrushMenu',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
     'pierceInteractiveOpacity', 'pierceInteractiveOpacityValue',
@@ -139,6 +145,32 @@ function endSession() {
   session = null;
 }
 
+// The three masks the brush can write into. Tip lives on the piercer;
+// pierceable and deformable BOTH live on the interactive layer, which is
+// why the target rather than the layer has to decide which Set is being
+// edited -- two of them share a part.
+const MASKS = {
+  tip: {
+    region: (part) => part.pierceRegion,
+    write: (id, indices, marked) => partsStore.setPierceRegion(id, indices, marked),
+    label: 'tip',
+  },
+  area: {
+    region: (part) => part.pierceRegion,
+    write: (id, indices, marked) => partsStore.setPierceRegion(id, indices, marked),
+    label: 'pierceable',
+  },
+  deform: {
+    region: (part) => part.pierceDeformRegion,
+    write: (id, indices, marked) => partsStore.setPierceDeformRegion(id, indices, marked),
+    label: 'deformable',
+  },
+};
+
+function targetMask() {
+  return MASKS[session.target] || MASKS.area;
+}
+
 // The layer the brush is currently writing into, and the one it is not.
 function targetPart() {
   return session.target === 'tip' ? session.piercer : session.interactive;
@@ -196,11 +228,11 @@ function drawLayer(ctx, canvas, at, part, opacity) {
 // always shown -- the tip and the flesh only make sense in relation to
 // each other, so hiding the one you are not painting would be hiding the
 // thing you are aiming at.
-function drawRegion(ctx, part, at, fill, edge) {
+function drawRegion(ctx, part, at, fill, edge, region = part.pierceRegion) {
   const { cam } = session;
   const size = part.scale * cam.zoom;
   ctx.fillStyle = fill;
-  for (const index of part.pierceRegion) {
+  for (const index of region) {
     const u = index % part.naturalWidth;
     const v = Math.floor(index / part.naturalWidth);
     const x = (at.x + u * part.scale) * cam.zoom + cam.panX;
@@ -253,19 +285,23 @@ function render() {
   }
 
   drawRegion(ctx, interactive, interactiveAt, AREA_COLOR, AREA_EDGE);
+  // On top of the pierceable area, because it is a part of it.
+  drawRegion(ctx, interactive, interactiveAt, DEFORM_COLOR, DEFORM_EDGE, interactive.pierceDeformRegion);
   drawRegion(ctx, piercer, piercerAt, TIP_COLOR, TIP_EDGE);
 
   els.pierceWindowTarget.textContent = session.target === 'tip'
     ? `${piercer.name} · tip`
-    : `${interactive.name} · pierceable`;
+    : `${interactive.name} · ${targetMask().label}`;
+  const deform = interactive.pierceDeformRegion.size;
   els.pierceWindowStatus.textContent =
     `tip ${piercer.pierceRegion.size} px · flesh ${interactive.pierceRegion.size} px · ` +
-    `${Math.round(cam.zoom * 100)}%`;
+    `soft ${deform || 'all'} · ${Math.round(cam.zoom * 100)}%`;
 }
 
 function renderTools() {
   els.pierceTargetTipBtn.setAttribute('aria-pressed', String(session.target === 'tip'));
   els.pierceTargetAreaBtn.setAttribute('aria-pressed', String(session.target === 'area'));
+  els.pierceTargetDeformBtn.setAttribute('aria-pressed', String(session.target === 'deform'));
   els.pierceToolPaintBtn.setAttribute('aria-pressed', String(session.tool === 'paint'));
   els.pierceToolEraseBtn.setAttribute('aria-pressed', String(session.tool === 'erase'));
   els.pierceBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
@@ -332,18 +368,20 @@ function brushIndices(u, v) {
 // brush swept across a layer touches thousands of them.
 function stamp(texels) {
   const part = targetPart();
+  const mask = targetMask();
+  const region = mask.region(part);
   const { stroke } = session;
   const painting = session.tool === 'paint';
   const indices = new Set();
   for (const { u, v } of texels) {
     for (const index of brushIndices(u, v)) {
-      if (painting ? !part.pierceRegion.has(index) : part.pierceRegion.has(index)) indices.add(index);
+      if (painting ? !region.has(index) : region.has(index)) indices.add(index);
     }
   }
   if (indices.size === 0) return;
 
   for (const index of indices) if (!stroke.touched.has(index)) stroke.touched.set(index, !painting);
-  partsStore.setPierceRegion(part.id, [...indices], painting);
+  mask.write(part.id, [...indices], painting);
   stroke.changed = true;
 }
 
@@ -364,8 +402,14 @@ function stampLine(from, to) {
 
 function beginStroke(point) {
   session.stroke = {
-    token: history.capture(session.tool === 'paint' ? 'Paint pierce region' : 'Erase pierce region'),
+    token: history.capture(session.tool === 'paint'
+      ? `Paint ${targetMask().label} region`
+      : `Erase ${targetMask().label} region`),
     partId: targetPart().id,
+    // Which mask this stroke wrote into, so abandoning it puts the texels
+    // back where they came from. Two of the three masks live on the same
+    // layer, so the part id alone does not say.
+    target: session.target,
     touched: new Map(), // index -> what it was before this stroke
     last: null,
     changed: false,
@@ -401,8 +445,9 @@ function abandonStroke() {
   const wasOn = [];
   const wasOff = [];
   for (const [index, wasMarked] of stroke.touched) (wasMarked ? wasOn : wasOff).push(index);
-  if (wasOn.length) partsStore.setPierceRegion(stroke.partId, wasOn, true);
-  if (wasOff.length) partsStore.setPierceRegion(stroke.partId, wasOff, false);
+  const write = (MASKS[stroke.target] || MASKS.area).write;
+  if (wasOn.length) write(stroke.partId, wasOn, true);
+  if (wasOff.length) write(stroke.partId, wasOff, false);
   history.commitCapture(stroke.token, false);
   render();
 }
@@ -498,6 +543,12 @@ export function initPierceTool() {
   els.pierceTargetAreaBtn.addEventListener('click', () => {
     if (!session) return;
     session.target = 'area';
+    renderTools();
+    render();
+  });
+  els.pierceTargetDeformBtn.addEventListener('click', () => {
+    if (!session) return;
+    session.target = 'deform';
     renderTools();
     render();
   });

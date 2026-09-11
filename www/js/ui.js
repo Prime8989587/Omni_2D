@@ -1179,8 +1179,15 @@ function renderPierceModal() {
 
   const painted = part.pierceRegion.size;
   els.piercePaintBtn.hidden = !part.hasPierceRole;
+  // On an interactive layer the second number is the one that decides how
+  // much of that area actually gives way, and "all" is what an unpainted
+  // deformable mask means -- worth saying, because a blank count there
+  // would read as "nothing will move".
+  const soft = part.isInteractive
+    ? ` · ${part.pierceDeformRegion.size || 'all'} deformable`
+    : '';
   els.piercePaintBtn.textContent = painted
-    ? `Paint regions… (${painted} px marked)`
+    ? `Paint regions… (${painted} px marked${soft})`
     : 'Paint regions…';
   els.pierceOverlayBtn.setAttribute('aria-pressed', String(pierceOverlayEnabled()));
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;

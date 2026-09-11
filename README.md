@@ -1624,12 +1624,73 @@ Enter, so the flesh has retreated *ahead* of the tip. Flesh dents away
 from a needle instead of being skewered by it, and Enter is how far ahead
 of itself the needle pushes.
 
-**End is a hard limit, enforced on the displacement and not on the
-finger.** Refusing to let a drag continue would mean this feature
-overriding direct input, which it has no business doing. Past End the
-contact's *geometry* stops advancing too, not just the depth number — so
-pushing deeper looks exactly like End rather than walking the tip out the
-far side and letting the dent melt away.
+**End is a hard limit, and it binds the piercer as well as the push.**
+Capping the depth was only half of it. The contact's *geometry* also stops
+advancing past End, so the dent holds at its deepest instead of melting
+away — but the piercer's own artwork was still drawn wherever the drag had
+got to, and the drag does not stop. A needle driven past End therefore
+carried on straight through the layer and came out the other side while
+every number sat pinned at End. Measured against a 32 px block: depth held
+at 16 the whole way while the tip travelled from 435 px to 720 px down the
+screen and crossed the flesh's bottom edge at 590.
+
+So past End the piercer is **drawn short** of where the drag put it, by
+exactly the distance the depth refused. Its tip stops where the depth
+stopped. Nothing blocks the finger — the layer's real coordinates still
+follow it one-for-one, and the contact is still measured from those real
+coordinates rather than from where the sprite ended up, so the hold can
+never feed back into the measurement that produced it. Only the component
+of the motion *along the piercer's axis* stops having a visible effect:
+sideways motion still tracks the finger, and pulling back shrinks the hold
+to nothing so the piercer catches up with it again.
+
+Verified by driving a needle 100 px past End: `needle.y` travelled 65 →
+155 while the rendered tip stayed on the same screen row (435 px) at every
+one of those depths, and never reached the flesh's far edge.
+
+Everything that points *at* the piercer follows it there. The selection
+outline is drawn around the held position rather than the raw one, and so
+is the touch target — otherwise a finger aiming at the needle it can see
+would grab the empty grid its coordinates still point at, and the layer
+would be stuck where no tap could reach it.
+
+### Which pierceable pixels may actually move
+
+Pierceable answers *can a piercer make contact here*. That is a different
+question from *and may this pixel then move*, and the two used to share one
+mask — so anything a piercer could touch was also something that gave way.
+
+They are now two independently painted masks on the interactive layer:
+
+| Mask | Decides |
+| --- | --- |
+| **Pierceable** | where contact is detected at all — the Enter state, the z-order swap, the depth reading |
+| **Deformable** | which of those pixels are then allowed to displace |
+
+A pierceable pixel that is *not* deformable registers the contact
+completely — the tip still sinks beneath the surface, the depth still
+reads, the solver still reports it engaged — and simply does not move. That
+is what a firm edge inside soft tissue looks like: bone under flesh, a
+buckle under a belt, a fingernail at the end of a finger.
+
+**An unpainted deformable mask means all of it gives way**, which is
+exactly how this behaved before the mask existed, so no existing project
+changes behaviour by being opened in a build that has it. The mask only
+ever takes movement away. The solver intersects it with the pierceable
+mask rather than trusting it alone, so a stray mark somewhere that can
+never be touched cannot make anything deform.
+
+It is painted in the same window as the other two, as a third target
+alongside Tip and Pierceable, with the same brush and the same stroke
+undo. On the canvas debug overlay it is drawn in amber over the pierceable
+cyan, so the split is visible at a glance: cyan is where a pierce
+registers, amber is where it actually moves something.
+
+Measured with the deformable mask painted away from where the tip arrives:
+the arriving pixels displaced **0.005 px** and rendered at row 431 — their
+exact rest position — while the same pixels with the mask painted over
+them displaced 15.36 px and rendered at row 371. Contact stayed engaged at
+full depth and the z-order swap still fired in both cases.
 
 ### The spring is the one already here
 
@@ -1750,6 +1811,40 @@ follows every deformation exactly, and a sunk tip's tint is occluded
 exactly as the tip is. It is off by default, remembered across a reload,
 and switching it off restores the artwork to an identical pixel count.
 
+### What a pierce does NOT do: push the bone
+
+A pierce moves **mesh vertices only**. It does not apply any force to the
+skeleton, so piercing a layer whose bone has physics switched on does not
+make that bone swing, recoil, or react as a whole. This has never been
+built — it is not a regression, and none of the fixes above changed it.
+
+Worth stating plainly because one existing check reads as though it covers
+this and does not: *"the flesh layer's own spring bone still swings while
+pierced"* shoves the character sideways with `translateRoots` and confirms
+the bone still responds. That demonstrates the two simulations stay
+**independent** — a pierce does not freeze the skeleton — not that a pierce
+drives it.
+
+Measured directly, with a physics bone on the interactive layer and a
+needle driven 60 px in as the only moving thing in the scene:
+
+```
+contact reached depth 16, engaged true
+peak bone rotation change : 0.000e+0 rad
+peak bone angular velocity: 0.000e+0 rad/s
+control -- shoving the character instead: peak 1.777e-1 rad
+```
+
+Exactly zero, not merely small, because nothing in `pierce.js` ever writes
+bone state — it only ever reads `snapshotTransforms()`. The control line is
+the same bone in the same scene responding normally to an actual shove, so
+the bone is live and the measurement is not a dead rig.
+
+Building it would mean coupling the solver into the bone integrator:
+turning the contact's depth and axis into a torque about the bone's head,
+fed in where `bones.js` accumulates acceleration. That is a real feature,
+not a fix, and it is not implemented.
+
 ### A one-time tip
 
 The first time a Pierce role is assigned, a dismissible note explains that
@@ -1758,7 +1853,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Four browser suites cover this, all passing:
+Five browser suites cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -1791,6 +1886,18 @@ Four browser suites cover this, all passing:
   leaving the unpainted body and shaft untouched to the pixel, the readout
   tracking `OUT → IN → AT END / tip sunk`, and switching it off restoring
   the artwork exactly.
+- **Depth cap and deformable mask** (25 checks) — a needle dragged 10, 30,
+  60 and 100 px past End with the raw `needle.y` travelling 65 → 155 and
+  the overshoot tracking it one px per px, while depth stayed at 16 and the
+  rendered tip stayed on screen row 435 at every one of them, never
+  reaching the flesh's far edge at 590; the hold releasing the moment the
+  drag comes back inside End, and sideways motion past End still tracking
+  the finger; contact engaging at full depth and the z-order still swapping
+  on a pierceable-but-not-deformable area while those pixels displaced
+  0.005 px and rendered at their exact rest row; the push returning to
+  15.38 px once that area is painted deformable; a deformable mark on
+  non-pierceable pixels moving nothing; the painter's third target; and the
+  mask surviving a serialize/load round trip at 256 px.
 
 ---
 

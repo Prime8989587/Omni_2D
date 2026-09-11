@@ -98,6 +98,7 @@ function serializePart(part, copyPixels) {
     // saves and PSaver exports without any special casing.
     pierceRole: part.pierceRole,
     pierceRegion: [...part.pierceRegion],
+    pierceDeformRegion: [...part.pierceDeformRegion],
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
     mesh: serializeMesh(part.mesh),
@@ -128,6 +129,10 @@ function deserializePart(data) {
   // with no role -- the defaults already say that.
   part.pierceRole = PIERCE_ROLES.has(data.pierceRole) ? data.pierceRole : PierceRole.NONE;
   part.pierceRegion = new Set(data.pierceRegion || []);
+  // Absent in projects saved before the deformable mask existed, and an
+  // empty one means "all of the pierceable area gives way" -- which is
+  // exactly how those projects behaved, so they load unchanged.
+  part.pierceDeformRegion = new Set(data.pierceDeformRegion || []);
   part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
   part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
   part.mesh = deserializeMesh(data.mesh);

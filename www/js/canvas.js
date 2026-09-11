@@ -21,7 +21,7 @@ import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture, pierceOffsets,
-  pierceReadout,
+  pierceReadout, pierceHold,
 } from './pierce.js';
 
 const ACCENT = '#FF2E93';
@@ -115,8 +115,18 @@ function unionBounds(a, b) {
 // the skinning; unbound ones are a plain quad. Either way the positions
 // are already whole grid coordinates.
 function partGeometry(part, boneTransforms) {
+  // A piercer driven past its End Point is drawn short of where the drag
+  // put it, by exactly the distance the depth refused to go (see
+  // pierceHold). The whole sprite moves together -- a needle is rigid, and
+  // holding only the painted tip would stretch it -- and the shift lands
+  // on whole grid cells like every other position in this renderer.
+  const back = part.isPiercer ? pierceHold().get(part.id) : null;
+  const place = (positions) => (back
+    ? positions.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
+    : positions);
+
   const through = (transforms) => ({
-    positions: deformVerticesSnapped(part.mesh, part, transforms),
+    positions: place(deformVerticesSnapped(part.mesh, part, transforms)),
     uvs: part.mesh.vertices,
     triangles: part.mesh.triangles,
   });
@@ -133,7 +143,8 @@ function partGeometry(part, boneTransforms) {
   // would otherwise read a bone out of null.
   if (part.mesh && pierceOffsets(part)) return through(boneTransforms || {});
 
-  return partQuad(part);
+  const quad = partQuad(part);
+  return back ? { ...quad, positions: place(quad.positions) } : quad;
 }
 
 // The draw order, with any piercer currently inside a layer split in two:
@@ -285,7 +296,16 @@ function drawSnapCell(cell) {
 // Screen-space overlays
 
 function drawPartOutline(part) {
-  const corners = partQuad(part).positions.map((p) => view.toScreen(p.x, p.y));
+  // The quad where the part is DRAWN, not where its coordinates say it is.
+  // A piercer held back at its End Point is the one case where those differ,
+  // and an outline left behind at the raw dragged position would be ringing
+  // empty grid several cells away from the artwork it is selecting.
+  const back = part.isPiercer ? pierceHold().get(part.id) : null;
+  const quad = partQuad(part).positions;
+  const placed = back
+    ? quad.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
+    : quad;
+  const corners = placed.map((p) => view.toScreen(p.x, p.y));
   ctx.beginPath();
   ctx.moveTo(corners[0].x, corners[0].y);
   for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);

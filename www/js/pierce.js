@@ -62,11 +62,19 @@
 // t runs 0 at first touch to 1 at the limit, and scales the push, so a
 // tip barely in contact moves the flesh barely at all.
 //
-// The limit is enforced on the DISPLACEMENT, not on the finger. Refusing
-// to let the user's own drag continue would mean this feature overriding
-// direct input, which it has no business doing -- and Free Move's piercer
-// drag is the user's, not ours. Pushing deeper than End simply stops
-// making any difference.
+// The limit binds the PIERCER too, not only the push. Capping the depth
+// alone left the artwork free to carry on through the layer and out the
+// far side while the numbers sat pinned at End, which is not what a hard
+// limit looks like. Past End the piercer is DRAWN short of where the drag
+// put it, by exactly the distance the depth refused (see pierceHold), so
+// its tip stops where the depth stopped.
+//
+// Nothing blocks the finger: the drag is still the user's, the layer's
+// real coordinates still follow it exactly, and the contact is still
+// measured from those real coordinates rather than from where the sprite
+// was drawn -- so there is no feedback between the two. Only the axis
+// component of the motion stops having a visible effect. Sideways motion
+// and pulling back out track the finger one-for-one as they always did.
 
 import { partsStore } from './parts.js';
 import { bonesStore, DEFAULT_STIFFNESS, DEFAULT_DAMPING } from './bones.js';
@@ -288,6 +296,11 @@ export function contactOf(piercer, interactive, transforms) {
   return {
     piercer,
     axis,
+    // How far PAST the End Point the piercer has been driven. The depth
+    // stops at End, but the drag does not, and this is the difference --
+    // which is exactly how far the artwork has to be held back for the
+    // tip to stop where the depth did. See pierceHold().
+    overshoot,
     tip: overshoot > 0
       ? { x: tipMiddle.x - axis.x * overshoot, y: tipMiddle.y - axis.y * overshoot }
       : tipMiddle,
@@ -357,19 +370,53 @@ function activeContacts(transforms) {
 // effects read its answer, so the tip cannot sink a frame before the flesh
 // gives way or stay sunk a frame after it lets go.
 let occlusion = new Map(); // piercer id -> the interactive part to sink beneath
+let hold = new Map();      // piercer id -> how far to hold its artwork back
 let occlusionStale = true;
 let readout = [];
 
 function publishOcclusion(contacts) {
   const next = new Map();
+  const held = new Map();
   for (const { interactive, contact } of contacts) {
     if (!contact || !contact.engaged) continue;
     const current = next.get(contact.piercer.id);
     // Beneath the LOWEST layer it is inside, so every one of them draws
     // over it rather than just the topmost.
     if (!current || interactive.zIndex < current.zIndex) next.set(contact.piercer.id, interactive);
+
+    // THE END POINT IS A LIMIT ON THE PIERCER, NOT JUST ON THE PUSH
+    //
+    // Capping the depth stops the flesh giving way any further, which is
+    // half of what a hard limit means. The other half is that the piercer
+    // itself has to stop, and it did not: its artwork was drawn at the raw
+    // dragged position, so the drag carried it on through the layer and
+    // out the far side while the depth sat pinned at End. Measured with a
+    // needle driven past a 32 px block: depth held at 16 the whole way
+    // while the tip travelled from 435 px to 720 px down the screen and
+    // crossed the flesh's bottom edge at 590 -- a needle visibly coming
+    // out the other side of something it was only ever meant to dent.
+    //
+    // So the artwork is held back by exactly the distance the depth
+    // refused, along the piercer's own axis. The drag keeps being the
+    // user's -- nothing blocks the finger, and moving sideways or pulling
+    // out still tracks it one-for-one -- but the axis component of it
+    // stops having any effect once End is reached, which is what "the tip
+    // stops advancing" has to mean on screen. Pulling back shrinks the
+    // overshoot to nothing and the piercer follows the finger again.
+    if (contact.overshoot > 0 && contact.axis) {
+      const previous = held.get(contact.piercer.id);
+      // Two layers at once: obey whichever stopped it first.
+      if (!previous || contact.overshoot > previous.overshoot) {
+        held.set(contact.piercer.id, {
+          overshoot: contact.overshoot,
+          x: contact.axis.x * contact.overshoot,
+          y: contact.axis.y * contact.overshoot,
+        });
+      }
+    }
   }
   occlusion = next;
+  hold = held;
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
   // second measurement that could disagree with it.
@@ -383,6 +430,7 @@ function publishOcclusion(contacts) {
     depth: contact ? contact.depth : 0,
     engaged: Boolean(contact && contact.engaged),
     sunk: Boolean(contact && next.has(contact.piercer.id)),
+    overshoot: contact ? contact.overshoot : 0,
   }));
   occlusionStale = false;
 }
@@ -410,6 +458,14 @@ export function pierceOcclusion() {
     publishOcclusion(partsStore.hasPierce ? activeContacts(transforms) : []);
   }
   return occlusion;
+}
+
+// How far each piercer's artwork is to be held back from where the drag
+// actually put it, so its tip stops at the End Point. Empty for every
+// piercer that has not reached its limit, which is the normal case.
+export function pierceHold() {
+  pierceOcclusion();
+  return hold;
 }
 
 // One byte per source texel, splitting a layer's artwork into its painted
@@ -454,6 +510,10 @@ export function pierceMasks(part) {
 // artwork it is describing.
 const OVERLAY_TIP = [255, 46, 147, 185];
 const OVERLAY_AREA = [46, 230, 255, 185];
+// Pierceable AND deformable, in the painter's amber. Telling the two
+// apart on the canvas is the whole point of the split: cyan is where a
+// pierce registers, amber is where it actually moves anything.
+const OVERLAY_DEFORM = [255, 176, 46, 190];
 
 let overlayOn = false;
 const overlayCache = new Map();
@@ -473,16 +533,22 @@ export function setPierceOverlay(on) {
 export function pierceOverlayTexture(part) {
   if (!part || part.pierceRegion.size === 0) return null;
   const size = part.naturalWidth * part.naturalHeight;
-  const version = part.pierceRegionVersion || 0;
+  const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}`;
   const cached = overlayCache.get(part.id);
   if (cached && cached.version === version && cached.role === part.pierceRole && cached.pixels.length === size * 4) {
     return cached.pixels;
   }
 
-  const [r, g, b, a] = part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA;
+  const base = part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA;
+  // An unpainted deformable mask means the whole pierceable area gives
+  // way, so it is all drawn as deformable -- the overlay says what will
+  // actually happen, not what has been painted.
+  const softAll = !part.isPiercer && part.pierceDeformRegion.size === 0;
   const pixels = new Uint8ClampedArray(size * 4);
   for (const index of part.pierceRegion) {
     if (index < 0 || index >= size) continue;
+    const soft = !part.isPiercer && (softAll || part.pierceDeformRegion.has(index));
+    const [r, g, b, a] = soft ? OVERLAY_DEFORM : base;
     const o = index * 4;
     pixels[o] = r;
     pixels[o + 1] = g;
@@ -501,7 +567,7 @@ export function pierceOverlayTexture(part) {
 // for the same reason -- a hard edge between "may move" and "may not"
 // would crease the surface exactly at the boundary of the painted area.
 function regionInfluence(mesh, part) {
-  const version = part.pierceRegionVersion || 0;
+  const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}`;
   if (mesh._pierceInfluence && mesh._pierceInfluenceVersion === version) {
     return mesh._pierceInfluence;
   }
@@ -512,11 +578,28 @@ function regionInfluence(mesh, part) {
   const cellH = height / Math.max(1, mesh.rows);
   const radius = Math.max(1, Math.max(cellW, cellH));
 
+  // WHICH PIXELS MAY MOVE -- not which may be touched.
+  //
+  // Contact is decided by pierceRegion, over in contactOf(). This field is
+  // the separate question of what gives way once contact has happened, and
+  // it reads the DEFORMABLE mask: the pierceable pixels the user has said
+  // may actually shift. Everything else pierceable still registers the
+  // contact, still swaps the z-order, still reports its depth -- it simply
+  // does not move, which is what a firm edge inside soft tissue looks like.
+  //
+  // An unpainted deformable mask means the whole pierceable area gives way,
+  // which is how this behaved before the mask existed. The intersection is
+  // taken rather than trusting the mask alone, so a stray mark outside the
+  // pierceable area cannot make something deform that can never be touched.
+  const deformable = part.pierceDeformRegion && part.pierceDeformRegion.size > 0
+    ? [...part.pierceDeformRegion].filter((index) => part.pierceRegion.has(index))
+    : part.pierceRegion;
+
   // Painted texels collapse to the cells they sit in, exactly as pins do:
   // a mesh can only express what its vertices can, and this also caps the
   // work at cols x rows however many thousands of pixels were painted.
   const cells = new Set();
-  for (const index of part.pierceRegion) {
+  for (const index of deformable) {
     const cu = Math.min(mesh.cols - 1, Math.floor((index % width) / cellW));
     const cv = Math.min(mesh.rows - 1, Math.floor(Math.floor(index / width) / cellH));
     cells.add(cv * mesh.cols + cu);
