@@ -28,6 +28,41 @@ export function reservePartId(id) {
 export const MIN_PART_SCALE = 1;
 export const MAX_PART_SCALE = 16;
 
+// Pierce: which side of a piercing relationship a layer plays, if any.
+//
+// This is ALWAYS an explicit choice the user made and stored. Nothing in
+// the app is allowed to infer it -- not from painted region data, not from
+// which layers happen to overlap, not from anything else. Free Move asks
+// this flag which layers it may drag independently; the deformation asks
+// it whose flesh may be displaced. Both read the flag and nothing else,
+// so a layer the user never assigned can never be quietly conscripted
+// into a pierce by drawing in the wrong place.
+export const PierceRole = Object.freeze({
+  NONE: 'none',
+  PIERCER: 'piercer',
+  INTERACTIVE: 'interactive',
+});
+
+export const PIERCE_ROLES = new Set(Object.values(PierceRole));
+
+// Enter and End are depths in SCENE PIXELS, measured from the piercer's
+// painted tip to the nearest painted pierceable pixel:
+//
+//   Enter -- the gap at which contact starts. Closer than this and the
+//            flesh begins to move; further and it is entirely at rest.
+//   End   -- how far PAST that first contact the displacement keeps
+//            growing. At Enter-minus-End the push is at maximum and stops
+//            growing: the hard limit.
+export const PIERCE_DEPTH_RANGE = Object.freeze({ min: 1, max: 128 });
+export const DEFAULT_PIERCE_ENTER = 12;
+export const DEFAULT_PIERCE_END = 24;
+
+export function clampPierceDepth(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return PIERCE_DEPTH_RANGE.min;
+  return Math.min(PIERCE_DEPTH_RANGE.max, Math.max(PIERCE_DEPTH_RANGE.min, n));
+}
+
 export function clampScale(value) {
   return Math.min(MAX_PART_SCALE, Math.max(MIN_PART_SCALE, Math.round(value)));
 }
@@ -77,6 +112,29 @@ export class Part {
     // Bumped on every pin change so mesh.js can cache the per-vertex
     // influence field instead of rebuilding it every frame.
     this.pinsVersion = 0;
+
+    // Pierce. The role is the explicit flag everything else reads; the
+    // region is texel indices in THIS layer's own pixel grid, exactly like
+    // pins -- the piercing TIP on a piercer, the PIERCEABLE area on an
+    // interactive layer. Enter/End are the piercer's depths and are
+    // meaningless on any other role.
+    this.pierceRole = PierceRole.NONE;
+    this.pierceRegion = new Set();
+    this.pierceRegionVersion = 0;
+    this.pierceEnter = DEFAULT_PIERCE_ENTER;
+    this.pierceEnd = DEFAULT_PIERCE_END;
+  }
+
+  get isPiercer() {
+    return this.pierceRole === PierceRole.PIERCER;
+  }
+
+  get isInteractive() {
+    return this.pierceRole === PierceRole.INTERACTIVE;
+  }
+
+  get hasPierceRole() {
+    return this.pierceRole !== PierceRole.NONE;
   }
 
   texelIndex(u, v) {
@@ -296,16 +354,100 @@ class PartsStore {
   // the rest of the character moved away from it. Not every piece is
   // meant to bend or bounce -- plenty are meant to be carried along
   // exactly as drawn -- and this is what carries them.
-  translateUnbound(dx, dy) {
+  // `skipPiercers` is what makes the Free Move "Body" handle and the
+  // "Piercer" handle independent of each other: the body carries every
+  // unbound layer EXCEPT the ones the user flagged as piercers, and the
+  // piercer handle carries exactly those. Without the split, an unbound
+  // needle would be dragged twice over -- once as part of the body, once
+  // as itself -- and could never be moved toward the character at all.
+  translateUnbound(dx, dy, { skipPiercers = false } = {}) {
     if (dx === 0 && dy === 0) return;
     let moved = false;
     for (const part of this._parts) {
+      if (part.mesh && part.mesh.isBound) continue;
+      if (skipPiercers && part.isPiercer) continue;
+      part.x += dx;
+      part.y += dy;
+      moved = true;
+    }
+    if (moved) this._emit('transform');
+  }
+
+  // The piercer side of that split. Bound piercers are left to their bones
+  // (the caller translates those separately) -- moving both would double
+  // the distance travelled.
+  translatePiercers(dx, dy) {
+    if (dx === 0 && dy === 0) return;
+    let moved = false;
+    for (const part of this._parts) {
+      if (!part.isPiercer) continue;
       if (part.mesh && part.mesh.isBound) continue;
       part.x += dx;
       part.y += dy;
       moved = true;
     }
     if (moved) this._emit('transform');
+  }
+
+  // ---- Pierce -----------------------------------------------------------
+
+  get piercers() {
+    return this._parts.filter((part) => part.isPiercer);
+  }
+
+  get interactives() {
+    return this._parts.filter((part) => part.isInteractive);
+  }
+
+  get hasPierce() {
+    return this._parts.some((part) => part.hasPierceRole);
+  }
+
+  // Setting a role never touches artwork, position, bones or pins -- only
+  // pierce data. Leaving a role (to NONE) clears the pierce data with it,
+  // so a layer that is "not in a pierce" carries no stale half of one.
+  setPierceRole(id, role) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || !PIERCE_ROLES.has(role) || part.pierceRole === role) return false;
+    part.pierceRole = role;
+    if (role === PierceRole.NONE) {
+      part.pierceRegion = new Set();
+      part.pierceRegionVersion++;
+      part.pierceEnter = DEFAULT_PIERCE_ENTER;
+      part.pierceEnd = DEFAULT_PIERCE_END;
+    }
+    this._emit('structure');
+    return true;
+  }
+
+  setPierceDepths(id, enter, end) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return false;
+    part.pierceEnter = clampPierceDepth(enter);
+    part.pierceEnd = clampPierceDepth(end);
+    this._emit('transform');
+    return true;
+  }
+
+  // Same shape as setPins: a batch of texel indices flipped on or off in
+  // the layer's own grid, with one version bump so the solver can cache
+  // its per-vertex field instead of rebuilding it every frame.
+  setPierceRegion(id, indices, marked) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return 0;
+    let changed = 0;
+    for (const index of indices) {
+      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
+      if (marked ? !part.pierceRegion.has(index) : part.pierceRegion.has(index)) {
+        if (marked) part.pierceRegion.add(index); else part.pierceRegion.delete(index);
+        changed++;
+      }
+    }
+    if (changed) {
+      part.pierceRegionVersion++;
+      this._emit('transform');
+    }
+    return changed;
   }
 
   // Layers import named after their source file ("9703"), which is never

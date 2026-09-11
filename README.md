@@ -77,6 +77,12 @@ www/js/poseTool.js      Free Move: the drag that moves the whole character, from
                          the canvas or from the pad below the buttons
 www/js/pxpin.js         Px Pin: the pixel-pinning window — its own camera, the
                          paint strokes, and the brush-size menu
+www/js/pierce.js        Pierce: the contact measurement and the spring that pushes
+                         flesh aside — never a hole, only displaced vertices
+www/js/pierceState.js   The pierce springs' per-vertex state, in a module of its
+                         own so pierce.js and mesh.js can both reach it
+www/js/pierceTool.js    The Pierce region painter: the tip and the pierceable
+                         area, painted on the Px Pin pattern
 www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
 www/js/project.js       The whole scene as plain data and back — used by both
                          undo/redo and save/load, so there is one serializer
@@ -1473,6 +1479,208 @@ everything else: the skinned mesh is snapped to whole pixels and drawn by
 the rasterizer. The whole character — every layer — updates live, and the
 artwork stays crisp and cell-aligned *during* the drag, not just once it
 settles.
+
+---
+
+## Pierce: pushing flesh aside without cutting a hole
+
+A needle pressed into a belly does not cut a hole in it. The belly dents.
+**Pierce** is that dent: a piercing layer pushes an interactive layer's
+pixels out of its way, in proportion to how deep it has come, and they
+spring back when it withdraws.
+
+It never removes a pixel, never hides one, never makes one transparent and
+never punches a hole. There is no second render pass and no stencil. Every
+pixel the layer had before contact is still drawn afterwards, through the
+same rasterizer, in the same single pass. The only thing that changes is
+where some mesh vertices are — the very same lever bone skinning already
+pulls — which is why backing the piercer out restores the artwork exactly,
+with nothing to undo or restore.
+
+### Roles are chosen, never guessed
+
+Pierce does nothing until you say which layer is which. From a layer row's
+**⋮** panel, **◆ Pierce** offers exactly three roles:
+
+| Role | What the layer becomes |
+| --- | --- |
+| **None** | An ordinary layer. The default, and what every layer starts as. |
+| **Piercer** | The thing that goes in — a needle, a horn, a finger. |
+| **Interactive** | The thing that gives way. |
+
+Nothing about this is inferred. The app never decides a layer "looks like"
+a piercer because of what has been painted on it, how it is shaped, or
+where it sits. Free Move, the solver and the painter all read the stored
+role and nothing else, so a layer does what you told it to do and keeps
+doing that until you change it.
+
+**Choosing Piercer asks for its depths before it will take.** A popup asks
+for two numbers, and **cancelling it leaves the role at None** rather than
+saving a Piercer that was never finished:
+
+- **Enter Point** — the gap at which contact begins. Further out than
+  this, nothing moves at all.
+- **End Point** — how much further past that first contact the push keeps
+  growing. Reaching it is the maximum; going deeper changes nothing more.
+
+Both are in scene pixels, 1–128, defaulting to 12 and 24. A depth bar in
+the popup draws the two marks on one scale with the live contact reading
+against them.
+
+### Painting the regions
+
+Which *part* of a piercer is its point, and which part of the interactive
+layer can be pierced, are painted — in a dedicated full-screen window
+built on exactly the Px Pin pattern, not on the main canvas.
+
+**Looking.** Two fingers pinch to zoom and drag to pan, each layer has its
+own opacity slider, and the texel grid fades in once cells are big enough
+to aim at. **This camera is the window's alone**: zooming to 800%, panning
+around and leaving again cannot move, scale or rotate either layer. Their
+real transforms are read, never written.
+
+**Painting.** One finger paints. A **target switch** picks which of the
+two you are painting — **Tip** (pink) on the piercer, **Pierceable**
+(cyan) on the interactive layer — and separate **Paint** and **Erase**
+tools, explicitly selected rather than hidden toggles, add and remove.
+Brush sizes run **1×1 to 10×10** in the same "⌄" menu the rest of the app
+uses. A stroke fills in the texels between samples rather than leaving a
+dotted trail, and the whole stroke is one undo step. If a second finger
+lands mid-stroke the stroke is *undone*, since a pinch that started
+slightly out of sync should not paint.
+
+Regions are stored per layer in that layer's own pixel grid, so they stay
+glued to the artwork wherever the layer goes, and they save with the
+project.
+
+### Editing, and getting out again
+
+Everything set at assignment can be changed afterwards. With a role
+already assigned, **◆ Pierce** offers **Edit depths** (the same popup,
+pre-filled, applying on OK) and **Edit regions** (the same painter,
+pre-loaded). Neither re-asks for the role.
+
+**Remove Pierce Role** sets the layer back to None and clears its pierce
+data — regions and depths — and nothing else. The artwork, the bones, the
+weights, the pins and the layer's place in the stack are untouched.
+
+**Deleting a layer that has a Pierce role warns first**, and says what
+will be lost. Pierce works in pairs, so deleting one half leaves the other
+half configured for a partner that no longer exists: confirming the delete
+therefore also clears the orphaned partner's role, and the warning says so
+before you commit.
+
+### Moving the piercer: the Piercer tab in Free Move
+
+Free Move gained a **Body / Piercer** switch, which appears only once some
+layer actually holds the Piercer role.
+
+- **Body** drags the whole character as it always did — every root bone,
+  everything under them, and every unbound layer — *except* piercers.
+- **Piercer** drags only the piercer layers, and nothing else.
+
+They are mutually exclusive **by construction rather than by luck**: the
+body drag skips piercers and the piercer drag touches nothing else. A
+piercer moved by both would travel twice as far as the finger, and could
+never be brought toward the body at all — the body would run away from it
+at exactly the same speed.
+
+Meanwhile the interactive layer's own physics keeps running. Its spring
+bones swing and settle underneath the contact, and the pierce displacement
+composes with that rather than freezing it.
+
+### How deep is deep
+
+```
+gap   = how far the tip still has to travel to reach the pierceable
+        pixels, measured ALONG THE PIERCER'S OWN AXIS, and signed:
+        negative once the tip is already that far in
+depth = clamp(Enter - gap, 0, End)          t = depth / End
+```
+
+`t` runs 0 at first touch to 1 at the limit and scales the push, so a tip
+barely in contact moves the flesh barely at all.
+
+The axis is read from the artwork: it points from the middle of the whole
+piercer layer toward the middle of its painted tip — a needle has its
+point at one end of its sprite — so it rotates with the layer and costs
+nothing to specify. Only flesh within the tip's own width of that axis
+counts as being in the path; flesh off to one side is not something a
+needle travelling past it should drive into sideways.
+
+**The sign is the whole reason it is measured along an axis** rather than
+as a plain nearest-pixel distance. A nearest-pixel distance cannot go
+below zero — two overlapping regions are zero apart and stay zero however
+much further the needle is driven in — so depth could never exceed Enter,
+and any End beyond it (including the 24 the app offers by default against
+an Enter of 12) was simply unreachable.
+
+One consequence is the effect rather than a side effect of it: at the
+instant the tip actually touches, the gap is 0 and the depth is already
+Enter, so the flesh has retreated *ahead* of the tip. Flesh dents away
+from a needle instead of being skewered by it, and Enter is how far ahead
+of itself the needle pushes.
+
+**End is a hard limit, enforced on the displacement and not on the
+finger.** Refusing to let a drag continue would mean this feature
+overriding direct input, which it has no business doing. Past End the
+contact's *geometry* stops advancing too, not just the depth number — so
+pushing deeper looks exactly like End rather than walking the tip out the
+far side and letting the dent melt away.
+
+### The spring is the one already here
+
+A displaced vertex is not teleported. It gets a *target*, and its actual
+offset springs toward it under the same damped mass-spring, integrated the
+same way, with the same stiffness and damping the physics bones use:
+
+```
+acceleration = stiffness * (target - offset) - damping * velocity
+velocity += acceleration * h      (semi-implicit / symplectic Euler:
+offset   += velocity * h           velocity first, then position)
+```
+
+So flesh gives way with weight rather than snapping, and springs back on
+its own when the piercer withdraws — retraction is not a separate code
+path, it is the same spring with its target released. It steps in
+`physics.js`'s frame loop rather than in the renderer, because a spring
+has to keep moving after the input that disturbed it stops, and because
+advancing it per redraw would make the simulation run faster on a busy
+screen.
+
+**Px Pin wins.** The pierce offset is applied before the pin step, so a
+pinned pixel on the interactive layer stays exactly where it was even at
+full depth, and the two features compose instead of fighting.
+
+### A one-time tip
+
+The first time a Pierce role is assigned, a dismissible note explains that
+Pierce works best alongside Px Pin — pin the parts that should hold their
+shape and let the rest give way. It appears once and is remembered.
+
+### Verified end to end
+
+Three browser suites cover this, all passing:
+
+- **Setup** (24 checks) — the three roles; the mandatory depth popup;
+  cancel leaving the role at None; the painter's isolated camera; stroke
+  painting; the brush menu; the one-time tip.
+- **Editing** (22 checks) — editing depths and regions after the fact;
+  Remove Pierce Role clearing pierce data and only pierce data; the
+  delete-layer warning clearing the orphaned partner.
+- **Runtime** (30 checks) — the Piercer tab moving the piercer and *only*
+  the piercer (`needle +24`, `root 100.5 -> 100.5`) and Body moving the
+  character and *only* the character (`root +36`, `needle 60,20 ->
+  60,20`); nothing engaging at 1 px outside Enter and engaging at 1 px
+  inside it; the push rising monotonically with depth
+  (`0.34 < 3.20 < 9.37 < 15.37` px); depth and `t` pinned at End from 0 to
+  40 px past it, with the displacement holding at 15.4 px rather than
+  fading; a flood fill of the rendered frame finding **0 enclosed hole
+  pixels** and no pixels lost at maximum depth; a residual of 0.005 px
+  after retraction; a pinned band displaced 0.01 px where an unpinned one
+  moved 15.37 px, rendering at the identical row in contact and at rest;
+  and the interactive layer's own spring bone still swinging 0.17 rad and
+  settling while a contact is engaged.
 
 ---
 

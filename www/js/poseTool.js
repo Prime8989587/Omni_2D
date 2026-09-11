@@ -1,10 +1,15 @@
-// Free Move: moving the whole character.
+// Free Move: moving the whole character, and moving a piercer into it.
 //
 // NOTHING TO AIM AT
 //
-// A drag anywhere on the canvas moves the character. No handle to hit, no
-// bone picker, no hit-testing of bones, layers or pixels -- there is only
-// one thing a drag can mean here, so it needs no target.
+// A drag anywhere on the canvas moves whatever the Body / Piercer tabs
+// currently point it at. No handle to hit, no bone picker, no hit-testing
+// of bones, layers or pixels -- the tab says what a drag means, so the
+// drag itself needs no target.
+//
+// The Piercer tab only exists once some layer has been explicitly given
+// the Pierce PIERCER role; with no piercer in the scene there is again
+// exactly one thing a drag can mean.
 //
 // There is also a drag pad BELOW the buttons, well clear of the canvas.
 // It does exactly the same thing, and exists so the character can be
@@ -46,6 +51,52 @@ import { appState, AppState } from './state.js';
 
 let drag = null;
 
+// WHAT A DRAG IS AIMED AT
+//
+// 'body'    the whole character, as described above.
+// 'piercer' only the layers explicitly flagged with the Pierce PIERCER
+//           role, so a needle can be pushed into a character that is
+//           meanwhile jiggling on its own springs.
+//
+// The two are mutually exclusive by construction, not by luck: the body
+// drag skips piercer layers and the piercer drag touches nothing else. An
+// unbound piercer moved by both would travel twice as far as the finger
+// and could never be brought toward the body at all, since the body would
+// run away from it at exactly the same speed.
+export const PoseTarget = Object.freeze({ BODY: 'body', PIERCER: 'piercer' });
+
+let poseTarget = PoseTarget.BODY;
+
+export function getPoseTarget() {
+  return poseTarget;
+}
+
+export function setPoseTarget(target) {
+  if (target !== PoseTarget.BODY && target !== PoseTarget.PIERCER) return;
+  if (poseTarget === target) return;
+  // Switching mid-drag would hand the finger a different object halfway
+  // through the same gesture.
+  endPoseDrag();
+  poseTarget = target;
+}
+
+// The bones a piercer drag writes to: the roots of whatever bones drive
+// the piercer layers. A piercer bound to its own little rig is moved by
+// moving that rig; an unbound one is moved by its own coordinates
+// (partsStore.translatePiercers). Doing both to the same layer would
+// double its travel, which is why each layer answers to exactly one.
+function piercerBones() {
+  const bones = [];
+  for (const part of partsStore.piercers) {
+    for (const bone of bonesStore.bonesAttachedTo(part.id)) bones.push(bone);
+  }
+  return bones;
+}
+
+export function hasPiercerTarget() {
+  return partsStore.piercers.length > 0;
+}
+
 // The character's root bone: the bone with NO PARENT. That is the only
 // test. Nothing about a bone's rotation, its length, or which of its two
 // ends is labelled "head" has any bearing on it -- draw the root upside
@@ -77,17 +128,20 @@ function snapToCell(point) {
 
 export function beginPoseDrag(bone, scenePoint) {
   if (drag) return;
+  const piercing = poseTarget === PoseTarget.PIERCER;
   // A reference point the finger carries. It is a root bone's own
   // position when there is a rig, so the drag still writes root data;
   // with no bones at all it is just the finger, so unbound artwork can
   // still be pushed around.
-  const anchor = bone ? bonesStore.restWorldHead(bone) : snapToCell(scenePoint);
+  const anchorBone = piercing ? piercerBones()[0] : bone;
+  const anchor = anchorBone ? bonesStore.restWorldHead(anchorBone) : snapToCell(scenePoint);
   drag = {
     offsetX: anchor.x - scenePoint.x,
     offsetY: anchor.y - scenePoint.y,
     lastX: anchor.x,
     lastY: anchor.y,
-    token: history.capture('Move character'),
+    token: history.capture(piercing ? 'Move piercer' : 'Move character'),
+    piercing,
     moved: false,
   };
 }
@@ -104,10 +158,17 @@ export function updatePoseDrag(scenePoint) {
   drag.lastX = target.x;
   drag.lastY = target.y;
 
-  // Whole numbers of grid cells, applied to everything the character is
-  // made of.
-  bonesStore.translateRoots(dx, dy);
-  partsStore.translateUnbound(dx, dy);
+  // Whole numbers of grid cells, applied to everything the drag is aimed
+  // at -- and to nothing it is not.
+  if (drag.piercing) {
+    for (const bone of piercerBones()) bonesStore.nudgePosition(bone, dx, dy);
+    partsStore.translatePiercers(dx, dy);
+  } else {
+    bonesStore.translateRoots(dx, dy);
+    // Piercers are excluded here so the body cannot drag the needle along
+    // with it; the Piercer target is the only thing that moves those.
+    partsStore.translateUnbound(dx, dy, { skipPiercers: true });
+  }
   drag.moved = true;
 }
 

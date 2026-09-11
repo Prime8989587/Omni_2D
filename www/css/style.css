@@ -822,6 +822,62 @@ button, input, select {
   margin-bottom: 8px;
 }
 
+/* ---------- Pierce depth indicator ----------
+   A scale bar from 0 to the deepest depth either point is set to, with
+   the Enter and End marks on it and the contact band between them filled.
+   Numbers alone are precise but say nothing about the RELATIONSHIP the
+   two values have -- the bar is what shows at a glance that End sits
+   deeper than Enter and how much travel that leaves. */
+
+.pierce-depth {
+  margin-bottom: 16px;
+}
+
+.pierce-depth__bar {
+  position: relative;
+  height: 34px;
+  margin-top: 18px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  background: var(--color-bg);
+}
+
+/* The band where the flesh is actually moving: from first contact at
+   Enter down to the hard limit at End. */
+.pierce-depth__contact {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 46, 147, 0.3);
+}
+
+.pierce-depth__mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
+  background: var(--color-accent);
+}
+
+.pierce-depth__mark span {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--color-accent);
+  font-size: var(--text-label);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.pierce-depth__mark--end {
+  background: var(--color-text);
+}
+
+.pierce-depth__mark--end span {
+  color: var(--color-text);
+}
+
 /* ---------- Toast ---------- */
 
 .toast {

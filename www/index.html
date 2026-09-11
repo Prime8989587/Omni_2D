@@ -203,6 +203,11 @@
         <button id="stopBtn" class="btn btn--flourish" type="button" disabled>Stop</button>
       </div>
 
+      <div id="poseTargetRow" class="segmented" role="group" aria-label="What a drag moves" hidden>
+        <button id="poseTargetBodyBtn" class="segmented__btn" type="button" aria-pressed="true">Body</button>
+        <button id="poseTargetPiercerBtn" class="segmented__btn" type="button" aria-pressed="false">Piercer</button>
+      </div>
+
       <div id="movePad" class="move-pad" role="application" aria-label="Drag to move the character" hidden>
         <span class="move-pad__glyph" aria-hidden="true">&#10021;</span>
         <span class="move-pad__label">Drag here — keeps your finger off the character</span>
@@ -244,6 +249,82 @@
           <button id="deletePartKeepBonesBtn" class="btn btn--flourish" type="button">Delete layer, keep bones</button>
           <button id="deletePartWithBonesBtn" class="btn btn--danger" type="button">Delete layer and its bones</button>
           <button id="deletePartCancelBtn" class="btn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pierceModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pierceTitle">
+        <h2 id="pierceTitle" class="modal__title">Pierce</h2>
+        <p id="pierceLayerName" class="modal__text modal__text--mono"></p>
+
+        <div class="field-label">Pierce role</div>
+        <div class="segmented" role="group" aria-label="Pierce role">
+          <button id="pierceRoleNoneBtn" class="segmented__btn" type="button" aria-pressed="true">None</button>
+          <button id="pierceRolePiercerBtn" class="segmented__btn" type="button" aria-pressed="false">Piercer</button>
+          <button id="pierceRoleInteractiveBtn" class="segmented__btn" type="button" aria-pressed="false">Interactive</button>
+        </div>
+        <p id="pierceRoleHint" class="joint-hint"></p>
+
+        <div id="pierceDepthSummary" hidden>
+          <div class="field-label">Depths</div>
+          <p id="pierceDepthReadout" class="modal__text"></p>
+          <button id="pierceEditDepthsBtn" class="toggle-chip toggle-chip--wide" type="button">Edit Enter / End Points…</button>
+        </div>
+
+        <button id="piercePaintBtn" class="toggle-chip toggle-chip--wide" type="button">Paint regions…</button>
+        <button id="pierceRemoveBtn" class="btn btn--sm btn--danger px-pin-launch" type="button">Remove Pierce Role</button>
+
+        <div class="modal__actions">
+          <button id="pierceDoneBtn" class="btn btn--flourish" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pierceDepthModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pierceDepthTitle">
+        <h2 id="pierceDepthTitle" class="modal__title">Enter &amp; End Points</h2>
+        <p class="modal__text">
+          In scene pixels, measured from this piercer's painted tip to the nearest
+          pierceable pixel. <b>Enter</b> is the gap where contact starts;
+          <b>End</b> is how much deeper the push keeps growing before it stops.
+        </p>
+        <div class="bind-row">
+          <label class="slider-field">
+            <span>Enter Point</span>
+            <input id="pierceEnterInput" class="text-input text-input--inline" type="number" min="1" max="128" step="1" inputmode="numeric" />
+          </label>
+          <label class="slider-field">
+            <span>End Point</span>
+            <input id="pierceEndInput" class="text-input text-input--inline" type="number" min="1" max="128" step="1" inputmode="numeric" />
+          </label>
+        </div>
+        <div class="pierce-depth" aria-hidden="true">
+          <div id="pierceDepthBar" class="pierce-depth__bar">
+            <div id="pierceDepthContact" class="pierce-depth__contact"></div>
+            <div id="pierceDepthEnterMark" class="pierce-depth__mark pierce-depth__mark--enter"><span>Enter</span></div>
+            <div id="pierceDepthEndMark" class="pierce-depth__mark pierce-depth__mark--end"><span>End</span></div>
+          </div>
+          <p id="pierceDepthLegend" class="px-pin__hint"></p>
+        </div>
+        <div class="modal__actions">
+          <button id="pierceDepthOkBtn" class="btn btn--flourish" type="button">Confirm</button>
+          <button id="pierceDepthCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pierceTipModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pierceTipTitle">
+        <h2 id="pierceTipTitle" class="modal__title">Tip: works best with Px Pin</h2>
+        <p class="modal__text">
+          Pin the piercer's tip pixels with <b>Px Pin</b> before you use it. Pinned
+          pixels are held exactly at their rest position and are immune to bone
+          rotation and spring physics, so the tip stays precise instead of
+          jiggling — which gives the most accurate, stable contact point.
+        </p>
+        <div class="modal__actions">
+          <button id="pierceTipOkBtn" class="btn btn--flourish" type="button">Got it</button>
         </div>
       </div>
     </div>
@@ -387,6 +468,36 @@
           <input id="pxpinBelowOpacity" class="slider" type="range" min="0" max="100" step="5" value="100" />
         </label>
         <p class="px-pin__hint">Drag one finger to paint pins · two fingers pan · pinch to zoom</p>
+      </footer>
+    </div>
+
+    <div id="pierceWindow" class="px-pin" hidden>
+      <header class="px-pin__bar">
+        <span class="px-pin__title">Pierce — <b id="pierceWindowTarget"></b></span>
+        <span id="pierceWindowStatus" class="px-pin__status"></span>
+        <button id="pierceWindowDoneBtn" class="btn btn--sm" type="button">Done</button>
+      </header>
+      <canvas id="pierceCanvas" class="px-pin__canvas"></canvas>
+      <footer class="px-pin__controls">
+        <div class="segmented" role="group" aria-label="Which region to paint">
+          <button id="pierceTargetTipBtn" class="segmented__btn" type="button" aria-pressed="true">Tip</button>
+          <button id="pierceTargetAreaBtn" class="segmented__btn" type="button" aria-pressed="false">Pierceable</button>
+        </div>
+        <div class="segmented" role="group" aria-label="Paint tools">
+          <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
+          <button id="pierceToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
+          <button id="pierceBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pierceBrushMenu">1 × 1 ⌄</button>
+        </div>
+        <div id="pierceBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <label class="slider-field slider-field--wide">
+          <span>Piercer opacity <b id="piercePiercerOpacityValue">100%</b></span>
+          <input id="piercePiercerOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
+        </label>
+        <label class="slider-field slider-field--wide">
+          <span>Interactive opacity <b id="pierceInteractiveOpacityValue">100%</b></span>
+          <input id="pierceInteractiveOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
+        </label>
+        <p class="px-pin__hint">Drag one finger to paint · two fingers pan · pinch to zoom</p>
       </footer>
     </div>
 

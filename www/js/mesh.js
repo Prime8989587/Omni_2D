@@ -27,6 +27,11 @@ const WEIGHT_EPSILON = 0.001;
 const DISTANCE_EPSILON = 0.5; // guards against dividing by a zero distance
 const FALLOFF_EXPONENT = 2;
 
+// The pierce solver's current displacement, read while deforming. Its own
+// state module rather than pierce.js, which imports THIS file -- routing
+// through a leaf keeps the import graph acyclic.
+import { pierceOffsets } from './pierceState.js';
+
 export const DEFAULT_MAX_INFLUENCES = 3;
 export const MIN_DENSITY = 3;
 export const MAX_DENSITY = 16;
@@ -414,7 +419,7 @@ export function deformVerticesSnapped(mesh, part, boneTransforms) {
 // Per-vertex pin influence, cached against the layer's pin version: pins
 // change on a tap, the mesh's rest shape never does, so this is computed
 // when the pin set actually changes rather than every frame.
-function pinInfluence(mesh, part) {
+export function pinInfluence(mesh, part) {
   const version = part.pinsVersion || 0;
   if (mesh._pinInfluence && mesh._pinInfluenceVersion === version) return mesh._pinInfluence;
 
@@ -471,6 +476,25 @@ function pinInfluence(mesh, part) {
 // their neighbourhood back toward rest. One pass, one mesh, no seams.
 export function deformVertices(mesh, part, boneTransforms) {
   const out = deformRaw(mesh, part, boneTransforms);
+
+  // Pierce, BEFORE pins. A displaced vertex is the bone result plus this
+  // layer's current spring offset -- read, never advanced: the solver owns
+  // those numbers and steps them once per frame in the physics loop, where
+  // a redraw cannot make the simulation run faster by happening twice.
+  //
+  // It goes before the pin step deliberately. Pins pull their
+  // neighbourhood back toward rest afterwards, so a pinned pixel that a
+  // pierce tried to move is returned to exactly where it was -- pinned
+  // pixels stay put during contact, and the two features compose instead
+  // of arguing. (The solver also masks by pin influence itself, so those
+  // vertices never accumulate an offset to be undone in the first place.)
+  const pierce = pierceOffsets(part);
+  if (pierce) {
+    for (let i = 0; i < out.length; i++) {
+      out[i] = { x: out[i].x + pierce.offsetX[i], y: out[i].y + pierce.offsetY[i] };
+    }
+  }
+
   if (!part || !part.pins || part.pins.size === 0) return out;
 
   const influence = pinInfluence(mesh, part);

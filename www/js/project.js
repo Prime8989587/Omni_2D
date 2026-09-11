@@ -14,7 +14,11 @@
 // Everything else (positions, flags, bones, mesh weights) is small and is
 // deep-copied, so a snapshot can never be mutated from underneath.
 
-import { Part, partsStore, reservePartId } from './parts.js';
+import {
+  Part, partsStore, reservePartId,
+  PierceRole, PIERCE_ROLES, clampPierceDepth,
+  DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
+} from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
 import { MeshVertex, PartMesh } from './mesh.js';
 import { sceneStore } from './scene.js';
@@ -88,6 +92,14 @@ function serializePart(part, copyPixels) {
     // and part of the scene state -- so undo, Reverse and named saves all
     // carry pins along without any special casing.
     pins: [...part.pins],
+    // Pierce: the explicit role, the painted region in the layer's own
+    // grid, and (for a piercer) its two depths. Same treatment as pins --
+    // small arrays of numbers that ride along with undo, Reverse, named
+    // saves and PSaver exports without any special casing.
+    pierceRole: part.pierceRole,
+    pierceRegion: [...part.pierceRegion],
+    pierceEnter: part.pierceEnter,
+    pierceEnd: part.pierceEnd,
     mesh: serializeMesh(part.mesh),
   };
 }
@@ -112,6 +124,12 @@ function deserializePart(data) {
   part.visible = data.visible !== false;
   part.locked = Boolean(data.locked);
   part.pins = new Set(data.pins || []); // absent in older saves: no pins
+  // Absent in saves made before Pierce existed, which is exactly a layer
+  // with no role -- the defaults already say that.
+  part.pierceRole = PIERCE_ROLES.has(data.pierceRole) ? data.pierceRole : PierceRole.NONE;
+  part.pierceRegion = new Set(data.pierceRegion || []);
+  part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
+  part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
   part.mesh = deserializeMesh(data.mesh);
   return part;
 }

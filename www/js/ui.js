@@ -4,7 +4,9 @@
 // or animation logic belongs in this file -- that lives in canvas.js.
 
 import { appState, AppState } from './state.js';
-import { partsStore } from './parts.js';
+import {
+  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth,
+} from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
 import { sceneStore, SCENE_PRESETS } from './scene.js';
@@ -14,7 +16,9 @@ import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import { initBindTool, setBrushRadius, setBrushStrength, getBrush } from './bindTool.js';
-import { initPoseTool, initMovePad } from './poseTool.js';
+import {
+  initPoseTool, initMovePad, PoseTarget, getPoseTarget, setPoseTarget, hasPiercerTarget,
+} from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
 import { serializeProject, applyProject } from './project.js';
@@ -22,6 +26,7 @@ import * as storage from './storage.js';
 import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
+import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import * as psaver from './psaver.js';
 
 const TOAST_DURATION_MS = 4000;
@@ -128,6 +133,17 @@ function cacheElements() {
   els.deletePartKeepBonesBtn = document.getElementById('deletePartKeepBonesBtn');
   els.deletePartWithBonesBtn = document.getElementById('deletePartWithBonesBtn');
   els.deletePartCancelBtn = document.getElementById('deletePartCancelBtn');
+  for (const id of [
+    'pierceModal', 'pierceLayerName', 'pierceRoleNoneBtn', 'pierceRolePiercerBtn',
+    'pierceRoleInteractiveBtn', 'pierceRoleHint', 'pierceDepthSummary',
+    'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceRemoveBtn',
+    'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
+    'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
+    'pierceDepthLegend', 'pierceDepthOkBtn', 'pierceDepthCancelBtn',
+    'pierceTipModal', 'pierceTipOkBtn',
+  ]) {
+    els[id] = document.getElementById(id);
+  }
 
   for (const id of [
     'psaverExportBtn', 'psaverImportBtn', 'psaverFileInput', 'psaverExportModal',
@@ -214,6 +230,9 @@ function cacheElements() {
   els.inertiaValue = document.getElementById('inertiaValue');
   els.animateHint = document.getElementById('animateHint');
   els.movePad = document.getElementById('movePad');
+  els.poseTargetRow = document.getElementById('poseTargetRow');
+  els.poseTargetBodyBtn = document.getElementById('poseTargetBodyBtn');
+  els.poseTargetPiercerBtn = document.getElementById('poseTargetPiercerBtn');
   els.appMenuBtn = document.getElementById('appMenuBtn');
   els.appMenu = document.getElementById('appMenu');
   els.stateSaveBtn = document.getElementById('stateSaveBtn');
@@ -1016,6 +1035,14 @@ function partRowAside(part, index, total) {
     () => history.run(part.locked ? 'Unlock layer' : 'Lock layer',
       () => partsStore.setLocked(part.id, !part.locked)),
     { pressed: part.locked });
+  // Pierce lives with the other per-layer settings rather than in a mode
+  // of its own: a role is a property of THIS layer, set where everything
+  // else about the layer is set.
+  action(part.hasPierceRole ? `Pierce: ${part.pierceRole}` : 'Pierce', '◆', () => {
+    openPartMenuId = null;
+    renderPartsList();
+    openPierceModal(part.id);
+  }, { pressed: part.hasPierceRole });
 
   return aside;
 }
@@ -1083,6 +1110,218 @@ function handleDuplicatePart() {
   if (copy) showToast(`Duplicated as "${copy.name}".`);
 }
 
+// ---- Pierce ------------------------------------------------------------
+//
+// A pierce is a relationship between exactly two KINDS of layer: a
+// PIERCER (which carries a painted tip and two depths) and an INTERACTIVE
+// layer (which carries a painted pierceable area). Both sides are set
+// here, by hand, on the layer's own settings panel.
+//
+// THE ROLE IS ALWAYS READ, NEVER GUESSED. Free Move asks which layers it
+// may drag on their own, and the deformation asks whose artwork may be
+// displaced; both questions are answered by this stored flag alone. No
+// amount of painted region data, overlap or proximity makes a layer a
+// piercer -- only the user saying so here.
+
+const PIERCE_TIP_SEEN_KEY = 'omni2d.pierce.tipSeen';
+
+let pierceModalPartId = null;
+// How the depth popup was opened, which decides what Cancel means:
+//   'assign' -- mid-assignment, and the role is NOT saved yet. Cancelling
+//               leaves the layer at None rather than saving a piercer with
+//               no depths, exactly as an unfinished assignment should.
+//   'edit'   -- an already-configured piercer. Cancelling changes nothing.
+let pierceDepthMode = null;
+
+function piercePart() {
+  return partsStore.parts.find((part) => part.id === pierceModalPartId) || null;
+}
+
+function openPierceModal(partId) {
+  pierceModalPartId = partId;
+  renderPierceModal();
+  els.pierceModal.hidden = false;
+}
+
+function closePierceModal() {
+  pierceModalPartId = null;
+  els.pierceModal.hidden = true;
+}
+
+const PIERCE_ROLE_HINTS = {
+  [PierceRole.NONE]: 'Not part of a pierce. This layer behaves exactly as normal.',
+  [PierceRole.PIERCER]: 'This layer does the piercing. Paint its tip, and set how ' +
+    'close it has to get before the other layer starts to move.',
+  [PierceRole.INTERACTIVE]: 'This layer gets pierced. Paint the area a piercer is ' +
+    'allowed to push into. Its own bones and physics keep running as normal.',
+};
+
+function renderPierceModal() {
+  const part = piercePart();
+  if (!part) return;
+
+  els.pierceLayerName.textContent = part.name;
+  els.pierceRoleNoneBtn.setAttribute('aria-pressed', String(part.pierceRole === PierceRole.NONE));
+  els.pierceRolePiercerBtn.setAttribute('aria-pressed', String(part.isPiercer));
+  els.pierceRoleInteractiveBtn.setAttribute('aria-pressed', String(part.isInteractive));
+  els.pierceRoleHint.textContent = PIERCE_ROLE_HINTS[part.pierceRole];
+
+  // Depths belong to the piercer side of the relationship, so they only
+  // appear on a piercer.
+  els.pierceDepthSummary.hidden = !part.isPiercer;
+  if (part.isPiercer) {
+    els.pierceDepthReadout.textContent =
+      `Enter ${part.pierceEnter} px · End ${part.pierceEnd} px — contact starts ` +
+      `${part.pierceEnter} px out, and the push stops growing ${part.pierceEnd} px deeper.`;
+  }
+
+  const painted = part.pierceRegion.size;
+  els.piercePaintBtn.hidden = !part.hasPierceRole;
+  els.piercePaintBtn.textContent = painted
+    ? `Paint regions… (${painted} px marked)`
+    : 'Paint regions…';
+  els.pierceRemoveBtn.hidden = !part.hasPierceRole;
+}
+
+// Assigning PIERCER is not complete until its two depths exist, so the
+// role is not written until the popup confirms. Cancel therefore has
+// nothing to undo -- the layer simply never left None.
+function choosePierceRole(role) {
+  const part = piercePart();
+  if (!part || part.pierceRole === role) return;
+
+  if (role === PierceRole.NONE) {
+    removePierceRole(part.id);
+    return;
+  }
+
+  if (role === PierceRole.PIERCER) {
+    openPierceDepthModal('assign');
+    return;
+  }
+
+  history.run('Set pierce role', () => partsStore.setPierceRole(part.id, role));
+  renderPierceModal();
+  showToast(`"${part.name}" is now Interactive. Paint the pierceable area next — Paint regions….`);
+}
+
+function removePierceRole(partId) {
+  const part = partsStore.parts.find((candidate) => candidate.id === partId);
+  if (!part || !part.hasPierceRole) return;
+  const was = part.pierceRole;
+  // Only pierce data goes. The artwork, position, bones, weights and Px
+  // Pin pins on this layer are none of this feature's business.
+  history.run('Remove pierce role', () => partsStore.setPierceRole(partId, PierceRole.NONE));
+  renderPierceModal();
+  showToast(`Removed the ${was} role from "${part.name}". Its artwork, bones and pins are untouched.`);
+}
+
+// ---- Enter / End points
+
+function openPierceDepthModal(mode) {
+  const part = piercePart();
+  if (!part) return;
+  pierceDepthMode = mode;
+  els.pierceEnterInput.value = String(part.pierceEnter);
+  els.pierceEndInput.value = String(part.pierceEnd);
+  renderPierceDepthBar();
+  els.pierceDepthModal.hidden = false;
+}
+
+function readPierceDepthInputs() {
+  return {
+    enter: clampPierceDepth(els.pierceEnterInput.value),
+    end: clampPierceDepth(els.pierceEndInput.value),
+  };
+}
+
+// The bar draws the whole approach in order: a run-up where the tip is
+// still too far out to do anything, the Enter mark where contact begins,
+// and the stretch beyond it where the push grows to its limit. The run-up
+// is drawn Enter long so the mark keeps a sensible place on the bar as the
+// two numbers change; it is a proportion, not a second distance reading,
+// which is why the legend names distances only where there is one to name.
+function renderPierceDepthBar() {
+  const { enter, end } = readPierceDepthInputs();
+  const span = Math.max(1, enter + end);
+  const enterPct = (enter / span) * 100;
+  els.pierceDepthEnterMark.style.left = `${enterPct}%`;
+  els.pierceDepthEndMark.style.left = '100%';
+  els.pierceDepthContact.style.left = `${enterPct}%`;
+  els.pierceDepthContact.style.right = '0';
+  els.pierceDepthLegend.textContent =
+    `Left edge: the tip still approaching, nothing moves. Enter at ${enter} px ` +
+    `away: contact begins. Right edge: ${end} px deeper still, maximum push — ` +
+    'going deeper than this changes nothing more.';
+}
+
+function confirmPierceDepths() {
+  const part = piercePart();
+  if (!part) return;
+  const { enter, end } = readPierceDepthInputs();
+  const assigning = pierceDepthMode === 'assign';
+  pierceDepthMode = null;
+  els.pierceDepthModal.hidden = true;
+
+  history.run(assigning ? 'Set pierce role' : 'Edit pierce depths', () => {
+    if (assigning) partsStore.setPierceRole(part.id, PierceRole.PIERCER);
+    partsStore.setPierceDepths(part.id, enter, end);
+  });
+  renderPierceModal();
+
+  if (assigning) {
+    showPierceTipOnce();
+    showToast(`"${part.name}" is now a Piercer. Paint its tip next — Paint regions….`);
+  } else {
+    showToast(`Enter ${enter} px · End ${end} px.`);
+  }
+}
+
+// Cancelling mid-assignment must not leave a Piercer with no depths, so
+// the role is simply never written -- the layer stays None.
+function cancelPierceDepths() {
+  const assigning = pierceDepthMode === 'assign';
+  pierceDepthMode = null;
+  els.pierceDepthModal.hidden = true;
+  renderPierceModal();
+  if (assigning) showToast('Cancelled — Enter and End Points are required, so the role stayed None.');
+}
+
+// ---- The one-time Px Pin tip
+
+function showPierceTipOnce() {
+  let seen = false;
+  try {
+    seen = window.localStorage.getItem(PIERCE_TIP_SEEN_KEY) === '1';
+  } catch {
+    // A browser with storage blocked shows the tip every time rather than
+    // never -- the tip is harmless, losing it is not.
+  }
+  if (seen) return;
+  try {
+    window.localStorage.setItem(PIERCE_TIP_SEEN_KEY, '1');
+  } catch { /* no-op */ }
+  els.pierceTipModal.hidden = false;
+}
+
+// Opens the region painter for this layer, paired with the opposite side
+// of the relationship (a piercer pairs with an interactive layer and vice
+// versa), so both are visible at their real relative positions while
+// painting. Defined in section 2.
+function handleOpenPiercePainter() {
+  const part = piercePart();
+  if (!part) return;
+  const partner = part.isPiercer ? partsStore.interactives[0] : partsStore.piercers[0];
+  if (!partner) {
+    showToast(part.isPiercer
+      ? 'No Interactive layer yet — set one on the layer that should get pierced.'
+      : 'No Piercer layer yet — set one on the layer that should do the piercing.');
+    return;
+  }
+  closePierceModal();
+  openPiercePainter(part.id, partner.id);
+}
+
 // Deleting a layer that bones are attached to would orphan those bones,
 // so it asks first and defaults to keeping them: losing rig work must be
 // an explicit choice, never a side effect.
@@ -1091,19 +1330,56 @@ function handleDeletePart() {
   if (!part) return;
 
   const attached = bonesStore.bonesAttachedTo(part.id);
-  if (attached.length === 0) {
+  const orphaned = pierceOrphansOf(part);
+
+  // Nothing to warn about: no bones to strand, no pierce to break.
+  if (attached.length === 0 && !part.hasPierceRole) {
     history.run('Delete layer', () => partsStore.remove(part.id));
     return;
   }
 
   pendingDeletePartId = part.id;
-  const names = attached.map((bone) => `"${bone.name}"`).join(', ');
-  els.deletePartMessage.textContent =
-    `${attached.length} bone(s) are attached to "${part.name}": ${names}. ` +
-    'Keeping them leaves them in the skeleton with no layer assigned, ready to ' +
-    'point at another one. Deleting them also removes any bones beneath them ' +
-    'from the skeleton, which cannot be undone by hand.';
+  const warnings = [];
+  if (attached.length > 0) {
+    const names = attached.map((bone) => `"${bone.name}"`).join(', ');
+    warnings.push(
+      `${attached.length} bone(s) are attached to "${part.name}": ${names}. ` +
+      'Keeping them leaves them in the skeleton with no layer assigned, ready to ' +
+      'point at another one. Deleting them also removes any bones beneath them ' +
+      'from the skeleton, which cannot be undone by hand.'
+    );
+  }
+  if (part.hasPierceRole) {
+    warnings.push(
+      `"${part.name}" is the ${part.pierceRole} in an active Pierce. Deleting it ` +
+      'breaks that pairing' +
+      (orphaned.length
+        ? `, so ${orphaned.map((other) => `"${other.name}"`).join(', ')} will be set back to ` +
+          'None as well — a pierce cannot exist with only one side present.'
+        : '.')
+    );
+  }
+  els.deletePartMessage.textContent = warnings.join(' ');
+
+  // With no bones in play, "keep bones" and "delete bones" are the same
+  // act, so only one button is offered rather than two that do the same
+  // thing under different names.
+  els.deletePartKeepBonesBtn.textContent = attached.length
+    ? 'Delete layer, keep bones'
+    : 'Delete layer';
+  els.deletePartWithBonesBtn.hidden = attached.length === 0;
   els.deletePartModal.hidden = false;
+}
+
+// The layers whose pierce role would be left with nothing to pair with if
+// `part` went away. A role survives as long as at least one layer on the
+// other side remains, so deleting one of two piercers strands nobody --
+// deleting the last one strands every interactive layer.
+function pierceOrphansOf(part) {
+  if (!part.hasPierceRole) return [];
+  const sameSide = part.isPiercer ? partsStore.piercers : partsStore.interactives;
+  if (sameSide.length > 1) return [];
+  return part.isPiercer ? partsStore.interactives : partsStore.piercers;
 }
 
 function completeDeletePart(alsoDeleteBones) {
@@ -1114,18 +1390,27 @@ function completeDeletePart(alsoDeleteBones) {
 
   const part = partsStore.parts.find((candidate) => candidate.id === partId);
   const attached = bonesStore.bonesAttachedTo(partId);
+  const orphaned = part ? pierceOrphansOf(part) : [];
   history.run(alsoDeleteBones ? 'Delete layer and bones' : 'Delete layer', () => {
     if (alsoDeleteBones) {
       for (const bone of attached) bonesStore.deleteBone(bone.id);
     } else {
       bonesStore.detachPart(partId);
     }
+    // Both halves go together: leaving the survivor flagged would leave a
+    // role pointing at a relationship that no longer has another side.
+    for (const other of orphaned) partsStore.setPierceRole(other.id, PierceRole.NONE);
     partsStore.remove(partId);
   });
   autoSaveNow('delete-layer');
-  showToast(alsoDeleteBones
-    ? `Deleted "${part ? part.name : 'layer'}" and ${attached.length} bone(s).`
-    : `Deleted "${part ? part.name : 'layer'}". Its ${attached.length} bone(s) are now unassigned.`);
+  const name = part ? part.name : 'layer';
+  const bits = [];
+  if (alsoDeleteBones && attached.length) bits.push(`${attached.length} bone(s) went with it`);
+  else if (attached.length) bits.push(`its ${attached.length} bone(s) are now unassigned`);
+  if (orphaned.length) {
+    bits.push(`${orphaned.map((other) => `"${other.name}"`).join(', ')} is back to Pierce role None`);
+  }
+  showToast(bits.length ? `Deleted "${name}" — ${bits.join('; ')}.` : `Deleted "${name}".`);
 }
 
 function cancelDeletePart() {
@@ -1167,13 +1452,27 @@ function renderChrome() {
   const canMove = isAnimating && !bonesStore.isEmpty && !partsStore.isEmpty;
   els.animateHint.hidden = !isAnimating;
   els.movePad.hidden = !canMove;
+  // The Piercer tab is only meaningful once some layer actually carries
+  // the role, so with no piercer in the scene there is nothing to choose
+  // between and the row stays away entirely.
+  const canPierce = canMove && hasPiercerTarget();
+  if (!canPierce && getPoseTarget() === PoseTarget.PIERCER) setPoseTarget(PoseTarget.BODY);
+  els.poseTargetRow.hidden = !canPierce;
+  els.poseTargetBodyBtn.setAttribute('aria-pressed', String(getPoseTarget() === PoseTarget.BODY));
+  els.poseTargetPiercerBtn.setAttribute('aria-pressed', String(getPoseTarget() === PoseTarget.PIERCER));
   if (isAnimating) {
     els.animateHint.textContent = bonesStore.isEmpty
       ? 'Build a skeleton in Rig mode first — Free Move moves the character by its root bone.'
       : partsStore.isEmpty
         ? 'Import artwork first, then move it here.'
-        : 'Drag anywhere on the canvas to move the whole character — or use the pad below to ' +
-          'keep your finger clear of it. Spring bones trail behind and settle.';
+        : canPierce
+          ? getPoseTarget() === PoseTarget.PIERCER
+            ? 'Dragging moves the PIERCER only. The character keeps running its own ' +
+              'physics underneath — bring the tip in and its pierceable area gives way.'
+            : 'Dragging moves the whole character, leaving the piercer where it is. ' +
+              'Switch to Piercer to move that instead.'
+          : 'Drag anywhere on the canvas to move the whole character — or use the pad below to ' +
+            'keep your finger clear of it. Spring bones trail behind and settle.';
   }
 
   els.startBtn.disabled = !isAnimating;
@@ -1710,6 +2009,22 @@ function bindEvents() {
   els.deletePartWithBonesBtn.addEventListener('click', () => completeDeletePart(true));
   els.deletePartCancelBtn.addEventListener('click', cancelDeletePart);
 
+  els.pierceRoleNoneBtn.addEventListener('click', () => choosePierceRole(PierceRole.NONE));
+  els.pierceRolePiercerBtn.addEventListener('click', () => choosePierceRole(PierceRole.PIERCER));
+  els.pierceRoleInteractiveBtn.addEventListener('click', () => choosePierceRole(PierceRole.INTERACTIVE));
+  els.pierceEditDepthsBtn.addEventListener('click', () => openPierceDepthModal('edit'));
+  els.pierceRemoveBtn.addEventListener('click', () => removePierceRole(pierceModalPartId));
+  els.piercePaintBtn.addEventListener('click', handleOpenPiercePainter);
+  els.pierceDoneBtn.addEventListener('click', closePierceModal);
+  els.pierceEnterInput.addEventListener('input', renderPierceDepthBar);
+  els.pierceEndInput.addEventListener('input', renderPierceDepthBar);
+  els.pierceDepthOkBtn.addEventListener('click', confirmPierceDepths);
+  els.pierceDepthCancelBtn.addEventListener('click', cancelPierceDepths);
+  els.pierceTipOkBtn.addEventListener('click', () => { els.pierceTipModal.hidden = true; });
+
+  els.poseTargetBodyBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.BODY); renderChrome(); });
+  els.poseTargetPiercerBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.PIERCER); renderChrome(); });
+
   els.appMenuBtn.addEventListener('click', (event) => {
     event.stopPropagation(); // so the document listener below doesn't close it again
     toggleStateMenu();
@@ -1808,6 +2123,7 @@ export function initUI() {
   history.subscribe(renderHistoryChrome);
 
   initPxPin();
+  initPierceTool();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();
   loadRestorePointFromStorage();

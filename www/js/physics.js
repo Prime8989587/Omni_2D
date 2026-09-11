@@ -9,6 +9,8 @@
 // battery redrawing a completely static character.
 
 import { bonesStore } from './bones.js';
+import { partsStore } from './parts.js';
+import { stepPierce } from './pierce.js';
 import { requestRender } from './canvas.js';
 
 const FALLBACK_DT = 1 / 60;
@@ -20,7 +22,13 @@ function tick(timestamp) {
   const dt = lastTimestamp ? (timestamp - lastTimestamp) / 1000 : FALLBACK_DT;
   lastTimestamp = timestamp;
 
-  const stillMoving = bonesStore.stepPhysics(dt);
+  // Both simulations advance every frame, independently. A piercer being
+  // dragged into a character does not pause that character's own springs,
+  // and its flesh springing back does not pause them either -- they are
+  // separate systems sharing only the clock.
+  const bonesMoving = bonesStore.stepPhysics(dt);
+  const fleshMoving = stepPierce(dt);
+  const stillMoving = bonesMoving || fleshMoving;
   requestRender();
 
   if (stillMoving) {
@@ -34,7 +42,10 @@ function tick(timestamp) {
 // Starts the loop if it isn't already running and there is anything to
 // simulate. Safe to call as often as you like.
 export function wakePhysics() {
-  if (frameId !== null || !bonesStore.hasPhysicsBones) return;
+  if (frameId !== null) return;
+  // Either simulation is reason enough to run: a scene with no spring
+  // bones at all still has to animate flesh giving way and springing back.
+  if (!bonesStore.hasPhysicsBones && !partsStore.hasPierce) return;
   lastTimestamp = 0;
   // The pivot history deliberately survives this: during a drag the loop
   // sleeps and wakes every frame until a spring actually starts moving,
@@ -49,4 +60,7 @@ export function initPhysics() {
   // The loop deliberately does NOT emit store changes itself, so this
   // cannot feed back into an endless wake cycle.
   bonesStore.subscribe(wakePhysics);
+  // And any layer change may have moved a piercer, which is what starts
+  // and ends contact. Same reasoning: the loop emits nothing itself.
+  partsStore.subscribe(wakePhysics);
 }
