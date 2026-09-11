@@ -140,6 +140,7 @@ function cacheElements() {
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
+    'pierceDepthCanvas', 'pierceDrawHint',
     'pierceDepthLegend', 'pierceDepthOkBtn', 'pierceDepthCancelBtn',
     'pierceTipModal', 'pierceTipOkBtn',
   ]) {
@@ -1183,8 +1184,9 @@ function renderPierceModal() {
   // much of that area actually gives way, and "all" is what an unpainted
   // deformable mask means -- worth saying, because a blank count there
   // would read as "nothing will move".
+  const walls = part.pierceBarrierRegion.size;
   const soft = part.isInteractive
-    ? ` · ${part.pierceDeformRegion.size || 'all'} deformable`
+    ? ` · ${part.pierceDeformRegion.size || 'all'} deformable${walls ? ` · ${walls} wall` : ''}`
     : '';
   els.piercePaintBtn.textContent = painted
     ? `Paint regions… (${painted} px marked${soft})`
@@ -1259,7 +1261,11 @@ function openPierceDepthModal(mode) {
   els.pierceEnterInput.value = String(part.pierceEnter);
   els.pierceEndInput.value = String(part.pierceEnd);
   renderPierceDepthBar();
+  // The modal has to be visible before the canvas is measured: a hidden
+  // element has no layout box, and the drawing is laid out from one.
   els.pierceDepthModal.hidden = false;
+  depthDraw = null;
+  renderPierceDepthCanvas();
 }
 
 function readPierceDepthInputs() {
@@ -1287,6 +1293,275 @@ function renderPierceDepthBar() {
     `Left edge: the tip still approaching, nothing moves. Enter at ${enter} px ` +
     `away: contact begins. Right edge: ${end} px deeper still, maximum push — ` +
     'going deeper than this changes nothing more.';
+}
+
+// ---- Placing Enter and End by hand, on the piercer itself
+//
+// The numbers are the same numbers. This draws the piercer's own artwork
+// with its painted tip highlighted and a ruler running out along the
+// direction that tip points, and puts the two depths on it as handles --
+// so "how far ahead of itself does this needle start pushing" can be
+// answered by looking at the needle rather than by guessing at a figure.
+// Dragging a handle writes the input; typing in the input moves the
+// handle. Neither is the source of truth: the Part is, and both of these
+// are views onto it.
+
+const DRAW_MARGIN = 26;      // canvas px kept clear at each end
+const DRAW_MIN_SPAN = 48;    // scene px of ruler, however small the depths are
+const DRAW_GRAB_PX = 34;     // how near a handle a touch counts as grabbing it
+
+let depthDraw = null;
+
+// The piercer's artwork as something drawImage can scale, built once per
+// modal opening rather than per frame.
+function piercerBitmap(part) {
+  const canvas = document.createElement('canvas');
+  canvas.width = part.naturalWidth;
+  canvas.height = part.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(part.naturalWidth, part.naturalHeight);
+  image.data.set(part.pixels);
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+// Where the tip points, in the layer's OWN space: from the sprite's middle
+// to the middle of the painted tip. The same rule the solver uses for the
+// real axis, minus the scene transform -- the sprite is drawn here as
+// authored, so the ruler has to be too. With nothing painted yet there is
+// no direction to read, and straight down is the honest default for a
+// needle whose tip the user has not marked.
+function localPierceAxis(part) {
+  if (part.pierceRegion.size === 0) return { x: 0, y: 1, known: false };
+  let sx = 0;
+  let sy = 0;
+  for (const index of part.pierceRegion) {
+    sx += (index % part.naturalWidth) + 0.5 - part.naturalWidth / 2;
+    sy += Math.floor(index / part.naturalWidth) + 0.5 - part.naturalHeight / 2;
+  }
+  const n = part.pierceRegion.size;
+  const length = Math.hypot(sx / n, sy / n);
+  if (length < 1e-6) return { x: 0, y: 1, known: false };
+  return { x: (sx / n) / length, y: (sy / n) / length, known: true };
+}
+
+// Rebuilds the whole drawing model: scale, where the ruler starts, how
+// long it is. Deliberately NOT recomputed mid-drag -- a ruler that
+// rescaled itself as the handle moved would slide out from under the
+// finger holding it.
+function planPierceDepthDraw() {
+  const part = piercePart();
+  const canvas = els.pierceDepthCanvas;
+  if (!part || !canvas) return null;
+
+  const { enter, end } = readPierceDepthInputs();
+  const axis = localPierceAxis(part);
+  const span = Math.max(DRAW_MIN_SPAN, (enter + end) * 1.6);
+
+  // Everything in SCENE pixels: the depths are, and the sprite's own
+  // texels convert through its integer scale.
+  const spriteW = part.naturalWidth * part.scale;
+  const spriteH = part.naturalHeight * part.scale;
+  // How far the painted tip reaches from the sprite's middle along the
+  // axis -- where the ruler starts, because that is the part that arrives.
+  let lead = 0;
+  if (axis.known) {
+    for (const index of part.pierceRegion) {
+      const lx = ((index % part.naturalWidth) + 0.5 - part.naturalWidth / 2) * part.scale;
+      const ly = (Math.floor(index / part.naturalWidth) + 0.5 - part.naturalHeight / 2) * part.scale;
+      lead = Math.max(lead, lx * axis.x + ly * axis.y);
+    }
+  } else {
+    lead = (Math.abs(axis.x) * spriteW + Math.abs(axis.y) * spriteH) / 2;
+  }
+
+  // Fit the WHOLE drawing, sprite and ruler together, rather than the
+  // sprite alone: the ruler runs along the tip's direction, which for a
+  // needle pointing down is the canvas's short axis. Fitting only the
+  // sprite put the End handle 62 px below the bottom edge, where it could
+  // be neither seen nor dragged.
+  const far = lead + span;
+  const xs = [-spriteW / 2, spriteW / 2, axis.x * far];
+  const ys = [-spriteH / 2, spriteH / 2, axis.y * far];
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const scale = Math.min(
+    (canvas.width - DRAW_MARGIN * 2) / Math.max(1, maxX - minX),
+    (canvas.height - DRAW_MARGIN * 2) / Math.max(1, maxY - minY)
+  );
+  // Centre that box, then place the sprite's middle inside it.
+  const originX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
+  const originY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+
+  return { part, axis, span, lead, scale, originX, originY, bitmap: piercerBitmap(part) };
+}
+
+// A distance along the ruler, in scene px, to a point on the canvas.
+function depthDrawPoint(plan, distance) {
+  const along = plan.lead + distance;
+  return {
+    x: plan.originX + plan.axis.x * along * plan.scale,
+    y: plan.originY + plan.axis.y * along * plan.scale,
+  };
+}
+
+function renderPierceDepthCanvas() {
+  const canvas = els.pierceDepthCanvas;
+  if (!canvas) return;
+  if (!depthDraw) depthDraw = planPierceDepthDraw();
+  const plan = depthDraw;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!plan) return;
+
+  const { enter, end } = readPierceDepthInputs();
+  const { part, axis, scale } = plan;
+
+  ctx.imageSmoothingEnabled = false;
+
+  // The sprite, drawn as authored about its own middle.
+  const w = part.naturalWidth * part.scale * scale;
+  const h = part.naturalHeight * part.scale * scale;
+  ctx.drawImage(plan.bitmap, plan.originX - w / 2, plan.originY - h / 2, w, h);
+
+  // The painted tip, tinted so it is obvious which end is which.
+  ctx.fillStyle = 'rgba(255, 46, 147, 0.55)';
+  const texel = part.scale * scale;
+  for (const index of part.pierceRegion) {
+    const u = index % part.naturalWidth;
+    const v = Math.floor(index / part.naturalWidth);
+    ctx.fillRect(
+      plan.originX - w / 2 + u * texel,
+      plan.originY - h / 2 + v * texel,
+      Math.max(1, texel), Math.max(1, texel)
+    );
+  }
+
+  // The ruler, from the tip's leading edge outward.
+  const from = depthDrawPoint(plan, 0);
+  const to = depthDrawPoint(plan, plan.span);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([5, 5]);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // The stretch between the two marks is where the push grows.
+  const a = depthDrawPoint(plan, enter);
+  const b = depthDrawPoint(plan, enter + end);
+  // Dimmer than the Enter handle it starts at, so the span reads as the
+  // stretch BETWEEN two marks rather than as a third thing to grab.
+  ctx.strokeStyle = '#1C8FA6';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  const handle = (point, label, colour) => {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 9, 0, Math.PI * 2);
+    ctx.fillStyle = colour;
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '15px monospace';
+    ctx.textAlign = 'center';
+    // Labels sit clear of the ruler, on whichever side has room.
+    ctx.fillText(label, point.x, point.y - 15 + (axis.y < 0 ? 34 : 0));
+  };
+  // Not the accent pink: the painted tip is already tinted with it just
+  // along the ruler, and two pinks a few pixels apart is the one pairing
+  // on this canvas that cannot be read at a glance.
+  handle(a, `Enter ${enter}`, '#2EE6FF');
+  handle(b, `End ${end}`, '#FFB02E');
+
+  els.pierceDrawHint.textContent = plan.axis.known
+    ? 'Drag either handle along the needle\u2019s path. Enter is where contact ' +
+      'begins; End is how much deeper the push keeps growing.'
+    : 'This piercer has no painted tip yet, so the path below is a guess at ' +
+      'straight down. Paint the tip and these will follow it.';
+}
+
+// Which handle a touch is going for: whichever is nearer, provided it is
+// near enough at all. Ties go to End, the one on the outside, because it
+// is the one a finger coming in from the open end of the ruler meets first.
+function grabPierceHandle(x, y) {
+  const plan = depthDraw;
+  if (!plan) return null;
+  const { enter, end } = readPierceDepthInputs();
+  const a = depthDrawPoint(plan, enter);
+  const b = depthDrawPoint(plan, enter + end);
+  const da = Math.hypot(x - a.x, y - a.y);
+  const db = Math.hypot(x - b.x, y - b.y);
+  if (Math.min(da, db) > DRAW_GRAB_PX) return null;
+  return db <= da ? 'end' : 'enter';
+}
+
+// A canvas point back to a distance along the ruler, by projecting onto
+// the axis -- which is what makes this work at any tip direction rather
+// than only a horizontal one.
+function depthDrawDistance(plan, x, y) {
+  const along = (x - plan.originX) * plan.axis.x + (y - plan.originY) * plan.axis.y;
+  return along / plan.scale - plan.lead;
+}
+
+function pierceDepthCanvasPoint(event) {
+  const canvas = els.pierceDepthCanvas;
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) * (canvas.width / rect.width),
+    y: (event.clientY - rect.top) * (canvas.height / rect.height),
+  };
+}
+
+function dragPierceHandle(which, x, y) {
+  const plan = depthDraw;
+  if (!plan) return;
+  const distance = depthDrawDistance(plan, x, y);
+  const { enter, end } = readPierceDepthInputs();
+  if (which === 'enter') {
+    // Enter cannot pass End: they are two points on one scale, in order.
+    els.pierceEnterInput.value = String(clampPierceDepth(
+      Math.min(distance, enter + end - PIERCE_DEPTH_RANGE.min)
+    ));
+  } else {
+    els.pierceEndInput.value = String(clampPierceDepth(distance - enter));
+  }
+  renderPierceDepthBar();
+  renderPierceDepthCanvas();
+}
+
+function initPierceDepthCanvas() {
+  const canvas = els.pierceDepthCanvas;
+  if (!canvas) return;
+  let dragging = null;
+  canvas.addEventListener('pointerdown', (event) => {
+    const point = pierceDepthCanvasPoint(event);
+    dragging = grabPierceHandle(point.x, point.y);
+    if (!dragging) return;
+    event.preventDefault();
+    // A synthetic event (tests) has no live pointer to capture.
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* no-op */ }
+    dragPierceHandle(dragging, point.x, point.y);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    event.preventDefault();
+    const point = pierceDepthCanvasPoint(event);
+    dragPierceHandle(dragging, point.x, point.y);
+  });
+  const release = () => { dragging = null; };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
 }
 
 function confirmPierceDepths() {
@@ -2051,8 +2326,15 @@ function bindEvents() {
   els.piercePaintBtn.addEventListener('click', handleOpenPiercePainter);
   els.pierceOverlayBtn.addEventListener('click', togglePierceOverlay);
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
-  els.pierceEnterInput.addEventListener('input', renderPierceDepthBar);
-  els.pierceEndInput.addEventListener('input', renderPierceDepthBar);
+  const onDepthTyped = () => {
+    renderPierceDepthBar();
+    // Re-plan, so a number far outside the current ruler brings the ruler
+    // with it. A drag never does this -- see planPierceDepthDraw.
+    depthDraw = null;
+    renderPierceDepthCanvas();
+  };
+  els.pierceEnterInput.addEventListener('input', onDepthTyped);
+  els.pierceEndInput.addEventListener('input', onDepthTyped);
   els.pierceDepthOkBtn.addEventListener('click', confirmPierceDepths);
   els.pierceDepthCancelBtn.addEventListener('click', cancelPierceDepths);
   els.pierceTipOkBtn.addEventListener('click', () => { els.pierceTipModal.hidden = true; });
@@ -2159,6 +2441,7 @@ export function initUI() {
 
   initPxPin();
   initPierceTool();
+  initPierceDepthCanvas();
   restorePierceOverlay();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();

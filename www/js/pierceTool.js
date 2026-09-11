@@ -43,6 +43,10 @@ const AREA_EDGE = '#2EE6FF';
 // into it -- amber, the warm opposite of both the other two.
 const DEFORM_COLOR = 'rgba(255, 176, 46, 0.6)';
 const DEFORM_EDGE = '#FFB02E';
+// Walls. Near-white, and the most opaque of the four: a barrier is not a
+// degree of anything, it is solid or it is not.
+const BARRIER_COLOR = 'rgba(236, 238, 248, 0.85)';
+const BARRIER_EDGE = '#FFFFFF';
 
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -55,7 +59,7 @@ function cacheElements() {
   for (const id of [
     'pierceWindow', 'pierceWindowTarget', 'pierceWindowStatus', 'pierceWindowDoneBtn',
     'pierceCanvas', 'pierceTargetTipBtn', 'pierceTargetAreaBtn', 'pierceTargetDeformBtn',
-    'pierceToolPaintBtn',
+    'pierceTargetBarrierBtn', 'pierceToolPaintBtn',
     'pierceToolEraseBtn', 'pierceBrushBtn', 'pierceBrushMenu',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
     'pierceInteractiveOpacity', 'pierceInteractiveOpacityValue',
@@ -164,6 +168,11 @@ const MASKS = {
     region: (part) => part.pierceDeformRegion,
     write: (id, indices, marked) => partsStore.setPierceDeformRegion(id, indices, marked),
     label: 'deformable',
+  },
+  barrier: {
+    region: (part) => part.pierceBarrierRegion,
+    write: (id, indices, marked) => partsStore.setPierceBarrierRegion(id, indices, marked),
+    label: 'barrier',
   },
 };
 
@@ -287,6 +296,9 @@ function render() {
   drawRegion(ctx, interactive, interactiveAt, AREA_COLOR, AREA_EDGE);
   // On top of the pierceable area, because it is a part of it.
   drawRegion(ctx, interactive, interactiveAt, DEFORM_COLOR, DEFORM_EDGE, interactive.pierceDeformRegion);
+  // Walls last of the three: they are what the tip is stopped by, so they
+  // belong on top of whatever they are bounding.
+  drawRegion(ctx, interactive, interactiveAt, BARRIER_COLOR, BARRIER_EDGE, interactive.pierceBarrierRegion);
   drawRegion(ctx, piercer, piercerAt, TIP_COLOR, TIP_EDGE);
 
   els.pierceWindowTarget.textContent = session.target === 'tip'
@@ -295,13 +307,15 @@ function render() {
   const deform = interactive.pierceDeformRegion.size;
   els.pierceWindowStatus.textContent =
     `tip ${piercer.pierceRegion.size} px · flesh ${interactive.pierceRegion.size} px · ` +
-    `soft ${deform || 'all'} · ${Math.round(cam.zoom * 100)}%`;
+    `soft ${deform || 'all'} · wall ${interactive.pierceBarrierRegion.size} · ` +
+    `${Math.round(cam.zoom * 100)}%`;
 }
 
 function renderTools() {
   els.pierceTargetTipBtn.setAttribute('aria-pressed', String(session.target === 'tip'));
   els.pierceTargetAreaBtn.setAttribute('aria-pressed', String(session.target === 'area'));
   els.pierceTargetDeformBtn.setAttribute('aria-pressed', String(session.target === 'deform'));
+  els.pierceTargetBarrierBtn.setAttribute('aria-pressed', String(session.target === 'barrier'));
   els.pierceToolPaintBtn.setAttribute('aria-pressed', String(session.tool === 'paint'));
   els.pierceToolEraseBtn.setAttribute('aria-pressed', String(session.tool === 'erase'));
   els.pierceBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
@@ -549,6 +563,12 @@ export function initPierceTool() {
   els.pierceTargetDeformBtn.addEventListener('click', () => {
     if (!session) return;
     session.target = 'deform';
+    renderTools();
+    render();
+  });
+  els.pierceTargetBarrierBtn.addEventListener('click', () => {
+    if (!session) return;
+    session.target = 'barrier';
     renderTools();
     render();
   });

@@ -850,6 +850,24 @@ button, input, select {
    two values have -- the bar is what shows at a glance that End sits
    deeper than Enter and how much travel that leaves. */
 
+.pierce-draw {
+  margin: 10px 0 4px;
+}
+
+/* Fixed aspect, full width: the canvas is drawn at a constant backing size
+   and scaled down by CSS, so the handles stay a comfortable touch size on a
+   phone without the drawing code having to know the viewport. */
+.pierce-draw__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--color-bg);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  clip-path: var(--pixel-clip);
+  touch-action: none;
+  image-rendering: pixelated;
+}
+
 .pierce-depth {
   margin-bottom: 16px;
 }

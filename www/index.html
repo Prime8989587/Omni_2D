@@ -281,9 +281,9 @@
         <button id="piercePaintBtn" class="toggle-chip toggle-chip--wide" type="button">Paint regions…</button>
         <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show painted regions on the canvas</button>
         <p class="joint-hint">
-          A testing aid: tints every painted tip pink and every pierceable area
-          cyan, right on the artwork, and shows the live contact reading. Leave
-          it off for normal work.
+          A testing aid, right on the artwork: tips pink, pierceable cyan,
+          the part of it that gives way amber, and walls white — plus the live
+          contact reading. Leave it off for normal work.
         </p>
         <button id="pierceRemoveBtn" class="btn btn--sm btn--danger px-pin-launch" type="button">Remove Pierce Role</button>
 
@@ -311,6 +311,22 @@
             <input id="pierceEndInput" class="text-input text-input--inline" type="number" min="1" max="128" step="1" inputmode="numeric" />
           </label>
         </div>
+        <!--
+          The same two numbers, placed by hand on the piercer's own artwork.
+          The canvas draws the sprite with its painted tip highlighted and a
+          ruler running along the tip's approach direction; the two handles
+          slide along that ruler. Both ways of setting them write the same
+          Enter/End values, so the fields above and the handles here are
+          always showing the same thing.
+        -->
+        <div class="pierce-draw">
+          <canvas id="pierceDepthCanvas" class="pierce-draw__canvas" width="480" height="300"></canvas>
+          <p id="pierceDrawHint" class="px-pin__hint">
+            Drag the two handles along the needle's path: <b>Enter</b> where
+            contact begins, <b>End</b> where the push stops growing.
+          </p>
+        </div>
+
         <div class="pierce-depth" aria-hidden="true">
           <div id="pierceDepthBar" class="pierce-depth__bar">
             <div id="pierceDepthContact" class="pierce-depth__contact"></div>
@@ -495,6 +511,7 @@
           <button id="pierceTargetTipBtn" class="segmented__btn" type="button" aria-pressed="true">Tip</button>
           <button id="pierceTargetAreaBtn" class="segmented__btn" type="button" aria-pressed="false">Pierceable</button>
           <button id="pierceTargetDeformBtn" class="segmented__btn" type="button" aria-pressed="false">Deformable</button>
+          <button id="pierceTargetBarrierBtn" class="segmented__btn" type="button" aria-pressed="false">Barrier</button>
         </div>
         <div class="segmented" role="group" aria-label="Paint tools">
           <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>

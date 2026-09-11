@@ -22,6 +22,7 @@ import {
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
 import { MeshVertex, PartMesh } from './mesh.js';
 import { sceneStore } from './scene.js';
+import { resetPierceContainment } from './pierce.js';
 
 export const PROJECT_FORMAT_VERSION = 1;
 
@@ -99,6 +100,7 @@ function serializePart(part, copyPixels) {
     pierceRole: part.pierceRole,
     pierceRegion: [...part.pierceRegion],
     pierceDeformRegion: [...part.pierceDeformRegion],
+    pierceBarrierRegion: [...part.pierceBarrierRegion],
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
     mesh: serializeMesh(part.mesh),
@@ -133,6 +135,9 @@ function deserializePart(data) {
   // empty one means "all of the pierceable area gives way" -- which is
   // exactly how those projects behaved, so they load unchanged.
   part.pierceDeformRegion = new Set(data.pierceDeformRegion || []);
+  // Absent before barriers existed; empty means no walls, which is how
+  // those projects behaved.
+  part.pierceBarrierRegion = new Set(data.pierceBarrierRegion || []);
   part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
   part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
   part.mesh = deserializeMesh(data.mesh);
@@ -212,4 +217,9 @@ export function applyProject(data) {
   // Loading (or undoing) teleports the skeleton; that jump is not motion
   // anyone applied, so the springs must not feel it as one.
   bonesStore.resumePhysics();
+  // Same reasoning for a contained piercer tip. That state remembers which
+  // side of a wall the tip was on, and ids survive a load -- so without
+  // this, a scene restored with the needle somewhere else would sweep from
+  // where the OLD one had got to and drag the contact across with it.
+  resetPierceContainment();
 }

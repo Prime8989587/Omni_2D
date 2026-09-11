@@ -84,8 +84,9 @@ www/js/pierce.js        Pierce: the contact measurement and the spring that push
                          flesh, so the renderer can draw them underneath it
 www/js/pierceState.js   The pierce springs' per-vertex state, in a module of its
                          own so pierce.js and mesh.js can both reach it
-www/js/pierceTool.js    The Pierce region painter: the tip and the pierceable
-                         area, painted on the Px Pin pattern
+www/js/pierceTool.js    The Pierce region painter, on the Px Pin pattern: the
+                         piercer's tip, and the interactive layer's pierceable
+                         area, the part of it that gives way, and its walls
 www/js/history.js       Undo/redo: the command stack of reversible scene snapshots
 www/js/project.js       The whole scene as plain data and back — used by both
                          undo/redo and save/load, so there is one serializer
@@ -1680,9 +1681,22 @@ ever takes movement away. The solver intersects it with the pierceable
 mask rather than trusting it alone, so a stray mark somewhere that can
 never be touched cannot make anything deform.
 
-It is painted in the same window as the other two, as a third target
-alongside Tip and Pierceable, with the same brush and the same stroke
-undo. On the canvas debug overlay it is drawn in amber over the pierceable
+It is painted in the same window as the others, as one of four targets —
+Tip, Pierceable, Deformable, Barrier — with the same brush and the same
+stroke undo.
+
+**On a report that this mask was stored but not respected:** not
+reproducible. Traced through the actual displacement path and measured
+every way it could be set — the real brush in the painter as well as the
+store directly, patches from 6×6 px up to the full region, on a 32 px
+layer and a 96 px one, and through a save/load round trip. Displacement
+reads the mask in all of them: a sub-region painted where the tip arrives
+gives way at 15.0 px, and the same pixels left unpainted hold at 0.000 px
+while still registering contact. There is one real limit behind it, and it
+is resolution rather than wiring: the mask is expressed through mesh cells,
+and an interactive layer that was never bound gets an auto-generated mesh
+6–10 cells across whatever its size — 12 px cells on a 96 px layer. A mask
+painted finer than a cell still works, but gives way at cell resolution. On the canvas debug overlay it is drawn in amber over the pierceable
 cyan, so the split is visible at a glance: cyan is where a pierce
 registers, amber is where it actually moves something.
 
@@ -1691,6 +1705,67 @@ the arriving pixels displaced **0.005 px** and rendered at row 431 — their
 exact rest position — while the same pixels with the mask painted over
 them displaced 15.36 px and rendered at row 371. Contact stayed engaged at
 full depth and the z-order swap still fired in both cases.
+
+### Walls: containing the tip sideways
+
+Enter and End constrain how far **in** a piercer goes, along one axis.
+They say nothing about sideways, so a tip driven at an angle slid out
+through the edge of the pierceable shape and sat in open space beyond it —
+a small artifact poking past the region's outline.
+
+**Barrier** is a fourth painted mask on the interactive layer, and its
+pixels are solid. While a tip is in contact its contained position is
+stopped by them, in any direction, so it stays inside the cavity the
+artwork draws.
+
+Two things make that actually hold, and both were wrong in the obvious
+first version:
+
+- **The test is swept, not an overlap check.** "Am I inside a wall right
+  now" has no memory of which side you came from, so pushing out of the
+  *nearest* wall pixel sends a tip that has passed the wall's midline
+  further out instead of back. Measured on a 24 px channel: a tip 2 px
+  past the wall was pushed to 145.3 — through it and out the far side.
+  The contained position now travels from where it was last frame toward
+  where the drag has put it and stops at the first blocked sample, so it
+  can never end up beyond a wall however fast the drag, and slides along
+  one it is pressed against.
+- **Engagement is read from the contained position, not the raw one.**
+  Otherwise the two undo each other: the wall holds the tip inside while
+  the finger carries on outside, the raw reading says nothing is in its
+  path, the contact drops — and dropping the contact releases the
+  containment. Measured before the fix, the tip sat correctly at 137 until
+  the raw needle left the channel, then sprang out to 146, 154, 168.
+
+Pulling back out along the axis is what ends it: the sweep follows a
+retreat freely, the gap opens past Enter, and the contact drops for the
+ordinary reason.
+
+Measured with walls at a channel's edges and the needle dragged 40 px
+sideways: the contained tip reached 137 and stayed at 137 at every step,
+never past the wall at 140, while the raw position tracked the finger from
+128 to 168 throughout.
+
+### Setting Enter and End by hand, on the piercer
+
+The depth window still has both numeric fields, and now also draws the
+piercer's own artwork with its painted tip tinted and a ruler running out
+along the direction that tip points. The two depths sit on that ruler as
+handles: **Enter** where contact begins, **End** where the push stops
+growing.
+
+Neither input owns the value — the Part does, and both are views onto it.
+Dragging a handle writes the field; typing in the field moves the handle.
+The ruler is planned when the window opens and when a number is typed, but
+never mid-drag: a ruler that rescaled itself as the handle moved would
+slide out from under the finger holding it.
+
+The handle positions are projected onto the tip's axis rather than assumed
+horizontal, so this works for a tip pointing in any direction — and the
+whole drawing, sprite and ruler together, is fitted to the canvas. Fitting
+only the sprite put the End handle 62 px below the bottom edge of a
+480×300 canvas for a needle pointing down, where it could be neither seen
+nor dragged.
 
 ### The spring is the one already here
 
@@ -1853,7 +1928,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Five browser suites cover this, all passing:
+Six browser suites cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -1886,6 +1961,20 @@ Five browser suites cover this, all passing:
   leaving the unpainted body and shaft untouched to the pixel, the readout
   tracking `OUT → IN → AT END / tip sunk`, and switching it off restoring
   the artwork exactly.
+- **Barrier, deformable and drawn depths** (24 checks) — a needle dragged
+  40 px sideways out of a walled channel with its contained tip reaching
+  137 and staying at 137 at every step, never past the wall at 140, while
+  the raw position tracked the finger 128 → 168 and the artwork stopped
+  with it; the same scene without walls following the drag straight out
+  past the edge; the depth cap still pinned at End 60 px deeper; a
+  pierceable-but-not-deformable area engaging at full depth with the
+  z-order swapping while its pixels moved 0.000 px and rendered at their
+  rest row, against 15.0 px once painted deformable; all three masks
+  surviving a serialize/load round trip; and the drawn Enter/End handles
+  writing 26 and 5 into the numeric fields, a typed number moving the
+  handle back, and the stored values then driving the clamp — nothing
+  engaging outside the drawn Enter, contact beginning 1 px inside it, and
+  the depth capping at the drawn End 40 px deeper.
 - **Depth cap and deformable mask** (25 checks) — a needle dragged 10, 30,
   60 and 100 px past End with the raw `needle.y` travelling 65 → 155 and
   the overshoot tracking it one px per px, while depth stayed at 16 and the

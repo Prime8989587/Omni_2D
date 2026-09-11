@@ -142,6 +142,21 @@ export class Part {
     // the pierceable area do anything.
     this.pierceDeformRegion = new Set();
     this.pierceDeformRegionVersion = 0;
+
+    // WALLS THE TIP CANNOT CROSS
+    //
+    // Enter and End constrain how far IN a piercer goes, along one axis.
+    // They say nothing about sideways, so a tip driven at an angle could
+    // slide out through the edge of the pierceable shape and poke into
+    // open space beyond it. These pixels are solid: once a tip is in
+    // contact, its contained position is pushed back out of any of them
+    // it would otherwise cross, in any direction -- which is what keeps
+    // it inside the cavity the artwork draws.
+    //
+    // Empty means no walls, which is the behaviour every project had
+    // before this existed.
+    this.pierceBarrierRegion = new Set();
+    this.pierceBarrierRegionVersion = 0;
   }
 
   get isPiercer() {
@@ -434,6 +449,8 @@ class PartsStore {
       part.pierceRegionVersion++;
       part.pierceDeformRegion = new Set();
       part.pierceDeformRegionVersion++;
+      part.pierceBarrierRegion = new Set();
+      part.pierceBarrierRegionVersion++;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
     }
@@ -448,6 +465,24 @@ class PartsStore {
     part.pierceEnd = clampPierceDepth(end);
     this._emit('transform');
     return true;
+  }
+
+  setPierceBarrierRegion(id, indices, marked) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return 0;
+    let changed = 0;
+    for (const index of indices) {
+      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
+      if (marked ? !part.pierceBarrierRegion.has(index) : part.pierceBarrierRegion.has(index)) {
+        if (marked) part.pierceBarrierRegion.add(index); else part.pierceBarrierRegion.delete(index);
+        changed++;
+      }
+    }
+    if (changed) {
+      part.pierceBarrierRegionVersion++;
+      this._emit('transform');
+    }
+    return changed;
   }
 
   // The deformable sub-mask, painted exactly like the others. Kept beside

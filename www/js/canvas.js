@@ -518,9 +518,12 @@ function drawPierceProbe() {
     if (!r.piercer) return `${r.interactive}: no piercer with a painted tip`;
     const gap = r.inPath ? `${r.gap.toFixed(1)}px` : `${r.gap.toFixed(1)}px off-axis`;
     const zone = r.engaged ? (r.depth >= r.end ? 'AT END' : 'IN') : 'OUT';
+    const held = r.held > 0.05
+      ? `  held ${r.held.toFixed(1)}px${r.walled > 0.05 ? ` (wall ${r.walled.toFixed(1)}px)` : ''}`
+      : '';
     return `${r.piercer} -> ${r.interactive}\n` +
       `  gap ${gap}  enter ${r.enter}  end ${r.end}\n` +
-      `  depth ${r.depth.toFixed(1)}  ${zone}${r.sunk ? '  tip sunk' : ''}`;
+      `  depth ${r.depth.toFixed(1)}  ${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no interactive layer';
   probeEl.hidden = false;
