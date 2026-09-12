@@ -15,7 +15,10 @@ import { initViewGestures } from './viewGestures.js';
 import { importFiles } from './importer.js';
 import { initGestures } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
-import { initBindTool, setBrushRadius, setBrushStrength, getBrush } from './bindTool.js';
+import {
+  initBindTool, setBrushRadius, setBrushStrength, getBrush,
+  setWeightTool, getWeightTool, WeightTool,
+} from './bindTool.js';
 import {
   initPoseTool, initMovePad, PoseTarget, getPoseTarget, setPoseTarget, hasPiercerTarget,
 } from './poseTool.js';
@@ -30,6 +33,8 @@ import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { pierceOverlayEnabled, setPierceOverlay, pierceMorphIssue } from './pierce.js';
 import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
+import { encodeGif, describeGif } from './gif.js';
+import { saveBinaryFile, toSafeFilename } from './filesave.js';
 
 const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
@@ -206,6 +211,8 @@ function cacheElements() {
   els.autoWeightBtn = document.getElementById('autoWeightBtn');
   els.densitySlider = document.getElementById('densitySlider');
   els.densityValue = document.getElementById('densityValue');
+  els.weightPaintBtn = document.getElementById('weightPaintBtn');
+  els.weightEraseBtn = document.getElementById('weightEraseBtn');
   els.brushSlider = document.getElementById('brushSlider');
   els.brushValue = document.getElementById('brushValue');
   els.strengthSlider = document.getElementById('strengthSlider');
@@ -256,6 +263,10 @@ function cacheElements() {
 
   els.exportModal = document.getElementById('exportModal');
   els.filenameInput = document.getElementById('filenameInput');
+  els.exportPreviewCanvas = document.getElementById('exportPreviewCanvas');
+  els.exportPreviewStatus = document.getElementById('exportPreviewStatus');
+  els.exportFpsSlider = document.getElementById('exportFpsSlider');
+  els.exportFpsValue = document.getElementById('exportFpsValue');
   els.saveGifBtn = document.getElementById('saveGifBtn');
   els.saveMp4Btn = document.getElementById('saveMp4Btn');
   els.cancelExportBtn = document.getElementById('cancelExportBtn');
@@ -270,14 +281,92 @@ function showToast(message) {
   }, TOAST_DURATION_MS);
 }
 
+// ---------------------------------------------------------------------------
+// Export
+//
+// Stop hands the recorded frames straight to this dialog, which plays them
+// back on a loop at the selected rate. The preview is the same frames and
+// the same rate the encoder will use, so what plays here is what lands in
+// the file -- and moving the slider changes the playback speed on the spot
+// rather than being a number nobody can evaluate until afterwards.
+
+const DEFAULT_EXPORT_FPS = 12;
+
+let exportRecording = null;   // { width, height, frames, truncated }
+let previewTimer = null;
+let previewIndex = 0;
+let exporting = false;
+
+function exportFps() {
+  return Number(els.exportFpsSlider.value) || DEFAULT_EXPORT_FPS;
+}
+
+function drawPreviewFrame() {
+  const canvas = els.exportPreviewCanvas;
+  if (!canvas || !exportRecording || exportRecording.frames.length === 0) return;
+  const frame = exportRecording.frames[previewIndex % exportRecording.frames.length];
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(exportRecording.width, exportRecording.height);
+  image.data.set(frame);
+  ctx.putImageData(image, 0, 0);
+}
+
+function stopPreview() {
+  if (previewTimer !== null) clearInterval(previewTimer);
+  previewTimer = null;
+}
+
+function startPreview() {
+  stopPreview();
+  if (!exportRecording || exportRecording.frames.length === 0) return;
+  drawPreviewFrame();
+  if (exportRecording.frames.length === 1) return; // nothing to animate
+  previewTimer = setInterval(() => {
+    previewIndex = (previewIndex + 1) % exportRecording.frames.length;
+    drawPreviewFrame();
+  }, 1000 / exportFps());
+}
+
+function renderExportStatus() {
+  if (!exportRecording) return;
+  const summary = describeGif({ frames: exportRecording.frames, fps: exportFps() });
+  els.exportFpsValue.textContent = String(exportFps());
+  // The rate that actually lands in the file, which GIF quantises to
+  // hundredths of a second -- said out loud rather than quietly differing
+  // from the number on the slider.
+  const quantised = summary.fps !== exportFps() ? ` (plays at ${summary.fps})` : '';
+  const truncated = exportRecording.truncated
+    ? ` · recording stopped at the ${exportRecording.maxFrames}-frame limit`
+    : '';
+  els.exportPreviewStatus.textContent = exportRecording.frames.length === 0
+    ? 'Nothing was recorded.'
+    : `${summary.frames} frames · ${summary.seconds}s at ${exportFps()} fps${quantised}${truncated}`;
+  els.saveGifBtn.disabled = exportRecording.frames.length === 0 || exporting;
+}
+
 function openExportModal() {
+  exportRecording = canvasEngine.recordedAnimation();
+  previewIndex = 0;
+  exporting = false;
   els.filenameInput.value = '';
+  els.exportFpsSlider.value = String(DEFAULT_EXPORT_FPS);
+
+  const canvas = els.exportPreviewCanvas;
+  if (exportRecording.width > 0 && exportRecording.height > 0) {
+    canvas.width = exportRecording.width;
+    canvas.height = exportRecording.height;
+  }
+
+  renderExportStatus();
   els.exportModal.hidden = false;
-  els.filenameInput.focus();
+  startPreview();
 }
 
 function closeExportModal() {
+  stopPreview();
   els.exportModal.hidden = true;
+  exportRecording = null;
+  canvasEngine.clearRecording();
 }
 
 function resolvedFilename() {
@@ -877,9 +966,25 @@ function renderBindChrome() {
         'To pin it to particular ones, set "Controls layer" on them in Rig mode.';
   } else if (!bone) {
     els.bindHint.textContent = 'Pick a bone (Bones tab) to see its influence and paint weights.';
+  } else if (getWeightTool() === WeightTool.ERASE) {
+    els.bindHint.textContent =
+      `Drag on the mesh to ERASE "${bone.name}" influence. Slider rotates it to test.`;
   } else {
     els.bindHint.textContent = `Drag on the mesh to paint "${bone.name}" influence. Slider rotates it to test.`;
   }
+}
+
+function renderWeightTool() {
+  const erasing = getWeightTool() === WeightTool.ERASE;
+  els.weightPaintBtn.setAttribute('aria-pressed', String(!erasing));
+  els.weightEraseBtn.setAttribute('aria-pressed', String(erasing));
+}
+
+function chooseWeightTool(tool) {
+  setWeightTool(tool);
+  renderWeightTool();
+  // The hint line names the tool, so it has to be redrawn with it.
+  renderChrome();
 }
 
 function handleAnimateTapped() {
@@ -906,14 +1011,44 @@ function handleStop() {
   openExportModal();
 }
 
-function handleSave(format) {
-  const filename = resolvedFilename();
-  console.log(`Export triggered: ${filename}.${format} (placeholder - no encoding yet)`);
-  closeExportModal();
+async function handleSaveGif() {
+  if (exporting || !exportRecording || exportRecording.frames.length === 0) return;
+  exporting = true;
+  els.saveGifBtn.disabled = true;
+  // Encoding a few hundred frames is not instant, and the button going
+  // quiet with no explanation reads as a dead button.
+  els.exportPreviewStatus.textContent = 'Encoding…';
+
+  const filename = toSafeFilename(resolvedFilename(), '.gif');
+  try {
+    // Yield once so the line above actually paints before the encoder
+    // takes the thread.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const bytes = encodeGif({
+      width: exportRecording.width,
+      height: exportRecording.height,
+      frames: exportRecording.frames,
+      fps: exportFps(),
+    });
+    const result = await saveBinaryFile(filename, bytes, 'image/gif');
+    const kb = Math.max(1, Math.round(result.bytes / 1024));
+    showToast(`Saved "${filename}" (${kb} KB) to ${result.where}.`);
+    closeExportModal();
+  } catch (error) {
+    exporting = false;
+    console.error('GIF export failed', error);
+    els.exportPreviewStatus.textContent = `Export failed: ${error.message || error}`;
+    els.saveGifBtn.disabled = false;
+  }
+}
+
+function handleSaveMp4() {
+  // Not built. Saying so is the only honest thing this button can do --
+  // it used to close the dialog as though it had worked.
+  showToast('MP4 export is not built yet — Save as GIF is the working export.');
 }
 
 function handleCancelExport() {
-  console.log('Export cancelled');
   closeExportModal();
 }
 
@@ -2321,6 +2456,8 @@ function bindEvents() {
   els.autoWeightBtn.addEventListener('click', handleAutoWeight);
   els.densitySlider.addEventListener('input', handleDensityInput);
   els.densitySlider.addEventListener('change', handleDensityChange);
+  els.weightPaintBtn.addEventListener('click', () => chooseWeightTool(WeightTool.PAINT));
+  els.weightEraseBtn.addEventListener('click', () => chooseWeightTool(WeightTool.ERASE));
   els.brushSlider.addEventListener('input', handleBrushInput);
   els.strengthSlider.addEventListener('input', handleStrengthInput);
   els.debugRotateSlider.addEventListener('input', handleDebugRotate);
@@ -2445,8 +2582,12 @@ function bindEvents() {
   els.discardRecoveryBtn.addEventListener('click', discardRecovery);
 
 
-  els.saveGifBtn.addEventListener('click', () => handleSave('gif'));
-  els.saveMp4Btn.addEventListener('click', () => handleSave('mp4'));
+  els.saveGifBtn.addEventListener('click', handleSaveGif);
+  els.saveMp4Btn.addEventListener('click', handleSaveMp4);
+  els.exportFpsSlider.addEventListener('input', () => {
+    renderExportStatus();
+    startPreview(); // re-times the loop, so the slider is a speed you see
+  });
   els.cancelExportBtn.addEventListener('click', handleCancelExport);
 }
 
@@ -2468,6 +2609,7 @@ export function initUI() {
   applySliderRange(els.gravitySlider, PHYSICS_RANGES.gravityInfluence);
   applySliderRange(els.inertiaSlider, PHYSICS_RANGES.inertia);
 
+  renderWeightTool();
   const brush = getBrush();
   els.brushSlider.value = String(brush.radius);
   els.brushValue.textContent = String(brush.radius);

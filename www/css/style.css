@@ -1394,6 +1394,40 @@ button, input, select {
   color: var(--color-danger);
 }
 
+/* ---------- Export preview ----------
+   The recorded animation, played back in the export dialog at whatever
+   frame rate is currently selected -- so the slider is not a number to
+   guess at, it is a speed you watch change. */
+
+.export-preview {
+  margin-bottom: 16px;
+}
+
+.export-preview__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Squared off against the dialog's own surface so the artwork's own
+     transparency reads as transparent rather than as black. */
+  background: var(--color-bg);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  clip-path: var(--pixel-clip);
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* The active weight tool fills solid, same as Px Pin's and the pierce
+   painter's tool pickers -- "am I painting or erasing?" has to be
+   answerable at a glance, because the two do opposite things to the same
+   artwork under the same brush. */
+.bind-panel-tool .segmented__btn[aria-pressed="true"],
+#bindPanel .segmented__btn[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #000000;
+}
+
 /* ---------- Info buttons & popovers ----------
    A small (i) mark beside a control whose purpose is not obvious from its
    label alone. It sits in a row alongside the field's own label rather

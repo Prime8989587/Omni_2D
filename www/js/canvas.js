@@ -465,6 +465,7 @@ function render() {
   const boneTransforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
 
   renderScene(boneTransforms);
+  captureFrame();
   if (sceneCanvas) {
     ctx.drawImage(
       sceneCanvas,
@@ -581,10 +582,6 @@ export function initCanvas(canvas) {
   resize();
 }
 
-// Placeholder no-ops mirroring the app's state transitions. ui.js already
-// calls these at the right moments, so wiring in real behavior later is a
-// matter of filling them in.
-
 export function onEnterAnimateMode() {
   // FUTURE HOOK: show skeleton overlay, enable joint drag handles.
 }
@@ -593,11 +590,86 @@ export function onExitAnimateMode() {
   // FUTURE HOOK: hide skeleton overlay, cancel any in-progress drag.
 }
 
+// ---------------------------------------------------------------------------
+// Recording
+//
+// Frames are taken off the SCENE BITMAP, not off the canvas the user is
+// looking at. That buffer is the character at its own resolution on
+// transparency -- no checkerboard, no grid, no bone handles, no selection
+// outline -- which is exactly what belongs in an exported animation and
+// nothing that does not. Reading the display canvas instead would bake the
+// whole editor into the file.
+//
+// Two limits keep a recording from eating the device: frames are sampled
+// at a capped rate rather than once per redraw, and there is a hard
+// ceiling on how many are kept. A 512x512 frame is a megabyte, so an
+// uncapped recording at display rate would be gigabytes within a minute.
+const CAPTURE_HZ = 20;
+const MAX_FRAMES = 240; // 12 seconds at the capture rate
+
+let recording = false;
+let capturedFrames = [];
+let captureWidth = 0;
+let captureHeight = 0;
+let lastCaptureAt = 0;
+let captureLoop = null;
+let hitFrameLimit = false;
+
+function captureFrame() {
+  if (!recording || !sceneImage) return;
+  const now = performance.now();
+  if (capturedFrames.length > 0 && now - lastCaptureAt < 1000 / CAPTURE_HZ) return;
+  if (capturedFrames.length >= MAX_FRAMES) {
+    hitFrameLimit = true;
+    return;
+  }
+  lastCaptureAt = now;
+  captureWidth = sceneWidth;
+  captureHeight = sceneHeight;
+  // A copy, not a reference: the buffer is written in place every frame.
+  capturedFrames.push(new Uint8ClampedArray(sceneImage.data));
+}
+
 export function onStartRecording() {
-  // FUTURE HOOK: begin capturing frames for GIF/MP4 export.
+  recording = true;
+  capturedFrames = [];
+  hitFrameLimit = false;
+  lastCaptureAt = 0;
+  // The renderer only draws when something asks it to, so a still moment
+  // during a recording would otherwise capture nothing at all and the
+  // finished animation would skip over it. Asking for a frame every tick
+  // keeps the recording's timeline honest: a pause records as a pause.
+  const tick = () => {
+    if (!recording) return;
+    requestRender();
+    captureLoop = requestAnimationFrame(tick);
+  };
+  captureLoop = requestAnimationFrame(tick);
 }
 
 export function onStopRecording() {
-  // FUTURE HOOK: stop capturing frames and hand the captured data off to
-  // the export flow (see ui.js's handleSave) once real encoding exists.
+  recording = false;
+  if (captureLoop !== null) cancelAnimationFrame(captureLoop);
+  captureLoop = null;
+}
+
+// What was recorded, for the export flow to preview and encode. The frames
+// are handed over as they are rather than copied again -- the caller reads
+// them and does not write to them.
+export function recordedAnimation() {
+  return {
+    width: captureWidth,
+    height: captureHeight,
+    frames: capturedFrames,
+    captureHz: CAPTURE_HZ,
+    truncated: hitFrameLimit,
+    maxFrames: MAX_FRAMES,
+  };
+}
+
+// Dropped once an export is saved or discarded: a megabyte a frame is not
+// something to hold on to for a recording nobody is going to use.
+export function clearRecording() {
+  capturedFrames = [];
+  hitFrameLimit = false;
 }

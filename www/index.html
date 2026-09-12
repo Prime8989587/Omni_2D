@@ -158,6 +158,15 @@
 
         <button id="pxpinOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Px Pin — pin single pixels…</button>
 
+        <div class="field-label-row">
+          <div class="field-label">Weight tool</div>
+          <button class="info-btn" type="button" data-info="weight-tool" aria-haspopup="true" aria-expanded="false" aria-label="What do Paint and Erase do to weights?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="segmented" role="group" aria-label="Weight painting tool">
+          <button id="weightPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
+          <button id="weightEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
+        </div>
+
         <div class="bind-row">
           <label class="slider-field">
             <span>Brush <b id="brushValue">45</b></span>
@@ -227,15 +236,29 @@
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
         <h2 id="exportTitle" class="modal__title">Export Animation</h2>
 
+        <div class="export-preview">
+          <canvas id="exportPreviewCanvas" class="export-preview__canvas"></canvas>
+          <p id="exportPreviewStatus" class="px-pin__hint"></p>
+        </div>
+
+        <div class="field-label-row">
+          <div class="field-label">Frame rate</div>
+          <button class="info-btn" type="button" data-info="export-fps" aria-haspopup="true" aria-expanded="false" aria-label="What does frame rate change?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <label class="slider-field slider-field--wide">
+          <span>Frames per second <b id="exportFpsValue">12</b></span>
+          <input id="exportFpsSlider" class="slider" type="range" min="2" max="30" step="1" value="12" />
+        </label>
+
         <label for="filenameInput" class="field-label">Filename</label>
         <input id="filenameInput" class="text-input" type="text" placeholder="animation_01" autocomplete="off" />
 
         <div class="modal__actions">
           <button id="saveGifBtn" class="btn btn--flourish" type="button">Save as GIF</button>
-          <button id="saveMp4Btn" class="btn btn--flourish" type="button">Save as MP4</button>
+          <button id="saveMp4Btn" class="btn" type="button">Save as MP4</button>
         </div>
 
-        <button id="cancelExportBtn" class="btn btn--cancel" type="button">Cancel</button>
+        <button id="cancelExportBtn" class="btn btn--cancel" type="button">Discard</button>
       </div>
     </div>
 

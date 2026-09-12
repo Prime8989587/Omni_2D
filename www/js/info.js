@@ -78,6 +78,29 @@ const TOPICS = {
       'turned by it; its own angle is set separately. Useful for something ' +
       'that should move with the body without inheriting its rotation.',
   },
+  'weight-tool': {
+    title: 'Weight tool',
+    body: 'Both tools use the same brush -- size, strength and falloff mean ' +
+      'the same thing for each.\n\n' +
+      '\u2022 Paint raises the SELECTED bone\u2019s influence on the vertices ' +
+      'under your finger.\n' +
+      '\u2022 Erase lowers it toward zero. The other bones already ' +
+      'influencing those vertices take up the slack, so the total always ' +
+      'stays at 1 and the artwork never loses its skinning.\n\n' +
+      'Neither touches the artwork itself -- only which bone moves it. ' +
+      'Erasing the last influence on a vertex leaves it sitting at rest.',
+  },
+  'export-fps': {
+    title: 'Frame rate',
+    body: 'How many of the recorded frames play per second. Lower is ' +
+      'slower and choppier and makes a smaller file; higher is smoother ' +
+      'and larger. The preview above plays at whatever you pick, so you ' +
+      'can judge it before saving rather than after.\n\n' +
+      'GIF measures frame delays in hundredths of a second, so not every ' +
+      'rate is expressible exactly -- when the one you pick has to be ' +
+      'rounded, the line under the preview says what it will really play ' +
+      'at.',
+  },
   'pxpin-tool': {
     title: 'Px Pin',
     body: 'Pins hold individual pixels exactly at their rest position, ' +

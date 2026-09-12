@@ -40,8 +40,10 @@ a real, installable Android APK.
   and hide bone branches; **undo and redo everything**; and **save projects
   to the device**, with an auto-save that survives a crash. See "Managing
   layers and bones", "Undo and redo" and "Saving and loading projects"
-  below. Drag-driven animation and real GIF/MP4 export are still to come;
-  export remains a placeholder that only logs.
+  below. **GIF export is real**: recording captures frames, Stop opens a
+  looping preview with an adjustable frame rate, and Save writes an actual
+  `.gif` file to the device. Drag-driven animation and MP4 export are
+  still to come.
 
 ## What's in this repo
 
@@ -986,19 +988,43 @@ heatmap over the mesh:
 ### Painting weights by hand
 
 With a Part bound and a bone selected, **drag your finger across the
-mesh**. That raises the selected bone's weight on the vertices under the
-brush, and every other bone's weight on those same vertices is scaled
-down to compensate, so each vertex's weights always still sum to 1.
+mesh**. That changes the selected bone's weight on the vertices under the
+brush, and every other bone's weight on those same vertices is scaled to
+compensate, so each vertex's weights always still sum to 1.
 
+- **Weight tool** — **Paint** raises the selected bone's influence;
+  **Erase** lowers it back toward zero. The same brush either way: size,
+  falloff and strength mean exactly the same thing for both, and Erase is
+  literally the paint delta negated rather than a second code path to keep
+  in step.
 - **Brush** — the radius of the brush in *screen* pixels, so it feels the
   same at any zoom; zoom in to paint finer detail in grid cells. Influence
   falls off linearly from the centre to the rim.
-- **Strength** — how fast each pass pushes weight toward this bone.
+- **Strength** — how fast each pass pushes weight toward or away from this
+  bone.
 
-To take influence *away* from a bone, select a different bone and paint
-over the same area — that bone gains, so this one loses.
+**Erase used to not exist.** Weight painting only ever added, and the only
+way to lower a bone's share was to select a *different* bone and paint
+over the same area, letting renormalization take the difference — a
+workaround rather than a tool, and no help at all on a layer with a single
+bone. Measured before the fix: no control matching "erase" existed
+anywhere in Bind mode, the Strength slider was floored at 0.05 so no
+negative delta was even expressible, and the one function that writes
+weight was only ever called with a positive one.
 
-**Auto-weight Part** doubles as the undo: it throws away all hand-painted
+**The one case worth spelling out.** Redistribution needs somewhere to
+redistribute *to*. On a vertex that only one bone influences there is no
+other bone to hand the weight to, so the sum-to-1 rule used to put it
+straight back at 1 — erasing such a vertex changed nothing at all, however
+long you scrubbed. Measured: a stroke that moved shared vertices by 0.1
+moved these by exactly 0. Those vertices now let their lone weight decay
+and drop the influence at the floor, leaving the vertex unweighted, which
+skinning already reads as "stay at rest". The partial values in between
+are invisible either way, because skinning renormalizes by whatever total
+it finds — verified directly, with the same vertex at weight 1.0 and at
+0.6 landing in **exactly** the same place, to a delta of 0.
+
+**Auto-weight Part** doubles as a reset: it throws away all hand-painted
 weights for that Part and recomputes the automatic defaults.
 
 ### Testing the deformation (temporary debug slider)
@@ -2545,6 +2571,104 @@ the bone and the original hierarchy.
 
 ---
 
+## Recording and GIF export
+
+**Stop opens a preview, not a filename box.** The frames captured during
+recording play back on a loop inside the export dialog, at whatever frame
+rate is currently selected — so the slider is not a number to guess at,
+it is a speed you watch change before committing to it. Save encodes and
+writes a real file; Discard throws the recording away.
+
+### What gets captured
+
+Frames come off the **scene bitmap**, not off the canvas the user is
+looking at. That buffer holds the character at its own resolution on
+transparency — no checkerboard, no grid, no bone handles, no selection
+outline — which is exactly what belongs in an exported animation and
+nothing that does not. Reading the display canvas instead would bake the
+whole editor into the file.
+
+Two limits keep a recording from eating the device, because a 512×512
+frame is a megabyte and an uncapped recording at display rate would be
+gigabytes within a minute: frames are sampled at **20 Hz** rather than
+once per redraw, and there is a hard ceiling of **240 frames** (12
+seconds). Hitting the ceiling is said out loud under the preview rather
+than silently truncating.
+
+The renderer only draws when something asks it to, so a recording also
+drives a frame request every tick. Without that, a still moment would
+capture nothing at all and the finished animation would skip over it — a
+pause has to record as a pause.
+
+### The encoder
+
+`www/js/gif.js` writes GIF89a directly: palette, LZW, and the block
+structure the spec lays out. There is no bundler here and no network at
+runtime — the app is plain ES modules served into a WebView — so an npm
+GIF library was never an option, and neither was a CDN.
+
+The format suits pixel art especially well. GIF caps at 256 colours,
+which is a real constraint for photographs and no constraint at all for
+this kind of artwork, so the common case is an **exact palette** with
+every colour landing in the file unchanged. Artwork that really does
+exceed 255 colours falls back to median cut. One palette slot is spent on
+transparency, and frames are written with disposal method 2 so
+transparent areas do not keep whatever the previous frame left behind.
+
+**The bug that cost the most to find.** GIF's LZW widens its codes as the
+dictionary fills, and the decoder learns each dictionary entry one code
+*later* than the encoder creates it — it cannot know an entry's last
+symbol until the following code arrives. The two are therefore
+permanently one entry out of step. Widening when the encoder's own next
+code *reaches* `1 << codeSize` is one code too early, and every code after
+that point is read at the wrong width. Chromium rejected the file outright
+with "unexpected end of image"; decoding the stream by hand recovered 22
+of 32 indices, with the first wrong one exactly where the width diverged.
+The encoder widens when its next code *exceeds* `1 << codeSize`, which is
+the moment the decoder's own next code reaches it.
+
+### Frame rate
+
+The slider runs 2–30 fps and defaults to 12. GIF measures frame delays in
+hundredths of a second, so not every rate is expressible exactly — 12 fps
+becomes an 8-centisecond delay, which really plays at 12.5. Where the
+requested rate has to be rounded, the line under the preview says what it
+will actually play at rather than quietly differing from the number on
+the slider.
+
+### Where the file goes
+
+`www/js/filesave.js` writes binary, trying **Downloads** first because
+that is where a person looks for something they just exported, then
+Documents, then the app's own storage — reporting which one it actually
+reached. In a browser (and in the test harness) an anchor download does
+the same job. It deliberately does not reach into `psaver.js`, which
+already knows how to do the text version of all this: sharing the code
+would mean editing a module whose export path is working and verified, to
+serve a feature with different needs. The duplicated part is the six lines
+that sniff the Capacitor bridge.
+
+### Verified
+
+Two suites, both ending in a real file rather than a passing UI flow:
+
+- **Encoder** (10 checks) — the bytes round-tripped through **Chromium's
+  own GIF decoder**, which is the only arbiter that matters since that is
+  the class of decoder the file will actually meet. Three frames decode,
+  the file is marked as looping forever, every frame carries the delay
+  asked for (12 fps → 80000 µs), and every pixel comes back **exactly** —
+  worst channel difference 0, zero alpha mismatches — so the palette is
+  exact rather than approximate.
+- **Export flow** (20 checks) — record a moving scene, confirm 19 frames
+  were captured at the scene's own resolution and that they are not all
+  the same picture; confirm the preview draws and advances on its own;
+  confirm the FPS readout follows the slider (`19 frames · 1.52s at 12
+  fps` versus `0.76s at 24 fps`); then Save and catch the actual download:
+  **`verify_walk.gif`, 3199 bytes on disk**, GIF89a signature, GIF
+  trailer, and decoding back to 19 frames at 64×64, looping forever, at
+  the delay 12 fps asks for. Saving also releases the captured frames
+  rather than holding a megabyte a frame indefinitely.
+
 ## Info buttons: explanations on demand
 
 A small pink **ⓘ** mark, drawn in `icons/icon-info.png` — the same
@@ -2582,9 +2706,12 @@ test viewport and swallowed everything below it, including the button that
 opened it. The capped version keeps every popover reachable and every
 trigger re-tappable, whatever the screen size.
 
-### Priority coverage: Pierce and Bind mode
+### Coverage
 
-Six controls, matching the ones actually confused in testing:
+Eight controls, matching the ones actually confused in testing. Six came
+from the priority pass over Pierce and Bind mode; the last two arrived
+with the Weight tool and GIF export work that followed, each added by the
+one-line route the component was built for.
 
 | Control | Where | Explains |
 | --- | --- | --- |
@@ -2594,6 +2721,8 @@ Six controls, matching the ones actually confused in testing:
 | **Paint target** | Pierce painter | All four masks on the pierced layer at once — Pierceable, Deformable, Barrier — plus Rest vs Entered, stating outright that an unpainted Entered shape leaves the region at Rest and does **not** activate morphing on its own. |
 | **Follows parent** | Rig mode's bone editor | Rigid / Physics / Pivot, side by side rather than one at a time. |
 | **Paint tool** | Px Pin's own window | What a pin does (held exactly at rest, immune to bone rotation and spring physics) and the difference between Pin and Eraser Pin. |
+| **Weight tool** | Bind panel | Paint vs Erase sharing one brush, that erasing hands the freed weight to the other bones influencing those vertices so the total stays at 1, and what erasing a vertex's last influence means. |
+| **Frame rate** | Export modal | Frames per second as the trade between smoothness and file size, that the preview plays at the chosen rate, and why GIF's hundredths-of-a-second delays mean some rates get rounded. |
 
 Two controls in this same area were deliberately left alone, because they
 are already covered by an existing, always-visible explanation and a
@@ -2604,19 +2733,18 @@ already narrates each step contextually — pick a layer, pick a bone,
 drag to paint). Both were re-checked rather than assumed still accurate.
 
 **What is not covered, and why:** a general sweep beyond Pierce and Bind
-was judged out of scope for one pass, per the brief's own priority order.
-Concretely — Home/Animate mode's controls (Import, Undo/Redo, Fit, Save as
-GIF/MP4) are self-explanatory from their labels, which is the stated bar
-for needing one of these at all; there is no user-facing grid-snap toggle
-anywhere in the app to attach one to (snapping is automatic, not a
+was judged out of scope for that first pass, per the brief's own priority
+order. Concretely — Home/Animate mode's controls (Import, Undo/Redo, Fit,
+Record, Save) are self-explanatory from their labels, which is the stated
+bar for needing one of these at all; there is no user-facing grid-snap
+toggle anywhere in the app to attach one to (snapping is automatic, not a
 setting); and the canvas-size and Physics param sliders (Stiffness,
 Damping, Gravity, Sway) are plausible candidates for a follow-up pass but
-were not covered here to keep this one focused on the two areas named as
-the priority.
+were not covered, to keep each pass focused.
 
 ### Verified
 
-One new suite (`test_info_buttons.mjs`) covers the mechanics and all six
+One suite (`test_info_buttons.mjs`) covers the mechanics and all six
 priority instances: opening, toggling closed by re-tapping the same
 button, dismissing by tapping outside, dismissing by Escape, switching
 cleanly between two different topics, every priority topic's text
@@ -2625,7 +2753,10 @@ naming Piercer/Pierced/Both by name; Paint target distinguishing
 Pierceable/Deformable/Barrier and stating that Entered "won't turn on by
 itself"; Px Pin naming Eraser Pin and "rest position"), and the popover
 staying on screen rather than clipping off any edge. Full regression
-otherwise unchanged.
+otherwise unchanged. The two later topics are exercised by the suites for
+the features they belong to (`test_weight_eraser.mjs` and
+`test_gif_export.mjs`), which drive those panels with the info buttons
+present.
 
 ---
 
@@ -2881,11 +3012,11 @@ through the same `applyProject()` code path.
 
 ## App states & how to navigate (manual test flow)
 
-Import and part assembly are real (see the section above). Everything
-below that relates to *animating* is still a placeholder that only logs to
-the console (visible via `adb logcat` or Android Studio's Logcat panel) or
-shows a modal — there's no bone/mesh/animation logic yet, so what you're
-testing here is the screen flow and button enabled/disabled behavior.
+Import and part assembly are real (see the section above), and so is
+recording and GIF export. What is still missing on this path is
+drag-driven *posing* — you can record whatever the scene does (physics
+settling, a pierce, the debug sliders), but not yet pose bones by dragging
+them on the canvas.
 
 There are five app states:
 
@@ -2914,11 +3045,12 @@ There are five app states:
      **Animating** state, and automatically opens the **Export modal**.
 
 **Export modal** (appears automatically after Stop, not its own button):
-a filename field (defaults to `animation_01` if left blank), **Save as
-GIF** / **Save as MP4** buttons (both just log a placeholder export
-message — no real encoding yet), and a red **Cancel** button that closes
-the modal without exporting. Closing the modal either way leaves you in
-the **Animating** state, ready to Start another recording.
+a **looping preview** of what was just recorded, a **frames per second**
+slider, a filename field (defaults to `animation_01` if left blank),
+**Save as GIF**, **Save as MP4**, and a red **Discard**. Save as GIF
+encodes and writes a real file; Save as MP4 is not built and says so
+rather than pretending. Closing the modal either way leaves you in the
+**Animating** state, ready to Start another recording.
 
 A quick end-to-end pass to try on your phone: **Home → Animate → Start →
 Stop → (export modal appears) → Save as GIF → back in Animate mode →
@@ -3139,10 +3271,11 @@ and surface colours, and the border shape, moved.
 
 ## What's next
 
-With artwork bound to a working skeleton, the next step is **live
-drag-driven animation**: dragging bones directly on the canvas to pose the
-character, recording those poses over time, and finally encoding real
-GIF/MP4 files instead of logging placeholders.
+With artwork bound to a working skeleton and GIF export producing real
+files, the next step is **live drag-driven animation**: dragging bones
+directly on the canvas to pose the character and recording those poses
+over time. MP4 export is the other gap — it needs a video encoder rather
+than the hand-written one GIF gets by.
 
 The code is arranged for that already:
 
