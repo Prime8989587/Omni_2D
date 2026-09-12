@@ -29,6 +29,7 @@ import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { pierceOverlayEnabled, setPierceOverlay, pierceMorphIssue } from './pierce.js';
 import * as psaver from './psaver.js';
+import { initInfoButtons } from './info.js';
 
 const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
@@ -2506,6 +2507,7 @@ export function initUI() {
   initPxPin();
   initPierceTool();
   initPierceDepthCanvas();
+  initInfoButtons();
   restorePierceOverlay();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   offerRecovery();

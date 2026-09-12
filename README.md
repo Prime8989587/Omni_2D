@@ -2545,6 +2545,90 @@ the bone and the original hierarchy.
 
 ---
 
+## Info buttons: explanations on demand
+
+A small pink **ⓘ** mark, drawn in `icons/icon-info.png` — the same
+white-ring-on-pink two-tone as the other custom pixel icons, so it reads as
+one more member of that set rather than a different visual language — sits
+beside any control whose purpose is not obvious from its label alone.
+Tapping it opens a short, plain-language explanation in a popover anchored
+near the button: an on-demand footnote, not a permanent fixture competing
+with the control for space, and never a full-screen interruption.
+
+**One component, everywhere.** `www/js/info.js` wires the whole feature
+once, centrally, with two listeners on `document` — the same pattern the
+app menu's own outside-tap-to-close already used. Any button anywhere in
+the app becomes an info button by wearing `class="info-btn"
+data-info="some-key"`; opening, closing, positioning and dismissing are
+identical for every instance, and adding coverage for a new control
+anywhere is a one-line HTML addition plus one entry in `info.js`'s lookup
+table. Nothing about a screen has to know the feature exists.
+
+**Dismissal, three ways.** Tapping the same icon again closes it, tapping
+its own **×** closes it, tapping anywhere else in the app closes it —
+including a real action button underneath, which still receives its own
+click normally; the popover never blocks or delays it, it only stops
+floating on top of it. Escape closes it too. A screen change (leaving a
+modal, changing mode) is not special-cased: it is simply one more "tap
+elsewhere," so a popover never survives past the screen that opened it.
+
+**Positioning is defensive, not just placed.** Anchored below the button
+by default, left-edge aligned to it, and clamped on every side so it never
+runs off a phone screen regardless of where the trigger sits; it flips
+above when there is no room below. The box's own height is capped at
+`min(60vh, 420px)` with internal scrolling past that point — added after a
+first draft of the longest topic measured **1000px tall** on an 844px-tall
+test viewport and swallowed everything below it, including the button that
+opened it. The capped version keeps every popover reachable and every
+trigger re-tappable, whatever the screen size.
+
+### Priority coverage: Pierce and Bind mode
+
+Six controls, matching the ones actually confused in testing:
+
+| Control | Where | Explains |
+| --- | --- | --- |
+| **Pierce role** | Pierce modal | Piercer vs Pierced, and that a layer is always exactly one, the other, or neither. |
+| **Physics direction** | Pierce modal (piercer only) | Piercer / Pierced / Both, as *whose movement* deepens contact — not who is "allowed" to move, since both sides always can. |
+| **Depths** | Pierce modal (piercer only) | Enter vs End, adapted from the Enter & End Points dialog's own wording so the two never drift apart. |
+| **Paint target** | Pierce painter | All four masks on the pierced layer at once — Pierceable, Deformable, Barrier — plus Rest vs Entered, stating outright that an unpainted Entered shape leaves the region at Rest and does **not** activate morphing on its own. |
+| **Follows parent** | Rig mode's bone editor | Rigid / Physics / Pivot, side by side rather than one at a time. |
+| **Paint tool** | Px Pin's own window | What a pin does (held exactly at rest, immune to bone rotation and spring physics) and the difference between Pin and Eraser Pin. |
+
+Two controls in this same area were deliberately left alone, because they
+are already covered by an existing, always-visible explanation and a
+second one next to it would be redundant rather than additive: the region
+overlay toggle in the Pierce modal (a paragraph directly beneath it already
+names every colour), and Bind mode's own weight-painting drag (`bindHint`
+already narrates each step contextually — pick a layer, pick a bone,
+drag to paint). Both were re-checked rather than assumed still accurate.
+
+**What is not covered, and why:** a general sweep beyond Pierce and Bind
+was judged out of scope for one pass, per the brief's own priority order.
+Concretely — Home/Animate mode's controls (Import, Undo/Redo, Fit, Save as
+GIF/MP4) are self-explanatory from their labels, which is the stated bar
+for needing one of these at all; there is no user-facing grid-snap toggle
+anywhere in the app to attach one to (snapping is automatic, not a
+setting); and the canvas-size and Physics param sliders (Stiffness,
+Damping, Gravity, Sway) are plausible candidates for a follow-up pass but
+were not covered here to keep this one focused on the two areas named as
+the priority.
+
+### Verified
+
+One new suite (`test_info_buttons.mjs`) covers the mechanics and all six
+priority instances: opening, toggling closed by re-tapping the same
+button, dismissing by tapping outside, dismissing by Escape, switching
+cleanly between two different topics, every priority topic's text
+containing the specific facts it is meant to teach (Physics Direction
+naming Piercer/Pierced/Both by name; Paint target distinguishing
+Pierceable/Deformable/Barrier and stating that Entered "won't turn on by
+itself"; Px Pin naming Eraser Pin and "rest position"), and the popover
+staying on screen rather than clipping off any edge. Full regression
+otherwise unchanged.
+
+---
+
 ## Undo and redo
 
 The **↶** and **↷** buttons in the top bar undo and redo. They are greyed

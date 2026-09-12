@@ -1393,3 +1393,138 @@ button, input, select {
 .app-menu__item--danger {
   color: var(--color-danger);
 }
+
+/* ---------- Info buttons & popovers ----------
+   A small (i) mark beside a control whose purpose is not obvious from its
+   label alone. It sits in a row alongside the field's own label rather
+   than the control itself, so it never steals space from a segmented
+   group of buttons that is already tight on a phone width. */
+
+.field-label-row,
+.px-pin__row-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* The field-label keeps its own look; only its spacing moves to the row
+   that now wraps it, so this never has to duplicate .field-label's
+   colour/size/tracking rules. */
+.field-label-row .field-label {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.px-pin__row-label {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--text-label);
+}
+
+.px-pin__row-label > span {
+  flex: 1;
+}
+
+.info-btn {
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The visible glyph is a 16px pixel-art icon -- see icon-info.png, drawn
+   in the same two-tone (white ring, pink fill) style as the layer-row
+   icons -- but the actual touch target reaches well past it. A phone
+   finger is bigger than a hint mark, and this is the same trick
+   .btn--nudge and the row kebabs use: grow the invisible hit area, not
+   the visible glyph. */
+.info-btn::after {
+  content: '';
+  position: absolute;
+  inset: -13px;
+}
+
+.info-btn img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* A faint ring while its popover is open, so the button that opened it
+   stays identifiable even after a finger has moved off it to read the
+   text -- the same "which one is active" question .segmented__btn's
+   is-active state answers elsewhere. */
+.info-btn[aria-expanded="true"] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+.info-popover {
+  position: fixed;
+  z-index: 58; /* over modals and the pxpin/pierce windows, under toasts */
+  max-width: 280px;
+  /* However long a topic's text runs, the box itself never exceeds the
+     screen -- it scrolls internally past this instead of growing tall
+     enough to bury the button that opened it, which is what happened
+     before this existed: a long explanation measured 1000px tall on an
+     844px-tall phone viewport and swallowed everything below it. */
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px;
+  border: 2px solid var(--color-accent);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+  color: var(--color-text);
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.5));
+}
+
+.info-popover__title {
+  display: block;
+  margin: 0 28px 8px 0; /* clears the close button, which sits over this corner */
+  color: var(--color-accent);
+  font-size: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.info-popover__body {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--text-label);
+  line-height: 1.5;
+  /* The text below is authored with \n for line breaks and \n\n for a
+     paragraph gap -- pre-line honours both without any HTML markup, so
+     the copy in info.js can stay ordinary multi-line strings. */
+  white-space: pre-line;
+}
+
+.info-popover__close {
+  -webkit-tap-highlight-color: transparent;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 46, 147, 0.5);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-accent);
+  font-family: var(--font-fallback);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}

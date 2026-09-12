@@ -101,7 +101,10 @@
             <input id="rigDebugSlider" class="slider" type="range" min="-180" max="180" step="1" />
           </label>
 
-          <div class="field-label joint-label">Follows parent</div>
+          <div class="field-label-row">
+            <div class="field-label joint-label">Follows parent</div>
+            <button class="info-btn" type="button" data-info="joint-type" aria-haspopup="true" aria-expanded="false" aria-label="What do Rigid, Physics and Pivot mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          </div>
           <div class="segmented joint-picker" role="group" aria-label="How this bone follows its parent">
             <button id="jointRigidBtn" class="segmented__btn" type="button" aria-pressed="true">Rigid</button>
             <button id="jointPhysicsBtn" class="segmented__btn" type="button" aria-pressed="false">Physics</button>
@@ -264,7 +267,10 @@
         <h2 id="pierceTitle" class="modal__title">Pierce</h2>
         <p id="pierceLayerName" class="modal__text modal__text--mono"></p>
 
-        <div class="field-label">Pierce role</div>
+        <div class="field-label-row">
+          <div class="field-label">Pierce role</div>
+          <button class="info-btn" type="button" data-info="pierce-role" aria-haspopup="true" aria-expanded="false" aria-label="What do Piercer and Pierced mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
         <div class="segmented" role="group" aria-label="Pierce role">
           <button id="pierceRoleNoneBtn" class="segmented__btn" type="button" aria-pressed="true">None</button>
           <button id="pierceRolePiercerBtn" class="segmented__btn" type="button" aria-pressed="false">Piercer</button>
@@ -273,7 +279,10 @@
         <p id="pierceRoleHint" class="joint-hint"></p>
 
         <div id="piercePhysicsRow" hidden>
-          <div class="field-label">Physics direction</div>
+          <div class="field-label-row">
+            <div class="field-label">Physics direction</div>
+            <button class="info-btn" type="button" data-info="pierce-physics" aria-haspopup="true" aria-expanded="false" aria-label="What does each physics direction mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          </div>
           <div class="segmented" role="group" aria-label="Which side's movement drives the contact">
             <button id="piercePhysicsPiercerBtn" class="segmented__btn" type="button" aria-pressed="true">Piercer</button>
             <button id="piercePhysicsPiercedBtn" class="segmented__btn" type="button" aria-pressed="false">Pierced</button>
@@ -283,7 +292,10 @@
         </div>
 
         <div id="pierceDepthSummary" hidden>
-          <div class="field-label">Depths</div>
+          <div class="field-label-row">
+            <div class="field-label">Depths</div>
+            <button class="info-btn" type="button" data-info="pierce-depths" aria-haspopup="true" aria-expanded="false" aria-label="What do Enter and End points mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          </div>
           <p id="pierceDepthReadout" class="modal__text"></p>
           <button id="pierceEditDepthsBtn" class="toggle-chip toggle-chip--wide" type="button">Edit Enter / End Points…</button>
         </div>
@@ -491,6 +503,10 @@
       </header>
       <canvas id="pxpinCanvas" class="px-pin__canvas"></canvas>
       <footer class="px-pin__controls">
+        <div class="px-pin__row-label">
+          <span>Paint tool</span>
+          <button class="info-btn" type="button" data-info="pxpin-tool" aria-haspopup="true" aria-expanded="false" aria-label="What does pinning a pixel do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
         <div class="segmented">
           <button id="pxpinToolPinBtn" class="segmented__btn" type="button" aria-pressed="true"><img class="pixel-icon" src="icons/icon-pin.png" alt="📌" aria-hidden="true"> Pin</button>
           <button id="pxpinToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">⌫ Eraser Pin</button>
@@ -517,6 +533,10 @@
       </header>
       <canvas id="pierceCanvas" class="px-pin__canvas"></canvas>
       <footer class="px-pin__controls">
+        <div class="px-pin__row-label">
+          <span>Paint target</span>
+          <button class="info-btn" type="button" data-info="pierce-targets" aria-haspopup="true" aria-expanded="false" aria-label="What does each paint target do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
         <div class="segmented" role="group" aria-label="Which region to paint">
           <button id="pierceTargetTipBtn" class="segmented__btn" type="button" aria-pressed="true">Tip</button>
           <button id="pierceTargetAreaBtn" class="segmented__btn" type="button" aria-pressed="false">Pierceable</button>
