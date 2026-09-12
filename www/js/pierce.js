@@ -657,6 +657,123 @@ let hold = new Map();      // piercer id -> how far to hold its artwork back
 let occlusionStale = true;
 let readout = [];
 
+// ---------------------------------------------------------------------------
+// Force transfer: the press the pierced layer feels back
+
+// How hard a piercer at full depth presses, as an angular acceleration
+// about the bone it is pressing on. Against the default stiffness of 180
+// that is a steady deflection of about a seventh of a radian at the End
+// Point with a full lever -- a lean you can see, well short of a flail.
+const PIERCE_PUSH = 45;
+
+// Past the End Point the tip stops advancing, but the DRAG does not, and
+// that leftover travel is the only thing on screen still saying "harder".
+// So it goes on counting toward the press after the depth has stopped
+// counting -- which is what makes leaning on something feel different from
+// resting against it -- up to one more End Point's worth, and no further.
+const MAX_PRESS = 2;
+
+// The moment arm, in units of the bone's own length, clamped so a contact
+// far off to one side cannot manufacture an enormous torque out of a
+// small force. Beyond the bone's own reach the lever stops growing.
+const MAX_LEVER = 1;
+
+let torqueChanged = false;
+const torques = new Map();
+
+// A PIERCE IS A FORCE, AND A FORCE HAS SOMEWHERE TO GO
+//
+// The contact already knows everything a torque needs: where the tip is,
+// which way it is pushing, and how hard. What was missing was the other
+// half of Newton's third law -- the pierced layer took the shape change
+// and gave nothing back, so a piercer driven into a character stopped dead
+// at the End Point against something that never reacted. Read as a
+// picture, that is a needle hitting a wall, not entering flesh.
+//
+// So each engaged contact is turned into a torque about the head of every
+// physics bone the pierced layer is ATTACHED to -- the user's own stated
+// relationship, never guessed from proximity -- and handed to the bone
+// integrator, where it sits in the same sum as gravity and the carry
+// torque. The bone's own spring does the rest: it leans away under the
+// press, settles there while the press holds, and springs back when the
+// piercer withdraws and the torque goes to zero.
+//
+// This is a genuine feedback loop and is meant to be: the flesh leaning
+// away opens the gap, which lowers the depth, which lowers the press. It
+// converges rather than oscillating because the loop gain is well under
+// one -- the contact point moves a fraction of the End Point's distance
+// for a full deflection -- and the spring's damping absorbs what is left.
+// That settling IS the soft-contact behaviour; nothing models it
+// separately.
+// How hard this contact is pressing, 0 at first touch and 1 at the End
+// Point. t is the part of it the depth accounts for; the overshoot carries
+// it on past, because past End the tip has stopped advancing and the
+// leftover travel is the only thing still saying "harder".
+function pressOf(contact) {
+  if (!contact || !contact.engaged) return 0;
+  const beyond = contact.end > 0 ? Math.min(1, contact.overshoot / contact.end) : 0;
+  return Math.min(MAX_PRESS, contact.t + beyond);
+}
+
+function chainFrom(attached) {
+  const seen = new Set();
+  const chain = [];
+  for (const start of attached) {
+    let bone = start;
+    // A cycle is not constructible through the UI, but the walk is
+    // bounded by the visited set either way rather than by trust.
+    while (bone && !seen.has(bone.id)) {
+      seen.add(bone.id);
+      chain.push(bone);
+      bone = bonesStore.parentOf(bone);
+    }
+  }
+  return chain;
+}
+
+function publishForce(contacts) {
+  torques.clear();
+  if (!bonesStore.hasPhysicsBones) return bonesStore.setPierceTorques(torques);
+
+  for (const { pierced, contact } of contacts) {
+    if (!contact || !contact.engaged || !contact.axis) continue;
+    // The bones the layer is attached to, AND every bone above them. A
+    // force on a link is felt at every joint it hangs from -- poke a
+    // finger hard enough and the arm moves -- and each joint feels it
+    // about its own head, with its own lever. Collected as a set so a
+    // chain whose child and parent are both attached to the layer is
+    // still pressed once.
+    const bones = chainFrom(bonesStore.bonesAttachedTo(pierced.id));
+    if (bones.length === 0) continue;
+
+    // t is the press up to the End Point; the overshoot carries it on
+    // past. Both are already clamped by the contact, so this is bounded
+    // whatever the drag does.
+    const press = pressOf(contact);
+    if (press <= 0) continue;
+
+    // The tip as it is ALLOWED to be, not as the drag asked -- the press
+    // acts where the piercer actually is on screen.
+    const at = contact.tip;
+    for (const bone of bones) {
+      if (!bone.physicsEnabled) continue;
+      const head = bonesStore.worldHead(bone);
+      const rx = at.x - head.x;
+      const ry = at.y - head.y;
+      // The 2D cross product of the arm with the push direction: the
+      // signed moment, positive one way round the pivot and negative the
+      // other, so a tip on the left of a bone turns it the other way from
+      // one on the right without any special casing.
+      const moment = (rx * contact.axis.y - ry * contact.axis.x) /
+        Math.max(bone.length, 1);
+      const lever = Math.max(-MAX_LEVER, Math.min(MAX_LEVER, moment));
+      const add = PIERCE_PUSH * press * lever;
+      torques.set(bone.id, (torques.get(bone.id) || 0) + add);
+    }
+  }
+  return bonesStore.setPierceTorques(torques);
+}
+
 function publishOcclusion(contacts) {
   const next = new Map();
   const held = new Map();
@@ -699,6 +816,7 @@ function publishOcclusion(contacts) {
   }
   occlusion = next;
   hold = held;
+  torqueChanged = publishForce(contacts);
 
   // The shape at this depth, written here rather than in the frame loop so
   // that the renderer's own re-measure keeps it current: a frame that
@@ -730,6 +848,11 @@ function publishOcclusion(contacts) {
     // How far the artwork is being held back in total -- the depth cap and
     // the walls together, since both land in the same difference.
     held: contact ? Math.hypot(contact.rawTip.x - contact.tip.x, contact.rawTip.y - contact.tip.y) : 0,
+    // How hard the contact is pressing back on the pierced layer's bones,
+    // 0 to 2. Reported because a press that produces no visible reaction
+    // is otherwise indistinguishable from no press at all -- and the
+    // usual reason for that is the lever, not the force.
+    press: pressOf(contact),
     // Purely lateral: what the walls alone are doing, so a sideways
     // containment can be told apart from a depth cap on screen.
     walled: contact && contact.axis
@@ -1088,12 +1211,17 @@ export function stepPierce() {
   // a tip sunk under flesh it is no longer touching.
   publishOcclusion(activeContacts(transforms));
 
-  // Nothing here settles. The outline IS the depth, so a given depth
+  // The SHAPE settles nothing: the outline IS the depth, so a given depth
   // always looks the same and there is no motion left over once the
   // piercer stops -- which is exactly the property the springs did not
-  // have, and the reason they needed the loop kept awake. The bones' own
-  // springs still drive it; they are untouched and report for themselves.
-  return false;
+  // have, and the reason they needed the loop kept awake.
+  //
+  // The PRESS does need one more step, though, and only when it changed.
+  // The bones integrate before this runs, so a press first written after
+  // their step would otherwise be sitting on a sleeping loop, unfelt. One
+  // more frame hands it to them; from there their own settle test has it,
+  // because an unbalanced press is an unbalanced spring.
+  return torqueChanged;
 }
 
 // Test/debug window into the solver: what the contact currently reads and

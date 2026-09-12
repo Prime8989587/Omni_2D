@@ -150,6 +150,15 @@ export class Bone {
     this.pivotVelocity = null;
     this.pivotAcceleration = { x: 0, y: 0 };
 
+    // An external angular acceleration written by the pierce solver while
+    // something is pressing into the layer this bone drives. Transient in
+    // exactly the way pivotAcceleration is: never serialized, recomputed
+    // from the live contact every frame, and zero whenever nothing is
+    // pressing. It is a STATE, not an accumulated impulse, so writing it
+    // twice in one frame -- which the renderer's own re-measure can do --
+    // says the same thing as writing it once.
+    this.pierceTorque = 0;
+
     // Which layer this bone is primarily associated with, chosen by the
     // user rather than inferred. null means "not assigned yet". Nothing
     // is guessed from proximity: a bone over a torso may well be meant to
@@ -591,6 +600,24 @@ class BonesStore {
     }
   }
 
+  // The pierce solver's answer for this frame: bone id -> angular
+  // acceleration, with every bone not in the map pressed by nothing.
+  //
+  // Returns whether any bone's press actually CHANGED, which is what lets
+  // the frame loop know it has one more step to take. The bones' own
+  // settle test covers everything after that: a press that is holding
+  // steady is balanced by the spring, and a balanced spring is allowed to
+  // sleep even though it is sitting somewhere it would not sit unpressed.
+  setPierceTorques(byBoneId) {
+    let changed = false;
+    for (const bone of this._bones) {
+      const next = byBoneId.get(bone.id) || 0;
+      if (Math.abs(next - bone.pierceTorque) > 1e-6) changed = true;
+      bone.pierceTorque = next;
+    }
+    return changed;
+  }
+
   // How fast each physics bone's pivot is accelerating, measured once per
   // frame (not per substep: the pivot only moves when the rig changes, so
   // differentiating inside the frame would turn one move into a spike).
@@ -709,7 +736,14 @@ class BonesStore {
         bone.stiffness * error -
         bone.damping * bone.angularVelocity +
         bone.gravityInfluence * cos +
-        pivotTorque;
+        pivotTorque +
+        // Something pressing into this bone's layer. It sits in the sum
+        // rather than anywhere special because that is what it is -- one
+        // more torque about the same pivot -- and because being in the
+        // sum puts it into the settle test below for free: a press that
+        // changes leaves the spring out of balance, which is exactly the
+        // condition for "still moving".
+        bone.pierceTorque;
 
       bone.angularVelocity += acceleration * h;
       bone.simWorldRotation += bone.angularVelocity * h;

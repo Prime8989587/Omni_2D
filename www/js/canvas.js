@@ -521,9 +521,13 @@ function drawPierceProbe() {
     const held = r.held > 0.05
       ? `  held ${r.held.toFixed(1)}px${r.walled > 0.05 ? ` (wall ${r.walled.toFixed(1)}px)` : ''}`
       : '';
+    // The press is only worth a line when there is one, and it is worth a
+    // line then because a press with nothing visibly reacting is a lever
+    // problem rather than a missing force, and this is what says so.
+    const press = r.press > 0.005 ? `  press ${(r.press * 100).toFixed(0)}%` : '';
     return `${r.piercer} -> ${r.pierced}\n` +
       `  gap ${gap}  enter ${r.enter}  end ${r.end}\n` +
-      `  depth ${r.depth.toFixed(1)}  blend ${(r.t * 100).toFixed(0)}%  ` +
+      `  depth ${r.depth.toFixed(1)}  blend ${(r.t * 100).toFixed(0)}%${press}  ` +
       `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';

@@ -2074,48 +2074,147 @@ follows every deformation exactly, and a sunk tip's tint is occluded
 exactly as the tip is. It is off by default, remembered across a reload,
 and switching it off restores the artwork to an identical pixel count.
 
-### What a pierce does NOT do: push the bone
+### Force transfer: what a pierce gives back
 
-A pierce moves **mesh vertices only**. It does not apply any force to the
-skeleton, so piercing a layer whose bone has physics switched on does not
-make that bone swing, recoil, or react as a whole. This has never been
-built — it is not a regression, and none of the fixes above changed it.
+A pierce used to be entirely one-way. The pierced layer took the shape
+change and gave nothing back, so a piercer driven into a character stopped
+dead at the End Point against something that never reacted — read as a
+picture, a needle hitting a wall rather than entering flesh. This is the
+other half of it.
 
-Worth stating plainly because one existing check reads as though it covers
-this and does not: *"the flesh layer's own spring bone still swings while
-pierced"* shoves the character sideways with `translateRoots` and confirms
-the bone still responds. That demonstrates the two simulations stay
-**independent** — a pierce does not freeze the skeleton — not that a pierce
-drives it.
-
-Measured directly, with a physics bone on the pierced layer and a
-needle driven 60 px in as the only moving thing in the scene:
+Every engaged contact becomes a **torque** on the bones that drive the
+layer being pierced. The contact already knows all three things a torque
+needs: where the tip is, which way it is pushing, and how hard. The bone
+integrator takes it in the same sum as gravity and the carry torque:
 
 ```
-contact reached depth 16, engaged true
-peak bone rotation change : 0.000e+0 rad
-peak bone angular velocity: 0.000e+0 rad/s
-control -- shoving the character instead: peak 1.777e-1 rad
+press  = t + min(1, overshoot / End)          0 at first touch, capped at 2
+moment = (tip - boneHead) x axis  /  boneLength      clamped to ±1
+angular acceleration = 45 * press * moment
 ```
 
-Exactly zero, not merely small, because nothing in `pierce.js` ever writes
-bone state — it only ever reads `snapshotTransforms()`. The control line is
-the same bone in the same scene responding normally to an actual shove, so
-the bone is live and the measurement is not a dead rig.
+Two things about that are worth stating.
 
-**Re-measured after the spring was replaced with blend-shape morphing**, on
-the same scene and the same rig: `0.000e+0 rad`, `0.000e+0 rad/s`, control
-`1.775e-1 rad`. Unchanged, which is the point — the replacement touched
-only the local shape at the contact, and this system was not disturbed by
-it. It was also not brought into existence by it: this remains a feature
-that has never been built, and the "whole-object jiggle reaction" a pierced
-layer does show is its own spring bones responding to being dragged, not to
-being pierced.
+**Past the End Point, the press keeps building.** The tip stops advancing
+there — that is what End means, and it is deliberate — but the *drag* does
+not, and that leftover travel is the only thing on screen still saying
+"harder". So it goes on counting after the depth has stopped counting, up
+to one more End Point's worth and no further. Leaning on something is not
+the same as resting against it, and this is what makes the difference
+visible now that the tip itself cannot move.
 
-Building it would mean coupling the solver into the bone integrator:
-turning the contact's depth and axis into a torque about the bone's head,
-fed in where `bones.js` accumulates acceleration. That is a real feature,
-not a fix, and it is not implemented.
+**The press is felt up the chain.** It is applied about the head of every
+physics bone the layer is attached to *and every bone above them* — a force
+on a link is felt at every joint it hangs from. The moment arm is clamped
+to one bone length so a contact far off to one side cannot manufacture an
+enormous torque out of a modest force.
+
+Nothing models the settling separately, because the spring already is the
+settling. The bone leans away under the press, overshoots, comes back, and
+holds its pushed position while the press holds; when the piercer withdraws
+the torque goes to zero and it springs back to rest. It is a genuine
+feedback loop and meant to be — the flesh leaning away opens the gap, which
+lowers the depth, which lowers the press — and it converges rather than
+oscillating because the loop gain is well under one and the damping absorbs
+what is left.
+
+Measured, with a physics bone running across the needle's path:
+
+```
+  gap   depth  overshoot  press   bone leans
+   20      0        0      0.00     0.00 deg
+   11      1        0      0.06     0.46 deg
+    4      8        0      0.50     3.51 deg
+   -4     16        0      1.00     7.01 deg      <- the End Point
+  -12     16        8      1.50    10.50 deg
+  -20     16       16      2.00    13.99 deg
+  -40     16       36      2.00    13.99 deg      <- capped
+```
+
+and the jiggle itself: a peak of 0.1472 rad, settling to 0.1225 rad after
+four direction changes, then holding to within 0.000 rad over twenty
+frames. Withdrawing releases the press entirely and the bone returns to
+**3.0e-4 rad** of where it started.
+
+A steady press does not keep a phone redrawing, which it easily could have:
+the frame loop sleeps whenever the spring balances the press, and a press
+that CHANGES is what wakes it. Counted: 0 physics steps in 1.2 s out of
+contact, 30 in the half second the press lands, then **0 in 1.5 s while the
+press is held** — asleep under load, still leaning 0.1216 rad against a
+live 21.94 rad/s² — and awake again the moment the piercer withdraws.
+
+**The one case that does nothing, and why.** A bone can only rotate, so a
+press exactly along a bone's own axis produces no torque — which is correct
+(a rod pushed straight down its length does not turn) but surprising if you
+meet it without warning. A needle driven straight down into a bone pointing
+straight back up at it leans that bone by 0.01 rad and no more. The remedy
+is geometric, not a setting: the reaction comes from the component of the
+press *across* the bone, so a bone that runs across the piercer's path — a
+torso bone and a needle from the side, which is the ordinary way round —
+gets the full effect. The contact readout prints `press NN%` whenever
+something is pressing, precisely so that "pressing hard, nothing moving"
+can be told apart from "not pressing", since the usual cause is the lever
+rather than a missing force.
+
+### Two reported regressions, and what the measurements said
+
+Both were investigated before anything was changed, and the fix in each
+case was not the one the symptom suggested.
+
+**"The jagged, torn distortion is back, but only when the body is
+dragged."** The proposed cause was that the Physics Direction feature had
+been built on the old spring-target displacement and never moved over to
+blend-shape morphing, leaving two deformation techniques in two
+contact-direction paths. That is not what is there. There is exactly one
+deformation path: `publishOcclusion` writes the blended shape for every
+pierced layer in the scene, from one contact test that has no opinion about
+which side moved. Physics Direction touches only the *gap*, which is a
+number, not a technique. No spring-target displacement survives anywhere —
+`writeTargets`, the settle thresholds, the velocity arrays and the
+stiffness/damping import all went with it.
+
+Measured rather than argued. The body driven onto a parked needle, in
+`pierced` and in `both`, against the piercer driven into parked flesh, at
+the same three depths:
+
+```
+                    gap 11         gap 4          gap -4
+  piercer-driven    0.19 px        1.50 px        2.99 px      0 folds
+  body-driven       0.19 px        1.50 px        2.99 px      0 folds
+```
+
+Identical, to the last measured digit, with the same worst-neighbour gaps
+(5.38 / 5.70 / 6.07 px) and no fold at any depth in either. Driven further,
+with the character's own spring bone swung 0.11 rad mid-contact so the mesh
+is being skinned by a *rotating* bone while the shape is written on top of
+it, the silhouette still holds **0 enclosed hole pixels** on screen.
+
+**"The piercer is blocked by the pierced object instead of pushing it."**
+The proposed cause was Barrier clamping too broadly and stopping the
+piercer's depth advancement. It is not Barrier. The hold on a piercer is
+one number — where the drag put the tip against where it is allowed to be —
+fed by two separate constraints, so it was split into its along-axis and
+across-axis parts and measured with walls painted and with none at all:
+
+```
+  gap      no walls             walls down both sides
+   11    axial 0  lateral 0     axial 0  lateral 0
+    4    axial 0  lateral 0     axial 0  lateral 0
+   -4    axial 0  lateral 0     axial 0  lateral 0
+  -14    axial 10 lateral 0     axial 10 lateral 0
+  -44    axial 40 lateral 0     axial 40 lateral 0
+```
+
+Painting walls changes the depth at no point and adds **exactly zero** to
+the along-axis hold at every depth. Dragged sideways at full depth they
+hold 8 px, then 18 px, without ever touching the depth — which is their
+whole job, and all of it.
+
+What halts the piercer is the End Point depth cap, on its own: zero hold
+until End, then exactly the overshoot, one pixel per pixel. That is the
+behaviour the cap was built to have. What made it *read* as hitting a wall
+was that nothing happened on the other side — which is the force transfer
+above, and was genuinely missing.
 
 ### A one-time tip
 
@@ -2125,7 +2224,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Ten browser suites and one pure-maths suite cover this, all passing:
+Eleven browser suites and one pure-maths suite cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -2237,6 +2336,24 @@ Ten browser suites and one pure-maths suite cover this, all passing:
   **3e-14**; the halfway blend being the exact midpoint of every
   corresponding pair; and across a full sweep, **0 folds**, no pair
   stretched apart, and a biggest step of 0.151 px.
+- **Force transfer and the two reported regressions** (32 checks) — the
+  along-axis hold measured with walls painted and with none, identical at
+  every depth (`0/0/0/0/0/10/40`) so Barrier adds exactly zero to
+  advancement, while still holding 8 px then 18 px sideways without
+  touching the depth; a rigged, bound, physics-driven pierced layer leaning
+  `0.46 → 3.51 → 7.01 → 10.50 → 13.99 → 13.99` degrees as the press builds
+  and then caps; the press reaching a bone the layer is not attached to,
+  up the chain, and turning it 0.25 rad; a peak of 0.1472 rad settling to
+  0.1225 over four direction changes and then holding to 0.000 rad;
+  withdrawal releasing the press to exactly 0 and the bone returning to
+  3.0e-4 rad of rest; the body driven onto a parked needle in `pierced`
+  and in `both` producing the same shape the piercer produced at the same
+  depth, to the last digit, with 0 folds; and the silhouette holding
+  **0 enclosed hole pixels** with the spring bone swung 0.11 rad
+  mid-contact; and the frame loop counted asleep out of contact (0 steps in
+  1.2 s), woken by the press landing (30 steps in 0.5 s), asleep again
+  once the press is steady (0 steps in 1.5 s) while still holding 0.1216 rad
+  under a live 21.94 rad/s², and woken again by the withdrawal.
 
 ---
 
