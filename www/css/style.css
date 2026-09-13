@@ -949,6 +949,18 @@ button, input, select {
   right: 16px;
   top: calc(76px + env(safe-area-inset-top));
   z-index: 60;
+  /* A toast has no click handler anywhere in the app -- it is purely
+     informational, on screen for 4 full seconds. Without this, that is 4
+     seconds during which a full-width banner near the top of the screen
+     silently swallows any tap that lands on it, including a paint stroke
+     on the Pierce painter's canvas right underneath: found by accident
+     while reproducing a "painting does nothing" report, where turning the
+     debug overlay on (which shows a toast) immediately before painting
+     left a stroke landing on the toast instead of the canvas -- zero
+     texels painted, no error, nothing to see wrong in the data at all.
+     A toast should never be able to eat an input meant for what is under
+     it. */
+  pointer-events: none;
   padding: 12px 16px;
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip);

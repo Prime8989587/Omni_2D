@@ -3652,6 +3652,49 @@ and surface colours, and the border shape, moved.
 
 ---
 
+## A toast can silently eat a tap
+
+Found by accident, while re-walking a "painting does nothing" report step
+by step to send back real screenshots: a stroke that should have painted
+528 texels painted zero, with no error and a perfectly normal-looking
+contact readout afterward. The paint call was never happening at all.
+
+**The cause had nothing to do with Pierce.** A toast — the little
+confirmation banner ("Region tinting is on," "Undo Delete layer," any of
+them) — is `position: fixed`, spans nearly the full screen width, sits near
+the top, and stays up for **four full seconds**. It never had a click
+handler anywhere in the app; it is purely informational. But nothing told
+the browser that, so for those four seconds it was also the **topmost
+element** over anything underneath it — including the Pierce painter's
+canvas. A stroke that starts inside a toast's rectangle never reaches the
+canvas at all: `document.elementFromPoint` at that spot resolved to the
+toast, not the canvas.
+
+Walked back to a real sequence: turning on **"Show painted regions on the
+canvas"** (a completely reasonable, recommended step for exactly this kind
+of debugging) fires a toast that says as much, and if the very next stroke
+starts anywhere in the top third of the screen — which is often exactly
+where a shape's most interesting detail sits — that stroke is silently
+absorbed. No error. No warning. The contact readout still looks
+correct, because contact has nothing to do with painting. It looks, from
+the outside, exactly like "I did everything you said and it still doesn't
+work."
+
+**Fix:** `pointer-events: none` on `.toast`. A banner that only ever
+displays text should never be able to steal an input meant for whatever is
+under it — nothing in the app has ever needed it to be tappable, and now
+nothing can accidentally depend on it not being. Verified with
+`test_toast_no_block.mjs`: a toast shown at full size, near the top,
+spanning the width — and a tap in its exact centre now lands on the canvas
+underneath it, not the toast.
+
+**Also verified end to end, screenshot by screenshot**, in
+`walkthrough.mjs`: a fresh Piercer + Pierced pair, tip painted, pierceable
+area painted, Deformable left blank on purpose, Entered opened as a seeded
+copy and edited down to a notch — and dragging the piercer in reaches
+**blend 100%**, with the pierceable region's own outline visibly pulling in
+around the tip exactly where the notch was cut, and nowhere else.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real
