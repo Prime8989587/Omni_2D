@@ -2034,18 +2034,32 @@ measuring rather than by reasoning:**
   silhouette, in artwork meant to be pixel-exact. A fourfold split moves
   none. The check is now in the suite: flat and unbound, and posed and
   bound, both render with **0 channel differences** through the subdivision.
-- **The softening distance is a property of the artwork, not of the mesh.**
-  The edge of the deformable area eases to zero over "about a cell", which
-  was one cell of the layer's mesh — and a subdivision quietly shrank that
-  by the subdivision factor. It did precisely what the code comment warns
-  of: the gradient went four times sharper, the artwork just outside the
-  painted area was stretched, and the silhouette showed a **one-pixel notch**
-  where the stretch reached past the edge of anything drawn. Measuring the
-  covering triangle proved it was neither a fold nor a tear — zero folded
-  triangles out of 1,152, the pixel covered by exactly one triangle, which
-  sampled source texel (36, 12) whose alpha is zero, one texel past the
-  artwork's own edge. Multiplying the subdivision factor back in restores
-  the original distance and the notch is gone at **every depth**.
+- **Every softening distance is a property of the artwork, not of the mesh.**
+  Two of them ease to zero over "about a cell", and both meant one cell of
+  the layer's mesh — so a subdivision quietly shrank both by the
+  subdivision factor.
+
+  The first is the edge of the **deformable area**, and it did precisely
+  what its own code comment warns of: the gradient went four times sharper,
+  the artwork just outside the painted area was stretched, and the
+  silhouette showed a **one-pixel notch** where the stretch reached past the
+  edge of anything drawn. Measuring the covering triangle proved it was
+  neither a fold nor a tear — zero folded triangles out of 1,152, the pixel
+  covered by exactly one triangle, which sampled source texel (36, 12) whose
+  alpha is zero, one texel past the artwork's own edge.
+
+  The second is **Px Pin**, found only because the full regression caught
+  it: the band over which a pin holds its neighbours had shrunk the same
+  way, so artwork a pin used to hold was free to take the shape change —
+  1.76 px where it should have been still. The pinned texels themselves were
+  never at risk (a finer grid holds those *more* tightly, not less); it was
+  the neighbourhood around them that had quietly narrowed.
+
+  Multiplying the subdivision factor back into both restores the original
+  distances. The notch is gone at **every depth**, and a vertex sitting on
+  pinned artwork now moves **exactly 0 px** through a full-depth morph while
+  unpinned artwork beside it takes the full 2.7 px — both now permanent
+  checks in the suite.
 
 **What it looks like now.** Same layer, same painting, debug region-colour
 overlay explicitly off, nothing on screen but the artwork:
@@ -2069,8 +2083,10 @@ subdivision is built only when a second shape exists, that its cells are
 about two texels, that rest depth renders the rest shape exactly, that full
 depth lands on the drawn shape, that the in-between depths close on it
 monotonically, that the silhouette stays one piece with no enclosed holes,
-that a layer with no Entered shape renders identically at every depth, and
-that a posed, bound layer is pixel-identical through the subdivision.
+that a layer with no Entered shape renders identically at every depth, that
+a vertex on pinned artwork does not move at all while unpinned artwork
+beside it does, and that a posed, bound layer is pixel-identical through the
+subdivision.
 
 One older check had to be corrected rather than made to pass: it asserted
 that artwork outside the deformable mask moves *exactly* zero, which was

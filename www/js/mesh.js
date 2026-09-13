@@ -542,8 +542,15 @@ export function pinInfluence(mesh, part) {
   const height = part.naturalHeight;
   const cellW = width / Math.max(1, mesh.cols);
   const cellH = height / Math.max(1, mesh.rows);
-  // One mesh cell, in texels: the width of the transition band.
-  const radius = Math.max(1, Math.max(cellW, cellH));
+  // One mesh cell, in texels: the width of the transition band. One cell
+  // of the LAYER's mesh, which is why the subdivision factor is multiplied
+  // back in -- a morphing layer is solved on a finer grid (see
+  // subdivideMesh), and taking one of ITS cells would shrink this band by
+  // the subdivision factor and stop holding neighbours the pin used to
+  // hold. The pinned texels themselves are unaffected either way: they are
+  // held at 1, and a finer grid holds them more tightly, not less.
+  const factor = mesh.factor || 1;
+  const radius = Math.max(1, Math.max(cellW, cellH) * factor);
 
   // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
   // what its vertices can express, and the vertices are cell corners -- so
