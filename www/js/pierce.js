@@ -1035,7 +1035,11 @@ export function pierceOverlayTexture(part) {
 // for the same reason -- a hard edge between "may move" and "may not"
 // would crease the surface exactly at the boundary of the painted area.
 function regionInfluence(mesh, part) {
-  const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}`;
+  // The entered version belongs in this key now: what the artist drew as
+  // different is part of what may move (see below), so redrawing the
+  // Entered shape changes this field.
+  const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}:` +
+    `${part.pierceEnteredRegionVersion || 0}`;
   if (mesh._pierceInfluence && mesh._pierceInfluenceVersion === version) {
     return mesh._pierceInfluence;
   }
@@ -1070,9 +1074,37 @@ function regionInfluence(mesh, part) {
   // which is how this behaved before the mask existed. The intersection is
   // taken rather than trusting the mask alone, so a stray mark outside the
   // pierceable area cannot make something deform that can never be touched.
-  const deformable = part.pierceDeformRegion && part.pierceDeformRegion.size > 0
+  const allowed = part.pierceDeformRegion && part.pierceDeformRegion.size > 0
     ? [...part.pierceDeformRegion].filter((index) => part.pierceRegion.has(index))
-    : part.pierceRegion;
+    : [...part.pierceRegion];
+
+  // WHAT THE ARTIST DREW AS DIFFERENT IS ALLOWED TO MOVE, WHATEVER THE MASK
+  //
+  // Two masks decide different things and can contradict each other. The
+  // Entered shape says WHAT changes; the Deformable mask says WHICH artwork
+  // may move. Draw the notch somewhere the mask does not cover and the
+  // change is cancelled exactly where it was drawn -- measured: a notch cut
+  // into the bottom of a shape, with Deformable covering only the top,
+  // renders 0 px of change at the tip, 0 in the middle, 0 at the top, with
+  // nothing anywhere saying why. Worse than nothing: the blend's smaller
+  // incidental motion elsewhere is NOT cancelled, because that is where the
+  // mask does allow it, so the shape changes somewhere other than where it
+  // was drawn -- reported as "it doesn't happen where it should, it happens
+  // up".
+  //
+  // Drawing a difference IS the instruction to move there, and it is the
+  // more specific of the two, so it wins. A firm area the drawing does not
+  // touch stays exactly as firm as it was; only the contradiction resolves.
+  const changed = [];
+  if (part.pierceEnteredRegion.size > 0) {
+    for (const index of part.pierceRegion) {
+      if (!part.pierceEnteredRegion.has(index)) changed.push(index);
+    }
+    for (const index of part.pierceEnteredRegion) {
+      if (!part.pierceRegion.has(index)) changed.push(index);
+    }
+  }
+  const deformable = changed.length > 0 ? [...allowed, ...changed] : allowed;
 
   // Painted texels collapse to the cells they sit in, exactly as pins do:
   // a mesh can only express what its vertices can, and this also caps the
@@ -1249,8 +1281,12 @@ export function pierceMorphMesh(part) {
 }
 
 function morphFor(part, mesh) {
+  // The deform version belongs here because the weights below are solved
+  // only where the influence field is non-zero. Leave it out and repainting
+  // the Deformable mask leaves stale weights: the newly deformable vertices
+  // have none, so they never move however the mask says they may.
   const version = `${part.pierceRegionVersion || 0}:${part.pierceEnteredRegionVersion || 0}:` +
-    `${mesh.vertices.length}`;
+    `${part.pierceDeformRegionVersion || 0}:${mesh.vertices.length}`;
   const cached = morphCache.get(part.id);
   if (cached && cached.version === version) return cached.data;
 

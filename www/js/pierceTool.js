@@ -682,4 +682,26 @@ export function initPierceTool() {
     sizeCanvas();
     render();
   });
+
+  // THE CANVAS CAN CHANGE SIZE WITHOUT THE WINDOW DOING SO
+  //
+  // It shares a flex column with the controls below it, so anything that
+  // changes THEIR height takes the difference out of the canvas -- and a
+  // window resize is the only thing that used to re-measure. A hint line
+  // under the target row, whose text differs per target, was enough to
+  // break it: the backing store kept the old size while the CSS box
+  // shrank, so the texels drew as stretched rectangles, and the pointer
+  // mapping (which reads a fresh rect) landed somewhere other than where
+  // the finger was. Reopening the window fixed it, until the next target
+  // change. An observer on the element itself catches every cause rather
+  // than the one that happened to be known.
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(() => {
+      if (!session) return;
+      const rect = els.pierceCanvas.getBoundingClientRect();
+      if (rect.width === session.cssWidth && rect.height === session.cssHeight) return;
+      sizeCanvas();
+      render();
+    }).observe(els.pierceCanvas);
+  }
 }

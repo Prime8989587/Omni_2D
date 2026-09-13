@@ -2259,6 +2259,67 @@ notch from the copy opens the tip and only the tip (0 top · 0 middle · 14
 tip), and a patch is refused with a message naming both the problem and the
 remedy while nothing is deformed.
 
+### Two masks that could cancel each other
+
+The next report was "it still doesn't happen where it should — it happens
+up", after the Entered shape had been drawn correctly. That one is a
+collision between two masks that decide different things.
+
+**Entered says WHAT changes. Deformable says WHICH artwork may move.**
+Nothing made them agree. Draw the notch somewhere the Deformable mask does
+not cover and the change is cancelled exactly where it was asked for —
+while the blend's smaller, incidental motion elsewhere is *not* cancelled,
+because that is where the mask does allow movement. So the shape changes
+somewhere other than where it was drawn. Measured, with the notch cut into
+the bottom of the shape every time:
+
+| Deformable covers | where the silhouette changed |
+| --- | --- |
+| all of it | 0 top · 0 middle · **14 tip** |
+| **the upper half only** | **0 · 0 · 0 — nothing, anywhere** |
+| the lower half only | 0 top · 0 middle · **14 tip** |
+
+`pierceMorphIssue` returned **null** for the middle row. Both masks stored,
+both single blobs, nothing "broken", and the feature silently did the
+opposite of what was drawn.
+
+**Drawing a difference IS the instruction to move there**, and it is the
+more specific of the two instructions, so it wins: the artwork where the
+two drawn shapes differ is now always allowed to move, whatever the
+Deformable mask says. All three rows above now read `0 · 0 · 14`. A firm
+area the drawing does not touch stays exactly as firm as it was — only the
+contradiction resolves, and a shape drawn identical to itself still moves
+nothing at any depth, mask or no mask.
+
+One stale cache came out with it. The morph's solved mean-value weights are
+computed only where the influence field is non-zero, so they depend on the
+Deformable mask — but the cache key did not include its version. Repainting
+Deformable left the newly deformable vertices with no weights at all, so
+they never moved however the mask said they might.
+
+### The painter's canvas, and a hint line that broke it
+
+The hint line added above — the one that says what each paint target is —
+sits in the same flex column as the painter's canvas, and its text differs
+per target. So selecting a target changes the controls' height and takes
+the difference out of the canvas: **448 css px down to 385** on tapping
+Entered.
+
+`sizeCanvas()` ran on open and on window resize, and nothing else. The
+window had not resized, so the backing store kept its old size while the
+box shrank — the browser then scaled it, **1.24× vertically**, and every
+texel drew as a stretched rectangle. The pointer mapping reads a fresh
+bounding rect against a stale camera, so paint landed somewhere other than
+the finger. Reopening the window called `sizeCanvas()` again and it worked
+until the next target change.
+
+The fix is a `ResizeObserver` on the canvas element, so **any** cause of a
+size change re-measures rather than the one cause that happened to be
+known. `test_pierce_painter_touch.mjs` proves it both ways: with the
+observer removed the backing store runs 1.069× then 1.244× out of step,
+and with it the canvas stays exactly square-pixelled across four target
+changes while two taps at the same screen point land on the same texel.
+
 ### Painting the Entered shape
 
 The painter's fifth target. It draws over the pierceable shape in violet,
