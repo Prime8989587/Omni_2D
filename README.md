@@ -1964,6 +1964,125 @@ jiggle they produce composes with the blend rather than replacing it.
 all, and Px Pin still wins over everything, exactly as before. Only the
 local shape-changing effect at the contact point changed.
 
+### The morph ran, and never reached the screen
+
+The blend above was reported working once and was not. When it came back a
+second time, everything was re-derived from scratch rather than re-patched,
+one link of the chain at a time, and the answer turned out to be in the one
+place the earlier pass never looked — the screen: **the numbers were right,
+and the geometry carrying them was too coarse to show them.**
+
+**Where it actually broke.** Each step was measured on a 48x48 layer whose
+Entered shape chamfers the cap's top corners by four texels:
+
+| # | Question | Answer |
+| --- | --- | --- |
+| 1 | Are both shapes really stored, and distinct? | Yes. 240 texels of Rest, 220 of Entered, 20 differing, morph issue none. |
+| 2 | Is depth live, and changing? | Yes. `t` read 0 -> 0.286 -> 1 as the presser advanced. |
+| 3 | Does the blend produce different outlines? | Yes. Up to 2.9 texels between `t=0` and `t=1`, half that at `t=0.5`. |
+| 4 | **What reaches the scene bitmap?** | **18 pixels. Out of a shape whose two drawings differ by 20, with the debug overlay confirmed OFF.** |
+
+So nothing was masking a correct result and nothing was stuck; the solver
+was doing its job and the screen was not showing it. Rendering the
+full-depth shape and comparing it, pixel for pixel, against the drawn
+Entered mask gave the diagnosis outright: the result sat **11 pixels from
+the shape it was asked to reach and 9 from the one it was leaving** — it
+had barely moved off Rest.
+
+**Why.** A layer's mesh is sized for **bone skinning**: six to ten cells
+across, which is all a limb bending needs. This blend is a different job at
+a different scale — an artist rounding a corner by three texels — and a
+mesh with eight-texel cells has nothing to express that with. Worse, the
+density is capped at ten cells regardless of size, so the cells get *wider*
+as the artwork gets bigger: twenty texels on a 200x200 layer. The bug grew
+with the art. Sweeping the density and re-measuring the rendered silhouette
+each time puts a number on it:
+
+| texels per cell | 8 | 6 | 4 | 3 | 2 | 1.5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| pixels off the DRAWN shape | 11 | 10 | 9 | 6 | 5 | **1** |
+| pixels off the REST shape | 9 | 16 | 15 | 20 | 17 | 19 |
+
+At the shipped density the render is closer to the shape it should be
+leaving than to the one it should be reaching. At about two texels a cell
+it lands on the drawing.
+
+**The fix: a subdivision, not a re-bind.** A layer with an Entered shape
+painted is now drawn through a **subdivision of its own mesh** — the same
+rectangle, k x k finer per cell, chosen so the cells come out at about two
+texels and capped at 12,000 vertices so a very large layer degrades to a
+coarser morph rather than to a stall.
+
+What makes this safe is where the fine vertices get their positions. They
+carry **no bone weights of their own** and are never re-skinned: each one is
+the barycentric blend of the coarse triangle it sits inside, using that
+triangle's already-deformed, already-snapped corners. That is exactly what
+the rasterizer computes at the same spot anyway, so a layer with no morph
+applied renders **pixel for pixel as it did before**. Skinning is untouched,
+hand-painted weights are untouched, Bind mode is untouched. The subdivision
+only gives the blend shape somewhere to land.
+
+**Two things that had to be right for that to hold, both found by
+measuring rather than by reasoning:**
+
+- **The split has to be a power of two.** A fine vertex sits a fraction of
+  the way across its cell and its position is that fraction blended between
+  the cell's whole-numbered corners. Halves and quarters are exact in binary;
+  thirds are not, and a threefold split put the sub-triangles a hair off the
+  parent's plane. Measured on a posed, bound layer: a threefold split moved
+  **13 pixels that nothing had asked to move** — a one-pixel wobble along the
+  silhouette, in artwork meant to be pixel-exact. A fourfold split moves
+  none. The check is now in the suite: flat and unbound, and posed and
+  bound, both render with **0 channel differences** through the subdivision.
+- **The softening distance is a property of the artwork, not of the mesh.**
+  The edge of the deformable area eases to zero over "about a cell", which
+  was one cell of the layer's mesh — and a subdivision quietly shrank that
+  by the subdivision factor. It did precisely what the code comment warns
+  of: the gradient went four times sharper, the artwork just outside the
+  painted area was stretched, and the silhouette showed a **one-pixel notch**
+  where the stretch reached past the edge of anything drawn. Measuring the
+  covering triangle proved it was neither a fold nor a tear — zero folded
+  triangles out of 1,152, the pixel covered by exactly one triangle, which
+  sampled source texel (36, 12) whose alpha is zero, one texel past the
+  artwork's own edge. Multiplying the subdivision factor back in restores
+  the original distance and the notch is gone at **every depth**.
+
+**What it looks like now.** Same layer, same painting, debug region-colour
+overlay explicitly off, nothing on screen but the artwork:
+
+| Near Rest — blend 7%, depth 1/14 | Full depth — blend 100%, depth 14/14 |
+| --- | --- |
+| ![The cap at 7% depth, corners square](docs/images/morph-shallow-7pct.png) | ![The cap at 100% depth, corners rounded](docs/images/morph-full-100pct.png) |
+
+![The two silhouettes side by side, with the shallow outline in red over both](docs/images/morph-side-by-side.png)
+
+The red line is the shallow-depth outline drawn over both halves, so the
+right-hand shape can be seen pulling in from it. The rendered shape at full
+depth now sits **1 pixel from the drawn Entered mask and 19 from Rest** —
+the exact reverse of what it was — and walks there smoothly: 20, 20, 11, 6,
+1 pixels off the drawing as `t` goes 0, 0.21, 0.5, 0.79, 1.
+
+**Verified.** A new suite (`test_pierce_morph_render.mjs`) reads the
+rendered silhouette rather than the solver's arrays, which is the gap the
+first "fixed" report fell into: it checks that the overlay is off, that a
+subdivision is built only when a second shape exists, that its cells are
+about two texels, that rest depth renders the rest shape exactly, that full
+depth lands on the drawn shape, that the in-between depths close on it
+monotonically, that the silhouette stays one piece with no enclosed holes,
+that a layer with no Entered shape renders identically at every depth, and
+that a posed, bound layer is pixel-identical through the subdivision.
+
+One older check had to be corrected rather than made to pass: it asserted
+that artwork outside the deformable mask moves *exactly* zero, which was
+only ever true because the coarse mesh had no vertices inside the falloff
+to measure. The falloff is deliberate — a hard edge between "may move" and
+"may not" creases the surface where the artist drew the line — so the check
+now tests the property that was actually designed: **zero movement beyond
+one falloff**, and a smooth monotone ramp inside it. Measured profile, with
+the deformable mask starting at row 18 and a 12-texel falloff: rows 0-6 at
+exactly 0.00, then 0.11, 0.33, 0.65, 1.00, 1.33, 1.58, 1.73 — the ramp is
+exactly one falloff wide and hard zero beyond it.
+
 ### Painting the Entered shape
 
 The painter's fifth target. It draws over the pierceable shape in violet,

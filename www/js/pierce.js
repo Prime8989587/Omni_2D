@@ -84,7 +84,9 @@
 
 import { partsStore, PiercePhysics } from './parts.js';
 import { bonesStore } from './bones.js';
-import { localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity } from './mesh.js';
+import {
+  localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity, subdivideMesh,
+} from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
 import {
   outlineOf, alignOutline, meanValueWeights, evaluateWeights, blendOutlines, blobCoverage,
@@ -824,8 +826,13 @@ function publishOcclusion(contacts) {
   // by one frame at every depth.
   for (const { pierced, contact } of contacts) {
     if (!pierced.mesh) continue;
-    const entry = pierceStateFor(pierced.id, pierced.mesh.vertices.length);
-    writeMorph(pierced.mesh, pierced, contact, entry.offsetX, entry.offsetY);
+    // The blend shape is solved on whatever geometry is going to DRAW it.
+    // For a morphing layer that is the subdivision, not the layer's own
+    // mesh -- and sizing the offsets to the fine grid is also what stops
+    // the coarse path adding them a second time (see pierceOffsets).
+    const target = pierceMorphMesh(pierced) || pierced.mesh;
+    const entry = pierceStateFor(pierced.id, target.vertices.length);
+    writeMorph(target, pierced, contact, entry.offsetX, entry.offsetY);
   }
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
@@ -1036,7 +1043,18 @@ function regionInfluence(mesh, part) {
   const height = part.naturalHeight;
   const cellW = width / Math.max(1, mesh.cols);
   const cellH = height / Math.max(1, mesh.rows);
-  const radius = Math.max(1, Math.max(cellW, cellH));
+  // The softening distance is a property of the ARTWORK, not of how many
+  // vertices happen to be describing it. It reads as one cell of the
+  // layer's OWN mesh -- which is what it always was, and why `factor` is
+  // multiplied back in here: a morphing layer is solved on a subdivision,
+  // and taking one of ITS cells would quietly shrink this by the
+  // subdivision factor. When that happened it did exactly what the comment
+  // above warns of: the gradient at the edge of the painted area went four
+  // times sharper, the artwork just outside it was stretched, and the
+  // silhouette showed a one-pixel notch where the stretch reached past the
+  // edge of anything drawn.
+  const factor = mesh.factor || 1;
+  const radius = Math.max(1, Math.max(cellW, cellH) * factor);
 
   // WHICH PIXELS MAY MOVE -- not which may be touched.
   //
@@ -1122,6 +1140,75 @@ export function pierceMorphIssue(part) {
   return null;
 }
 
+// HOW FINE THE GEOMETRY HAS TO BE
+//
+// A blend shape is only as good as the mesh it is drawn through, and a
+// layer's mesh is sized for bone skinning rather than for this. Measured
+// on a 48x48 layer whose Entered shape chamfers its corners by 4 texels,
+// rendering the full-depth shape and comparing it to the drawn one:
+//
+//   texels per cell    8      6      4      3      2     1.5
+//   pixels off drawn  11     10      9      6      5       1
+//   pixels off rest    9     16     15     20     17      19
+//
+// At the shipped density (8 texels a cell here, and TWENTY on a 200x200
+// layer, because the density cap makes bigger artwork coarser) the result
+// sits closer to the shape it was supposed to be leaving than to the one
+// it was asked to reach. Around two texels a cell it lands on the drawn
+// shape. So that is the target, and it is expressed in texels rather than
+// in cells precisely because the failure got worse as the artwork got
+// bigger.
+const MORPH_TEXELS_PER_CELL = 2;
+
+// A ceiling on the fine grid, so a very large layer degrades to a coarser
+// morph rather than to a stall. Measured on a 200x200 layer at 10201 fine
+// vertices: 0.2 ms a frame to draw, 0.9 ms to re-solve after a paint edit.
+const MORPH_MAX_VERTICES = 12000;
+
+const morphMeshCache = new Map();
+
+// A POWER OF TWO, and not for tidiness: it is what makes the subdivision
+// exact. A fine vertex sits at a fraction s of the way across its coarse
+// cell, and its position is that fraction blended between the cell's
+// corners -- which are whole numbers, because the renderer snaps them. A
+// power-of-two split makes every such fraction a binary one (a half, a
+// quarter) and the blend lands on an exact value. Split a cell in three
+// instead and s is a third, which binary floating point cannot hold, and
+// the sub-triangle's corners sit a hair off the parent's plane. Measured
+// on a posed, bound layer: a threefold split moved 13 pixels that nothing
+// had asked to move -- a one-texel wobble along the silhouette, in artwork
+// meant to be pixel-exact. A fourfold split moves none.
+function morphFactor(part, mesh) {
+  const widest = Math.max(part.naturalWidth / mesh.cols, part.naturalHeight / mesh.rows);
+  let k = 1;
+  // Double until the cells are fine enough, or until the next doubling
+  // would cost more vertices than the budget allows -- a very large layer
+  // gets a coarser morph rather than a stall.
+  while (widest > MORPH_TEXELS_PER_CELL * k
+    && (mesh.cols * k * 2 + 1) * (mesh.rows * k * 2 + 1) <= MORPH_MAX_VERTICES) k *= 2;
+  return k;
+}
+
+// The subdivided grid a morphing layer is solved and drawn through, or
+// null when there is nothing to morph (no second shape painted, a shape
+// in pieces) or the mesh is already fine enough to carry it.
+export function pierceMorphMesh(part) {
+  if (!part || !part.isPierced || !part.mesh) return null;
+  if (part.pierceRegion.size === 0 || part.pierceEnteredRegion.size === 0) return null;
+  if (pierceMorphIssue(part) !== null) return null;
+
+  const mesh = part.mesh;
+  const factor = morphFactor(part, mesh);
+  if (factor <= 1) return null;
+  const version = `${mesh.cols}x${mesh.rows}:${mesh.vertices.length}:${factor}`;
+  const cached = morphMeshCache.get(part.id);
+  if (cached && cached.version === version) return cached.fine;
+
+  const fine = subdivideMesh(part, mesh, factor);
+  morphMeshCache.set(part.id, { version, fine });
+  return fine;
+}
+
 function morphFor(part, mesh) {
   const version = `${part.pierceRegionVersion || 0}:${part.pierceEnteredRegionVersion || 0}:` +
     `${mesh.vertices.length}`;
@@ -1140,12 +1227,22 @@ function morphFor(part, mesh) {
       const entered = alignOutline(rest, drawn);
       const halfW = part.naturalWidth / 2;
       const halfH = part.naturalHeight / 2;
+      // Only the vertices that can actually move get weights. On a fine
+      // grid that is a small fraction of them, and the ones left out are
+      // the ones writeMorph skips anyway -- which is what keeps a
+      // subdivided layer's memory and solve time in proportion to the
+      // painted region rather than to the whole layer.
+      const influence = regionInfluence(mesh, part);
       // In the layer's own texel space, which is where both outlines live
       // and the one space that does not move when the layer does.
-      const weights = mesh.vertices.map((vertex) => meanValueWeights(
-        { x: vertex.restLocal.x + halfW, y: vertex.restLocal.y + halfH }, rest
-      ));
-      data = { rest, entered, weights };
+      const weights = mesh.vertices.map((vertex, i) => (influence[i] > 0
+        ? meanValueWeights({ x: vertex.restLocal.x + halfW, y: vertex.restLocal.y + halfH }, rest)
+        : null));
+      // Where each vertex sits on the REST outline never changes, so it is
+      // solved once here rather than re-evaluated on every frame of every
+      // contact.
+      const restAt = weights.map((w) => (w ? evaluateWeights(w, rest) : null));
+      data = { rest, entered, weights, restAt };
     }
   }
   morphCache.set(part.id, { version, data });
@@ -1182,8 +1279,14 @@ function writeMorph(mesh, part, contact, offsetX, offsetY) {
       offsetY[i] = 0;
       continue;
     }
-    const moved = evaluateWeights(morph.weights[i], shape);
-    const rest = evaluateWeights(morph.weights[i], morph.rest);
+    const weights = morph.weights[i];
+    if (!weights) {
+      offsetX[i] = 0;
+      offsetY[i] = 0;
+      continue;
+    }
+    const moved = evaluateWeights(weights, shape);
+    const rest = morph.restAt[i];
     const dx = (moved.x - rest.x) * share;
     const dy = (moved.y - rest.y) * share;
     offsetX[i] = dx * cos - dy * sin;

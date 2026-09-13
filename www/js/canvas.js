@@ -15,12 +15,13 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
-import { deformVerticesSnapped, partQuad } from './mesh.js';
+import { deformVerticesSnapped, deformSubdivided, partQuad } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture, pierceOffsets,
+  pierceMorphMesh,
   pierceReadout, pierceHold,
 } from './pierce.js';
 
@@ -130,6 +131,19 @@ function partGeometry(part, boneTransforms) {
     uvs: part.mesh.vertices,
     triangles: part.mesh.triangles,
   });
+
+  // A layer with a blend shape painted is drawn through a SUBDIVISION of
+  // its mesh: the same surface, fine enough to hold the shape the artist
+  // drew. Its fine vertices ride inside the coarse triangles, so with no
+  // morph applied this draws exactly what the line below would have.
+  const fine = part.mesh ? pierceMorphMesh(part) : null;
+  if (fine) {
+    return {
+      positions: place(deformSubdivided(part, fine, boneTransforms || {})),
+      uvs: fine.vertices,
+      triangles: fine.triangles,
+    };
+  }
 
   if (part.mesh && part.mesh.isBound && boneTransforms) return through(boneTransforms);
 
