@@ -2197,6 +2197,68 @@ spacing alone really did drag the untouched top, and corresponding pins it;
 and that the opening is an opening rather than a tear — no pinholes, one
 connected piece.
 
+### A patch is not a silhouette
+
+Then a third report, with the painter's own screenshot attached — and this
+one was not a bug in the maths at all. It was the interface teaching the
+wrong idea, and the maths then doing something indefensible with the
+result.
+
+**Every other target in that row is a mask.** Paint the texels that are the
+tip. Paint the ones that are a wall. Paint the ones that may move. The
+Entered target sits fifth in the same row, behaves identically, and is not
+a mask at all — it is a **silhouette**, the whole pierceable area drawn
+again as it looks at full depth, whose *outline* gets traced and paired
+against the rest outline point for point.
+
+Offered as one more brush over an empty layer, it invites being used like
+the others: a band brushed in where the tip arrives. That stores perfectly.
+Then the blend traces its outline and pairs a **51-texel perimeter centred
+14 texels away** against the pierceable shape's **121**. Nothing about that
+is an opening at the tip — it is the whole region lurching somewhere else,
+which from outside reads exactly as *"the deformation is on top, inverse to
+where I drew."* Rebuilt and measured, three ways of painting the same
+intent on the same scene:
+
+| Entered painted as | overlaps the pierceable shape | where the silhouette changed |
+| --- | --- | --- |
+| the shape redrawn with a notch | 0.93 | 0 top · 0 middle · **14 tip** |
+| the shape plus a bulge | 0.96 | 0 top · 0 middle · **6 tip** |
+| **a band brushed in near the tip** | **0.18** | 0 top · **18 middle** · 6 tip, and a pinhole |
+
+The third row is the report. And `pierceMorphIssue` returned **null** for
+it — both masks were single blobs, both were stored, nothing was "broken".
+
+**The fix is to stop teaching the wrong idea.** Selecting the Entered
+target now **opens it as a copy of the pierceable shape**, so the first
+stroke is an *edit*: erase where the flesh should pull in, paint where it
+should push out. Only when it is empty — deliberate work is never
+overwritten — and it goes through history like any other stroke, so it
+undoes. A line under the target row says what the target is, permanently,
+rather than as a toast that scrolls away:
+
+![The painter with Entered selected, seeded from the pierceable shape](docs/images/entered-seeded.png)
+
+**And the maths now refuses what it cannot honour.** Two drawn shapes are
+told apart from a shape and a patch by how much of each other they are: a
+notch cut measures 0.93, a bulge added 0.96, a band brushed in 0.18. Below
+half, `pierceMorphIssue` declines and names the remedy rather than just the
+fault — *"the Entered shape overlaps the pierceable one by only 18% — it
+looks like a patch rather than the whole shape drawn again. Clear it and
+reopen the Entered target to start from a copy of the pierceable shape,
+then edit that."* Nothing deforms at all, which is the right answer: a
+drawing that is quietly ignored is worse than one that is refused, and one
+that is silently turned into nonsense is worse than both.
+
+**Verified.** `test_pierce_entered_silhouette.mjs` drives the real painter:
+selecting Entered on an empty mask seeds all 883 texels of the pierceable
+shape, the hint says what the target is, undo returns it to empty,
+selecting it a second time does **not** re-seed over existing work, an
+untouched copy blends to itself and moves nothing at any depth, erasing a
+notch from the copy opens the tip and only the tip (0 top · 0 middle · 14
+tip), and a patch is refused with a message naming both the problem and the
+remedy while nothing is deformed.
+
 ### Painting the Entered shape
 
 The painter's fifth target. It draws over the pierceable shape in violet,

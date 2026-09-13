@@ -65,7 +65,7 @@ function cacheElements() {
   for (const id of [
     'pierceWindow', 'pierceWindowTarget', 'pierceWindowStatus', 'pierceWindowDoneBtn',
     'pierceCanvas', 'pierceTargetTipBtn', 'pierceTargetAreaBtn', 'pierceTargetDeformBtn',
-    'pierceTargetBarrierBtn', 'pierceTargetEnteredBtn', 'pierceToolPaintBtn',
+    'pierceTargetBarrierBtn', 'pierceTargetEnteredBtn', 'pierceTargetHint', 'pierceToolPaintBtn',
     'pierceToolEraseBtn', 'pierceBrushBtn', 'pierceBrushMenu',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
     'piercePiercedOpacity', 'piercePiercedOpacityValue',
@@ -331,7 +331,24 @@ function render() {
       `${Math.round(cam.zoom * 100)}%`;
 }
 
+// What the selected target is for, said where it is being used. The
+// Entered one earns its line: it is the only target that is a SILHOUETTE
+// rather than a mask, and nothing else on this screen distinguishes those
+// two ideas.
+const TARGET_HINT = {
+  entered: 'A whole second silhouette, not a mask: this is the pierceable '
+    + 'shape as it looks at full depth. It starts as a copy — ERASE where the '
+    + 'flesh should pull in, PAINT where it should push out.',
+  deform: 'Which pierceable pixels may actually move. Unpainted means all of them.',
+  barrier: 'Solid: the tip cannot cross these, however hard it is pushed.',
+  area: 'Where a pierce registers at all on this layer.',
+  tip: 'The part of the piercer that goes in.',
+};
+
 function renderTools() {
+  const hint = TARGET_HINT[session.target];
+  els.pierceTargetHint.textContent = hint || '';
+  els.pierceTargetHint.hidden = !hint;
   els.pierceTargetTipBtn.setAttribute('aria-pressed', String(session.target === 'tip'));
   els.pierceTargetAreaBtn.setAttribute('aria-pressed', String(session.target === 'area'));
   els.pierceTargetDeformBtn.setAttribute('aria-pressed', String(session.target === 'deform'));
@@ -433,6 +450,36 @@ function stampLine(from, to) {
     });
   }
   stamp(run);
+}
+
+// THE ENTERED SHAPE IS AN EDIT OF THE REST ONE, NOT A DRAWING FROM NOTHING
+//
+// Every other target here is a mask: paint the texels that are the tip,
+// the wall, the part that gives way. The Entered shape is not a mask. It
+// is a SILHOUETTE -- the whole pierceable area drawn again, as it looks at
+// full depth -- and the blend traces its outline and pairs that against
+// the rest outline point for point.
+//
+// Presented as one more brush over an empty layer, it invites being used
+// like the others: a band brushed in where the tip arrives. That stores
+// perfectly well and then blends a 120-texel perimeter toward a 51-texel
+// one whose centre sits 14 texels away, which does not read as an opening
+// at the tip. It reads as the shape lurching somewhere else entirely --
+// reported from a real scene as "the deformation is on top, inverse to
+// where I drew".
+//
+// So the target opens with the rest shape already in it. The first stroke
+// is then an EDIT: erase where the flesh should pull in, paint where it
+// should push out. Only when it is empty -- deliberate work is never
+// overwritten -- and it goes through history like any other stroke, so it
+// undoes.
+function seedEnteredFromRest() {
+  const pierced = session.pierced;
+  if (!pierced || pierced.pierceEnteredRegion.size > 0) return;
+  if (pierced.pierceRegion.size === 0) return;
+  const token = history.capture('Start Entered shape from the pierceable shape');
+  partsStore.setPierceEnteredRegion(pierced.id, [...pierced.pierceRegion], true);
+  history.commitCapture(token, true);
 }
 
 function beginStroke(point) {
@@ -596,6 +643,7 @@ export function initPierceTool() {
   els.pierceTargetEnteredBtn.addEventListener('click', () => {
     if (!session) return;
     session.target = 'entered';
+    seedEnteredFromRest();
     renderTools();
     render();
   });

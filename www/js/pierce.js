@@ -1123,6 +1123,19 @@ const morphCache = new Map();
 // one-to-one pairing to blend along. A speck of overspray is far above it.
 const MIN_COVERAGE = 0.9;
 
+// How much of each other the two drawn shapes must be, for one to be a
+// believable redrawing of the other. A notch cut out of a silhouette
+// measures 0.93 and a bulge added 0.96; a band brushed in beside it, 0.18.
+// Half leaves room for a drastic redraw and still catches a patch.
+const MIN_SILHOUETTE_OVERLAP = 0.5;
+
+function intersectionSize(a, b) {
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let n = 0;
+  for (const index of small) if (large.has(index)) n++;
+  return n;
+}
+
 // Why a pierced layer is not morphing, in the user's terms -- null when it
 // is, or when it has simply not been given a second shape yet. The painter
 // and the Pierce window both say this out loud, because a drawing that is
@@ -1137,6 +1150,31 @@ export function pierceMorphIssue(part) {
   }
   if (blobCoverage(part.pierceEnteredRegion, w, h) < MIN_COVERAGE) {
     return 'the entered shape is cut into separate pieces';
+  }
+
+  // A PATCH IS NOT A SILHOUETTE
+  //
+  // The Entered target sits in a row of brushes that all paint masks, so
+  // it gets used like one: a band brushed in where the tip arrives. That
+  // stores perfectly, and then the blend traces its outline -- a 51-texel
+  // perimeter centred 14 texels away from the pierceable shape's 121 --
+  // and pairs the two point for point. Nothing about that is an opening at
+  // the tip. It is the whole region lurching somewhere else, which is what
+  // "the deformation is inverse to where I drew" looks like from outside.
+  //
+  // Measured on that scene: a redrawn silhouette with a notch cut overlaps
+  // the pierceable shape 0.93; the same shape plus a bulge, 0.96; a band
+  // brushed in near the tip, 0.18. So the two are told apart by how much
+  // of one shape the other actually is, and the refusal names the remedy
+  // rather than just the fault.
+  const shared = intersectionSize(part.pierceRegion, part.pierceEnteredRegion);
+  const union = part.pierceRegion.size + part.pierceEnteredRegion.size - shared;
+  const overlap = union > 0 ? shared / union : 0;
+  if (overlap < MIN_SILHOUETTE_OVERLAP) {
+    return `the Entered shape overlaps the pierceable one by only ` +
+      `${Math.round(overlap * 100)}% — it looks like a patch rather than the ` +
+      'whole shape drawn again. Clear it and reopen the Entered target to ' +
+      'start from a copy of the pierceable shape, then edit that';
   }
   return null;
 }
