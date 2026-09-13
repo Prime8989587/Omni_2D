@@ -2092,16 +2092,26 @@ a vertex on pinned artwork does not move at all while unpinned artwork
 beside it does, and that a posed, bound layer is pixel-identical through the
 subdivision.
 
-One older check had to be corrected rather than made to pass: it asserted
-that artwork outside the deformable mask moves *exactly* zero, which was
-only ever true because the coarse mesh had no vertices inside the falloff
-to measure. The falloff is deliberate — a hard edge between "may move" and
+Two older checks had to be corrected rather than made to pass. The first
+asserted that artwork outside the deformable mask moves *exactly* zero,
+which was only ever true because the coarse mesh had no vertices inside the
+falloff to measure. The falloff is deliberate — a hard edge between "may move" and
 "may not" creases the surface where the artist drew the line — so the check
 now tests the property that was actually designed: **zero movement beyond
-one falloff**, and a smooth monotone ramp inside it. Measured profile, with
-the deformable mask starting at row 18 and a 12-texel falloff: rows 0-6 at
-exactly 0.00, then 0.11, 0.33, 0.65, 1.00, 1.33, 1.58, 1.73 — the ramp is
-exactly one falloff wide and hard zero beyond it.
+one falloff**, and an easing-in inside it. Measured profile, with the
+deformable mask starting at row 18 and a 12-texel falloff: rows 0-6 at
+exactly 0.00, then movement that rises from 0.08 with no step larger than
+0.15 against a peak of 0.48 — exactly one falloff wide, hard zero beyond
+it.
+
+The second was the wording of that same check: it first asked for a
+*monotone* ramp, and passed only while the whole outline was drifting
+uniformly — which was itself the bug fixed in `correspondOutlines` below.
+What a falloff has to guarantee is the absence of a **crease**, not
+monotonicity: a vertex's movement is its influence times the actual local
+warp, and the warp is not uniform across a layer, so a rising influence
+over a falling warp legitimately peaks in the middle. The check now
+measures the step size instead.
 
 ### The shape changed in the wrong place
 
