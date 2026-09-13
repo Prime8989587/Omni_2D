@@ -90,7 +90,7 @@ import {
 import { pierceStateFor, peekPierceState } from './pierceState.js';
 import {
   outlineOf, alignOutline, correspondOutlines, meanValueWeights, evaluateWeights,
-  blendOutlines, blobCoverage,
+  blobCoverage,
 } from './morph.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
@@ -1074,37 +1074,9 @@ function regionInfluence(mesh, part) {
   // which is how this behaved before the mask existed. The intersection is
   // taken rather than trusting the mask alone, so a stray mark outside the
   // pierceable area cannot make something deform that can never be touched.
-  const allowed = part.pierceDeformRegion && part.pierceDeformRegion.size > 0
+  const deformable = part.pierceDeformRegion && part.pierceDeformRegion.size > 0
     ? [...part.pierceDeformRegion].filter((index) => part.pierceRegion.has(index))
-    : [...part.pierceRegion];
-
-  // WHAT THE ARTIST DREW AS DIFFERENT IS ALLOWED TO MOVE, WHATEVER THE MASK
-  //
-  // Two masks decide different things and can contradict each other. The
-  // Entered shape says WHAT changes; the Deformable mask says WHICH artwork
-  // may move. Draw the notch somewhere the mask does not cover and the
-  // change is cancelled exactly where it was drawn -- measured: a notch cut
-  // into the bottom of a shape, with Deformable covering only the top,
-  // renders 0 px of change at the tip, 0 in the middle, 0 at the top, with
-  // nothing anywhere saying why. Worse than nothing: the blend's smaller
-  // incidental motion elsewhere is NOT cancelled, because that is where the
-  // mask does allow it, so the shape changes somewhere other than where it
-  // was drawn -- reported as "it doesn't happen where it should, it happens
-  // up".
-  //
-  // Drawing a difference IS the instruction to move there, and it is the
-  // more specific of the two, so it wins. A firm area the drawing does not
-  // touch stays exactly as firm as it was; only the contradiction resolves.
-  const changed = [];
-  if (part.pierceEnteredRegion.size > 0) {
-    for (const index of part.pierceRegion) {
-      if (!part.pierceEnteredRegion.has(index)) changed.push(index);
-    }
-    for (const index of part.pierceEnteredRegion) {
-      if (!part.pierceRegion.has(index)) changed.push(index);
-    }
-  }
-  const deformable = changed.length > 0 ? [...allowed, ...changed] : allowed;
+    : part.pierceRegion;
 
   // Painted texels collapse to the cells they sit in, exactly as pins do:
   // a mesh can only express what its vertices can, and this also caps the
@@ -1121,9 +1093,7 @@ function regionInfluence(mesh, part) {
     return [cu * cellW, cv * cellH, (cu + 1) * cellW, (cv + 1) * cellH];
   });
 
-  const influence = mesh.vertices.map((vertex) => {
-    const u = vertex.restLocal.x + width / 2;
-    const v = vertex.restLocal.y + height / 2;
+  const at = (u, v) => {
     let nearest = Infinity;
     for (const [x0, y0, x1, y1] of marked) {
       const dx = Math.max(x0 - u, 0, u - x1);
@@ -1135,7 +1105,14 @@ function regionInfluence(mesh, part) {
     if (nearest === Infinity) return 0;
     const k = Math.max(0, Math.min(1, 1 - nearest / radius));
     return k * k * (3 - 2 * k); // smoothstep: no crease at either end
-  });
+  };
+
+  const influence = mesh.vertices.map((vertex) => at(
+    vertex.restLocal.x + width / 2, vertex.restLocal.y + height / 2
+  ));
+  // The same field, sampled anywhere rather than only at vertices -- the
+  // outline needs it too (see morphFor).
+  influence.at = at;
 
   mesh._pierceInfluence = influence;
   mesh._pierceInfluenceVersion = version;
@@ -1160,6 +1137,12 @@ const MIN_COVERAGE = 0.9;
 // measures 0.93 and a bulge added 0.96; a band brushed in beside it, 0.18.
 // Half leaves room for a drastic redraw and still catches a patch.
 const MIN_SILHOUETTE_OVERLAP = 0.5;
+
+// How much of the drawn difference has to sit on deformable artwork before
+// the drawing is taken to be doing anything at all. A tenth is generous --
+// it allows a change that straddles the edge of a firm area -- while a
+// change drawn entirely on firm artwork lands at zero and is reported.
+const MIN_DRAWN_CHANGE_MOVABLE = 0.1;
 
 function intersectionSize(a, b) {
   const [small, large] = a.size <= b.size ? [a, b] : [b, a];
@@ -1199,6 +1182,35 @@ export function pierceMorphIssue(part) {
   // brushed in near the tip, 0.18. So the two are told apart by how much
   // of one shape the other actually is, and the refusal names the remedy
   // rather than just the fault.
+  // A DRAWING THE DEFORMABLE MASK WILL NOT LET HAPPEN
+  //
+  // The two masks decide different things and can contradict each other:
+  // the Entered shape says WHAT changes, the Deformable mask says WHICH
+  // artwork may move. Drawing the change on artwork marked firm is a real
+  // and deliberate combination -- a firm edge inside soft tissue holds even
+  // where the tip arrives -- but it is indistinguishable, from outside,
+  // from the feature being broken: the drawing is stored, the contact
+  // registers, and nothing on the canvas moves. So it is said out loud.
+  if (part.pierceDeformRegion.size > 0) {
+    let drawn = 0;
+    let movable = 0;
+    for (const index of part.pierceRegion) {
+      if (part.pierceEnteredRegion.has(index)) continue;
+      drawn++;
+      if (part.pierceDeformRegion.has(index)) movable++;
+    }
+    for (const index of part.pierceEnteredRegion) {
+      if (part.pierceRegion.has(index)) continue;
+      drawn++;
+      if (part.pierceDeformRegion.has(index)) movable++;
+    }
+    if (drawn > 0 && movable / drawn < MIN_DRAWN_CHANGE_MOVABLE) {
+      return 'the shape you drew changes in an area marked NOT deformable, ' +
+        'so nothing will move there — paint that area Deformable, or draw the ' +
+        'change where the Deformable mask already is';
+    }
+  }
+
   const shared = intersectionSize(part.pierceRegion, part.pierceEnteredRegion);
   const union = part.pierceRegion.size + part.pierceEnteredRegion.size - shared;
   const overlap = union > 0 ? shared / union : 0;
@@ -1321,7 +1333,27 @@ function morphFor(part, mesh) {
       // solved once here rather than re-evaluated on every frame of every
       // contact.
       const restAt = weights.map((w) => (w ? evaluateWeights(w, rest) : null));
-      data = { rest, entered, weights, restAt };
+
+      // GATE THE OUTLINE, NOT ONLY THE VERTICES
+      //
+      // The per-vertex mask decides which artwork may END UP moved. On its
+      // own that is not enough, because mean value coordinates are a
+      // GLOBAL interpolation: move a few outline points and every interior
+      // point shifts a little, decaying with distance. So a notch drawn on
+      // firm artwork was cancelled where it was drawn -- correctly, that is
+      // the firm-edge feature -- while its leaked, much smaller motion
+      // survived wherever the mask did allow movement. The change did not
+      // disappear; it RELOCATED, which is what "it doesn't happen where it
+      // should, it happens up" is.
+      //
+      // Gating each outline point by the field at its own rest position
+      // fixes the source rather than the symptom: travel that is not
+      // allowed is never put into the outline, so there is nothing to leak.
+      // A change drawn on firm artwork now collapses everywhere, and one
+      // drawn on soft artwork lands exactly where it was drawn.
+      const gate = new Float64Array(rest.length);
+      for (let i = 0; i < rest.length; i++) gate[i] = influence.at(rest[i].x, rest[i].y);
+      data = { rest, entered, weights, restAt, gate };
     }
   }
   morphCache.set(part.id, { version, data });
@@ -1342,7 +1374,15 @@ function writeMorph(mesh, part, contact, offsetX, offsetY) {
 
   const influence = regionInfluence(mesh, part);
   const pins = part.pins.size > 0 ? pinInfluence(mesh, part) : null;
-  const shape = blendOutlines(morph.rest, morph.entered, contact ? contact.t : 0);
+  const t = contact ? contact.t : 0;
+  const shape = new Array(morph.rest.length);
+  for (let i = 0; i < shape.length; i++) {
+    const k = t * morph.gate[i];
+    shape[i] = {
+      x: morph.rest[i].x + (morph.entered[i].x - morph.rest[i].x) * k,
+      y: morph.rest[i].y + (morph.entered[i].y - morph.rest[i].y) * k,
+    };
+  }
   // Texel space to scene space: the layer's integer scale, then its
   // rotation. The offsets are added to bone-skinned positions, which are
   // already in scene space.

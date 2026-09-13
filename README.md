@@ -2283,13 +2283,40 @@ the bottom of the shape every time:
 both single blobs, nothing "broken", and the feature silently did the
 opposite of what was drawn.
 
-**Drawing a difference IS the instruction to move there**, and it is the
-more specific of the two instructions, so it wins: the artwork where the
-two drawn shapes differ is now always allowed to move, whatever the
-Deformable mask says. All three rows above now read `0 · 0 · 14`. A firm
-area the drawing does not touch stays exactly as firm as it was — only the
-contradiction resolves, and a shape drawn identical to itself still moves
-nothing at any depth, mask or no mask.
+**The first fix was wrong, and the regression caught it.** Making the drawn
+difference always move, whatever the mask says, broke a deliberate and
+tested feature: a pierceable-but-firm area is *supposed* to hold even where
+the tip arrives — a firm edge inside soft tissue. Two suites failed with
+firm artwork moving exactly as much as deformable artwork, 7.83 px against
+7.831. Backed out.
+
+**What was actually wrong is subtler, and worse.** The per-vertex mask
+decides which artwork may *end up* moved. That is not enough, because mean
+value coordinates are a **global** interpolation: move a few outline points
+and every interior point shifts a little, decaying with distance. So a
+notch drawn on firm artwork was cancelled where it was drawn — correctly,
+that is the feature — while its leaked, much smaller motion **survived
+wherever the mask did allow movement**. The change did not disappear. It
+*relocated*.
+
+So the fix is to gate the **outline**, not only the vertices: each of the
+64 outline points is scaled by the influence field at its own rest
+position, so travel that is not allowed is never put into the shape and
+there is nothing left to leak. A change drawn on firm artwork now collapses
+everywhere; one drawn on soft artwork lands exactly where it was drawn.
+
+| Deformable covers | before | after |
+| --- | --- | --- |
+| all of it | 0 · 0 · 14 tip | 0 · 0 · **14 tip** |
+| the upper half only (not the notch) | the change leaked elsewhere | **0 · 0 · 0** |
+| the lower half only (the notch) | 0 · 0 · 14 tip | 0 · 0 · **14 tip** |
+
+**And collapsing silently is still baffling** — the drawing is stored, the
+contact registers, and nothing moves. So when the drawn difference lands
+almost entirely on artwork marked firm, it is reported: *"the shape you
+drew changes in an area marked NOT deformable, so nothing will move there —
+paint that area Deformable, or draw the change where the Deformable mask
+already is."*
 
 One stale cache came out with it. The morph's solved mean-value weights are
 computed only where the influence field is non-zero, so they depend on the
