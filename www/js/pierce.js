@@ -11,14 +11,19 @@
 // completely reversible by moving the piercer back out, with nothing to
 // undo or restore.
 //
-// TWO DRAWN SHAPES, NOT A PUSH
+// A WEDGE, NOT TWO DRAWN SHAPES
 //
-// The shape of the contact is a BLEND between two outlines the artist
-// drew: the pierceable mask as painted (the rest shape) and a second mask
-// painted for maximum depth (the entered shape). At any depth the
-// rendered outline is a point-for-point interpolation between them, and
-// every mesh vertex follows it through mean value coordinates. morph.js
-// holds that machinery and explains it.
+// The local shape of a contact is a triangular dent: an apex driven in
+// along the approach, a base across the surface, both sized by the depth
+// fraction and by two numbers the artist sets. dent.js holds that
+// machinery, cuts the wedge out of the artwork as a per-texel mask, and
+// shoves the material marked Deformable outward around its faces.
+//
+// It replaced a blend between two hand-painted outlines, which worked on
+// primitives and could not work on organic artwork: two freehand drawings
+// of a curvy silhouette have no reliable point-to-point correspondence to
+// blend along, and every attempt to find one narrowed the failure without
+// removing it.
 //
 // This replaced a per-vertex spring push, and the reason is worth keeping.
 // That version gave each vertex its own radial shove away from the tip
@@ -29,11 +34,12 @@
 // outline it was supposed to be producing, so no stiffness could have made
 // it produce one.
 //
-// Nothing about the blend is integrated over time. The outline IS the
-// depth, so a given depth always looks the same, there is no state to fall
-// out of step with the drag, and the frame loop has nothing left to settle
-// once the piercer stops. The bones' own springs are untouched and go on
-// reporting for themselves.
+// Nothing about the dent is integrated over time. The wedge IS the depth,
+// so a given depth always looks the same, there is no state to fall out of
+// step with the drag, withdrawing runs the identical numbers backwards to
+// exactly zero, and the frame loop has nothing left to settle once the
+// piercer stops. The bones' own springs are untouched and go on reporting
+// for themselves.
 //
 // HOW DEEP IS DEEP
 //
@@ -85,13 +91,10 @@
 import { partsStore, PiercePhysics } from './parts.js';
 import { bonesStore } from './bones.js';
 import {
-  localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity, subdivideMesh,
+  localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity,
 } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
-import {
-  outlineOf, alignOutline, correspondOutlines, meanValueWeights, evaluateWeights,
-  blobCoverage,
-} from './morph.js';
+import { dentTriangle, dentCutMask, writeBunch, resetDentCache } from './dent.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
 
@@ -273,6 +276,8 @@ const IN_PLAY_MARGIN = 4;
 export function resetPierceContainment() {
   containedTips.clear();
   motionState.clear();
+  dentCuts = new Map();
+  resetDentCache();
 }
 
 // The middle of a region, cached against the points array regionPoints
@@ -393,7 +398,13 @@ function axialGap(tip, flesh, tipMiddle, tipSpread, axis) {
     surface = Math.min(surface, f.x * axis.x + f.y * axis.y);
   }
   if (!Number.isFinite(surface)) return null;
-  return surface - lead;
+  // Both numbers, not just their difference. The gap is what engagement is
+  // measured from; `surface` is WHERE along the axis the flesh's near face
+  // sits, which is the only thing that says where on the outline the dent's
+  // base belongs. Deriving it later from the gap is not possible once
+  // containment has moved the tip, so it travels with the reading that
+  // produced it.
+  return { gap: surface - lead, surface };
 }
 
 // A DISPLACEMENT NEEDS SOMEWHERE TO LIVE
@@ -430,7 +441,8 @@ export function contactOf(piercer, pierced, transforms) {
   // Off the path, or a piercer with no readable direction: report the real
   // separation, but nothing engages off a measurement that has no sign.
   const rawInPath = axial !== null;
-  const measured = rawInPath ? axial : nearestSeparation(tip, flesh);
+  const measured = rawInPath ? axial.gap : nearestSeparation(tip, flesh);
+  let surface = rawInPath ? axial.surface : null;
 
   const enter = piercer.pierceEnter;
   const end = Math.max(1, piercer.pierceEnd);
@@ -566,11 +578,12 @@ export function contactOf(piercer, pierced, transforms) {
   const shiftY = contained.y - tipMiddle.y;
   if (axis && (Math.abs(shiftX) > 1e-6 || Math.abs(shiftY) > 1e-6)) {
     const moved = tip.map((p) => ({ x: p.x + shiftX, y: p.y + shiftY }));
-    const heldGap = axialGap(moved, flesh, contained, tipSpread, axis);
-    if (heldGap !== null) {
+    const heldAxial = axialGap(moved, flesh, contained, tipSpread, axis);
+    if (heldAxial !== null) {
       inPath = true;
-      gap = heldGap;
-      depth = Math.min(end, Math.max(0, enter - heldGap));
+      gap = heldAxial.gap;
+      surface = heldAxial.surface;
+      depth = Math.min(end, Math.max(0, enter - heldAxial.gap));
     }
   }
 
@@ -594,6 +607,16 @@ export function contactOf(piercer, pierced, transforms) {
     gap,
     inPath,
     depth,
+    // Where the flesh's near face is, as a distance along the axis from the
+    // scene origin. Projecting the tip forward by (surface - tipAlong)
+    // lands exactly on the outline the piercer is going through, which is
+    // where the dent's base is centred.
+    surface,
+    // How far the pierced layer's bones are carrying it from its own rest
+    // coordinates. Every scene number above already includes this (see
+    // regionPoints); anything converting one of them back into the layer's
+    // texel grid has to take it off again.
+    carriage: pinCarriageOffset(pierced, transforms),
     // 0 at first contact, 1 at the End Point and never more, however far
     // past it the piercer is pushed.
     t: depth / end,
@@ -657,6 +680,7 @@ function activeContacts(transforms) {
 // gives way or stay sunk a frame after it lets go.
 let occlusion = new Map(); // piercer id -> the pierced part to sink beneath
 let hold = new Map();      // piercer id -> how far to hold its artwork back
+let dentCuts = new Map();  // pierced id -> its draw mask, dent texels zeroed
 let occlusionStale = true;
 let readout = [];
 
@@ -821,20 +845,28 @@ function publishOcclusion(contacts) {
   hold = held;
   torqueChanged = publishForce(contacts);
 
-  // The shape at this depth, written here rather than in the frame loop so
-  // that the renderer's own re-measure keeps it current: a frame that
-  // re-measured the contact but drew last frame's shape would lag the drag
-  // by one frame at every depth.
+  // THE DENT, BOTH HALVES OF IT, IN ONE PASS
+  //
+  // Written here rather than in the frame loop so the renderer's own
+  // re-measure keeps it current: a frame that re-measured the contact but
+  // drew last frame's shape would lag the drag by one frame at every
+  // depth.
+  //
+  // The wedge is built once and both halves come off the SAME object --
+  // the texels it takes out, and the push it gives the material around it.
+  // That is what stops them reading as two effects that happen to overlap:
+  // one depth fraction, one triangle, one rim.
+  const cuts = new Map();
   for (const { pierced, contact } of contacts) {
     if (!pierced.mesh) continue;
-    // The blend shape is solved on whatever geometry is going to DRAW it.
-    // For a morphing layer that is the subdivision, not the layer's own
-    // mesh -- and sizing the offsets to the fine grid is also what stops
-    // the coarse path adding them a second time (see pierceOffsets).
-    const target = pierceMorphMesh(pierced) || pierced.mesh;
-    const entry = pierceStateFor(pierced.id, target.vertices.length);
-    writeMorph(target, pierced, contact, entry.offsetX, entry.offsetY);
+    const tri = dentFor(pierced, contact);
+    const entry = pierceStateFor(pierced.id, pierced.mesh.vertices.length);
+    const pins = pierced.pins.size > 0 ? pinInfluence(pierced.mesh, pierced) : null;
+    writeBunch(pierced.mesh, pierced, tri, entry.offsetX, entry.offsetY, pins);
+    const mask = dentCutMask(pierced, tri);
+    if (mask) cuts.set(pierced.id, mask);
   }
+  dentCuts = cuts;
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
   // second measurement that could disagree with it.
@@ -846,9 +878,9 @@ function publishOcclusion(contacts) {
     enter: contact ? contact.piercer.pierceEnter : null,
     end: contact ? contact.end : null,
     depth: contact ? contact.depth : 0,
-    // The blend fraction: 0 is the rest shape, 1 the entered one. Worth
-    // reporting now that it IS the shape rather than a scale factor on a
-    // push.
+    // The dent fraction: 0 is no notch at all, 1 the full configured
+    // Depth and Width. Worth reporting because it IS the wedge's size
+    // rather than a scale factor on a push.
     t: contact ? contact.t : 0,
     engaged: Boolean(contact && contact.engaged),
     sunk: Boolean(contact && next.has(contact.piercer.id)),
@@ -904,6 +936,25 @@ export function pierceHold() {
   return hold;
 }
 
+// The dent's cut, as a draw mask per pierced layer: one byte per source
+// texel, zero where the wedge has taken the artwork out. Empty for every
+// layer not currently dented, which is the normal case.
+export function pierceDentCuts() {
+  pierceOcclusion();
+  return dentCuts;
+}
+
+// The wedge itself, for tests and for the on-canvas overlay -- the same
+// object the cut and the bunching are both built from.
+export function pierceDentOf(part) {
+  pierceOcclusion();
+  const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
+  for (const { pierced, contact } of activeContacts(transforms)) {
+    if (pierced.id === part.id) return dentFor(pierced, contact);
+  }
+  return null;
+}
+
 // One byte per source texel, splitting a layer's artwork into its painted
 // region and everything else. Cached against the region version, so
 // painting rebuilds them and a frame never does.
@@ -954,14 +1005,6 @@ const OVERLAY_DEFORM = [255, 176, 46, 190];
 // is not a degree of anything -- it is solid or it is not -- so it reads
 // as the most opaque of the four.
 const OVERLAY_BARRIER = [236, 238, 248, 215];
-// The Entered silhouette, in the painter's violet. Only the texels it adds
-// beyond the rest shape are tinted, deliberately: the question this answers
-// is "is the shape I drew actually different, and which way does it go?",
-// and filling the whole silhouette would paint over the cyan/amber split
-// that the rest of the overlay exists to show. So violet reads as "the
-// outline reaches out to here at full depth", and a pierceable texel with
-// no violet beside it is one the outline pulls in from.
-const OVERLAY_ENTERED = [178, 122, 255, 195];
 
 let overlayOn = false;
 const overlayCache = new Map();
@@ -980,11 +1023,10 @@ export function setPierceOverlay(on) {
 // the texels it is describing.
 export function pierceOverlayTexture(part) {
   if (!part) return null;
-  if (part.pierceRegion.size === 0 && part.pierceBarrierRegion.size === 0
-    && part.pierceEnteredRegion.size === 0) return null;
+  if (part.pierceRegion.size === 0 && part.pierceBarrierRegion.size === 0) return null;
   const size = part.naturalWidth * part.naturalHeight;
   const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}:` +
-    `${part.pierceBarrierRegionVersion || 0}:${part.pierceEnteredRegionVersion || 0}`;
+    `${part.pierceBarrierRegionVersion || 0}`;
   const cached = overlayCache.get(part.id);
   if (cached && cached.version === version && cached.role === part.pierceRole && cached.pixels.length === size * 4) {
     return cached.pixels;
@@ -992,31 +1034,27 @@ export function pierceOverlayTexture(part) {
 
   const base = part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA;
   const walls = part.isPiercer ? null : part.pierceBarrierRegion;
-  const entered = part.isPiercer ? null : part.pierceEnteredRegion;
-  // An unpainted deformable mask means the whole pierceable area gives
-  // way, so it is all drawn as deformable -- the overlay says what will
-  // actually happen, not what has been painted.
-  const softAll = !part.isPiercer && part.pierceDeformRegion.size === 0;
+  // Deformable no longer means "gives way" and an empty one no longer
+  // means "all of it". It is the material that BUNCHES around the dent,
+  // and painting none of it asks for none -- so amber is drawn where the
+  // artist actually painted, and nowhere else. An all-cyan pierceable area
+  // is now a true report: pierceable, with nothing set to react.
   const pixels = new Uint8ClampedArray(size * 4);
   // Walls are drawn even where they sit outside the pierceable area: a
   // wall's whole job is to be somewhere the tip must not reach, and that
   // is often just beyond the cavity's edge.
-  const extra = [];
-  if (walls && walls.size > 0) extra.push(walls);
-  if (entered && entered.size > 0) extra.push(entered);
-  const marked = extra.length > 0
-    ? new Set([...part.pierceRegion, ...extra.flatMap((set) => [...set])])
+  const marked = walls && walls.size > 0
+    ? new Set([...part.pierceRegion, ...walls])
     : part.pierceRegion;
   for (const index of marked) {
     if (index < 0 || index >= size) continue;
     const wall = walls && walls.has(index);
-    const grew = !wall && entered && entered.has(index) && !part.pierceRegion.has(index);
-    const soft = !wall && !grew && !part.isPiercer
-      && part.pierceRegion.has(index) && (softAll || part.pierceDeformRegion.has(index));
-    if (!wall && !grew && !part.pierceRegion.has(index)) continue;
+    const soft = !wall && !part.isPiercer
+      && part.pierceRegion.has(index) && part.pierceDeformRegion.has(index);
+    if (!wall && !part.pierceRegion.has(index)) continue;
     const [r, g, b, a] = wall
       ? OVERLAY_BARRIER
-      : (grew ? OVERLAY_ENTERED : (soft ? OVERLAY_DEFORM : base));
+      : (soft ? OVERLAY_DEFORM : base);
     const o = index * 4;
     pixels[o] = r;
     pixels[o + 1] = g;
@@ -1030,387 +1068,27 @@ export function pierceOverlayTexture(part) {
 // ---------------------------------------------------------------------------
 // The shape at this depth
 
-// Which vertices may move at all: 1 on painted deformable artwork, easing
-// to 0 about a mesh cell outside it. The same shape of field pins use, and
-// for the same reason -- a hard edge between "may move" and "may not"
-// would crease the surface exactly at the boundary of the painted area.
-function regionInfluence(mesh, part) {
-  // The entered version belongs in this key now: what the artist drew as
-  // different is part of what may move (see below), so redrawing the
-  // Entered shape changes this field.
-  const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}:` +
-    `${part.pierceEnteredRegionVersion || 0}`;
-  if (mesh._pierceInfluence && mesh._pierceInfluenceVersion === version) {
-    return mesh._pierceInfluence;
-  }
-
-  const width = part.naturalWidth;
-  const height = part.naturalHeight;
-  const cellW = width / Math.max(1, mesh.cols);
-  const cellH = height / Math.max(1, mesh.rows);
-  // The softening distance is a property of the ARTWORK, not of how many
-  // vertices happen to be describing it. It reads as one cell of the
-  // layer's OWN mesh -- which is what it always was, and why `factor` is
-  // multiplied back in here: a morphing layer is solved on a subdivision,
-  // and taking one of ITS cells would quietly shrink this by the
-  // subdivision factor. When that happened it did exactly what the comment
-  // above warns of: the gradient at the edge of the painted area went four
-  // times sharper, the artwork just outside it was stretched, and the
-  // silhouette showed a one-pixel notch where the stretch reached past the
-  // edge of anything drawn.
-  const factor = mesh.factor || 1;
-  const radius = Math.max(1, Math.max(cellW, cellH) * factor);
-
-  // WHICH PIXELS MAY MOVE -- not which may be touched.
-  //
-  // Contact is decided by pierceRegion, over in contactOf(). This field is
-  // the separate question of what gives way once contact has happened, and
-  // it reads the DEFORMABLE mask: the pierceable pixels the user has said
-  // may actually shift. Everything else pierceable still registers the
-  // contact, still swaps the z-order, still reports its depth -- it simply
-  // does not move, which is what a firm edge inside soft tissue looks like.
-  //
-  // An unpainted deformable mask means the whole pierceable area gives way,
-  // which is how this behaved before the mask existed. The intersection is
-  // taken rather than trusting the mask alone, so a stray mark outside the
-  // pierceable area cannot make something deform that can never be touched.
-  const deformable = part.pierceDeformRegion && part.pierceDeformRegion.size > 0
-    ? [...part.pierceDeformRegion].filter((index) => part.pierceRegion.has(index))
-    : part.pierceRegion;
-
-  // Painted texels collapse to the cells they sit in, exactly as pins do:
-  // a mesh can only express what its vertices can, and this also caps the
-  // work at cols x rows however many thousands of pixels were painted.
-  const cells = new Set();
-  for (const index of deformable) {
-    const cu = Math.min(mesh.cols - 1, Math.floor((index % width) / cellW));
-    const cv = Math.min(mesh.rows - 1, Math.floor(Math.floor(index / width) / cellH));
-    cells.add(cv * mesh.cols + cu);
-  }
-  const marked = [...cells].map((c) => {
-    const cu = c % mesh.cols;
-    const cv = Math.floor(c / mesh.cols);
-    return [cu * cellW, cv * cellH, (cu + 1) * cellW, (cv + 1) * cellH];
-  });
-
-  const at = (u, v) => {
-    let nearest = Infinity;
-    for (const [x0, y0, x1, y1] of marked) {
-      const dx = Math.max(x0 - u, 0, u - x1);
-      const dy = Math.max(y0 - v, 0, v - y1);
-      const d = Math.hypot(dx, dy);
-      if (d < nearest) nearest = d;
-      if (nearest === 0) break;
-    }
-    if (nearest === Infinity) return 0;
-    const k = Math.max(0, Math.min(1, 1 - nearest / radius));
-    return k * k * (3 - 2 * k); // smoothstep: no crease at either end
-  };
-
-  const influence = mesh.vertices.map((vertex) => at(
-    vertex.restLocal.x + width / 2, vertex.restLocal.y + height / 2
-  ));
-  // The same field, sampled anywhere rather than only at vertices -- the
-  // outline needs it too (see morphFor).
-  influence.at = at;
-
-  mesh._pierceInfluence = influence;
-  mesh._pierceInfluenceVersion = version;
-  return influence;
-}
-
-// THE TWO DRAWN OUTLINES, AND EVERY VERTEX'S PLACE BETWEEN THEM
-//
-// Tracing the masks and solving the mean value coordinates is the only
-// expensive part of this, and none of it depends on depth -- so it is done
-// once per painted change and kept. What a frame does is the cheap half:
-// blend two point lists and evaluate weights that are already solved.
-const morphCache = new Map();
-
-// A painted shape has to be one piece to have an outline. Below this much
-// of it in a single blob it is two pieces or more, and there is no honest
-// one-to-one pairing to blend along. A speck of overspray is far above it.
-const MIN_COVERAGE = 0.9;
-
-// How much of each other the two drawn shapes must be, for one to be a
-// believable redrawing of the other. A notch cut out of a silhouette
-// measures 0.93 and a bulge added 0.96; a band brushed in beside it, 0.18.
-// Half leaves room for a drastic redraw and still catches a patch.
-const MIN_SILHOUETTE_OVERLAP = 0.5;
-
-// How much of the drawn difference has to sit on deformable artwork before
-// the drawing is taken to be doing anything at all. A tenth is generous --
-// it allows a change that straddles the edge of a firm area -- while a
-// change drawn entirely on firm artwork lands at zero and is reported.
-const MIN_DRAWN_CHANGE_MOVABLE = 0.1;
-
-function intersectionSize(a, b) {
-  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-  let n = 0;
-  for (const index of small) if (large.has(index)) n++;
-  return n;
-}
-
-// Why a pierced layer is not morphing, in the user's terms -- null when it
-// is, or when it has simply not been given a second shape yet. The painter
-// and the Pierce window both say this out loud, because a drawing that is
-// quietly ignored is worse than one that is refused.
-export function pierceMorphIssue(part) {
-  if (!part || !part.isPierced || part.pierceEnteredRegion.size === 0) return null;
-  const w = part.naturalWidth;
-  const h = part.naturalHeight;
-  if (part.pierceRegion.size === 0) return 'no pierceable shape to blend from';
-  if (blobCoverage(part.pierceRegion, w, h) < MIN_COVERAGE) {
-    return 'the pierceable shape is painted in separate pieces';
-  }
-  if (blobCoverage(part.pierceEnteredRegion, w, h) < MIN_COVERAGE) {
-    return 'the entered shape is cut into separate pieces';
-  }
-
-  // A PATCH IS NOT A SILHOUETTE
-  //
-  // The Entered target sits in a row of brushes that all paint masks, so
-  // it gets used like one: a band brushed in where the tip arrives. That
-  // stores perfectly, and then the blend traces its outline -- a 51-texel
-  // perimeter centred 14 texels away from the pierceable shape's 121 --
-  // and pairs the two point for point. Nothing about that is an opening at
-  // the tip. It is the whole region lurching somewhere else, which is what
-  // "the deformation is inverse to where I drew" looks like from outside.
-  //
-  // Measured on that scene: a redrawn silhouette with a notch cut overlaps
-  // the pierceable shape 0.93; the same shape plus a bulge, 0.96; a band
-  // brushed in near the tip, 0.18. So the two are told apart by how much
-  // of one shape the other actually is, and the refusal names the remedy
-  // rather than just the fault.
-  // A DRAWING THE DEFORMABLE MASK WILL NOT LET HAPPEN
-  //
-  // The two masks decide different things and can contradict each other:
-  // the Entered shape says WHAT changes, the Deformable mask says WHICH
-  // artwork may move. Drawing the change on artwork marked firm is a real
-  // and deliberate combination -- a firm edge inside soft tissue holds even
-  // where the tip arrives -- but it is indistinguishable, from outside,
-  // from the feature being broken: the drawing is stored, the contact
-  // registers, and nothing on the canvas moves. So it is said out loud.
-  if (part.pierceDeformRegion.size > 0) {
-    let drawn = 0;
-    let movable = 0;
-    for (const index of part.pierceRegion) {
-      if (part.pierceEnteredRegion.has(index)) continue;
-      drawn++;
-      if (part.pierceDeformRegion.has(index)) movable++;
-    }
-    for (const index of part.pierceEnteredRegion) {
-      if (part.pierceRegion.has(index)) continue;
-      drawn++;
-      if (part.pierceDeformRegion.has(index)) movable++;
-    }
-    if (drawn > 0 && movable / drawn < MIN_DRAWN_CHANGE_MOVABLE) {
-      return 'the shape you drew changes in an area marked NOT deformable, ' +
-        'so nothing will move there — paint that area Deformable, or draw the ' +
-        'change where the Deformable mask already is';
-    }
-  }
-
-  const shared = intersectionSize(part.pierceRegion, part.pierceEnteredRegion);
-  const union = part.pierceRegion.size + part.pierceEnteredRegion.size - shared;
-  const overlap = union > 0 ? shared / union : 0;
-  if (overlap < MIN_SILHOUETTE_OVERLAP) {
-    return `the Entered shape overlaps the pierceable one by only ` +
-      `${Math.round(overlap * 100)}% — it looks like a patch rather than the ` +
-      'whole shape drawn again. Clear it and reopen the Entered target to ' +
-      'start from a copy of the pierceable shape, then edit that';
+// A dent needs somewhere to be cut from. Everything else about the two
+// numbers is a legitimate setting -- a depth or a width of zero is simply
+// "this layer registers contact without giving way" -- so this reports the
+// one combination that is configured to do something and then cannot.
+export function pierceDentIssue(part) {
+  if (!part || !part.isPierced) return null;
+  if (!(part.pierceDentDepth > 0) || !(part.pierceDentWidth > 0)) return null;
+  if (part.pierceRegion.size === 0) {
+    return 'a dent is configured but no Pierceable area is painted, so there ' +
+      'is nothing for it to be cut out of';
   }
   return null;
 }
 
-// HOW FINE THE GEOMETRY HAS TO BE
-//
-// A blend shape is only as good as the mesh it is drawn through, and a
-// layer's mesh is sized for bone skinning rather than for this. Measured
-// on a 48x48 layer whose Entered shape chamfers its corners by 4 texels,
-// rendering the full-depth shape and comparing it to the drawn one:
-//
-//   texels per cell    8      6      4      3      2     1.5
-//   pixels off drawn  11     10      9      6      5       1
-//   pixels off rest    9     16     15     20     17      19
-//
-// At the shipped density (8 texels a cell here, and TWENTY on a 200x200
-// layer, because the density cap makes bigger artwork coarser) the result
-// sits closer to the shape it was supposed to be leaving than to the one
-// it was asked to reach. Around two texels a cell it lands on the drawn
-// shape. So that is the target, and it is expressed in texels rather than
-// in cells precisely because the failure got worse as the artwork got
-// bigger.
-const MORPH_TEXELS_PER_CELL = 2;
-
-// A ceiling on the fine grid, so a very large layer degrades to a coarser
-// morph rather than to a stall. Measured on a 200x200 layer at 10201 fine
-// vertices: 0.2 ms a frame to draw, 0.9 ms to re-solve after a paint edit.
-const MORPH_MAX_VERTICES = 12000;
-
-const morphMeshCache = new Map();
-
-// A POWER OF TWO, and not for tidiness: it is what makes the subdivision
-// exact. A fine vertex sits at a fraction s of the way across its coarse
-// cell, and its position is that fraction blended between the cell's
-// corners -- which are whole numbers, because the renderer snaps them. A
-// power-of-two split makes every such fraction a binary one (a half, a
-// quarter) and the blend lands on an exact value. Split a cell in three
-// instead and s is a third, which binary floating point cannot hold, and
-// the sub-triangle's corners sit a hair off the parent's plane. Measured
-// on a posed, bound layer: a threefold split moved 13 pixels that nothing
-// had asked to move -- a one-texel wobble along the silhouette, in artwork
-// meant to be pixel-exact. A fourfold split moves none.
-function morphFactor(part, mesh) {
-  const widest = Math.max(part.naturalWidth / mesh.cols, part.naturalHeight / mesh.rows);
-  let k = 1;
-  // Double until the cells are fine enough, or until the next doubling
-  // would cost more vertices than the budget allows -- a very large layer
-  // gets a coarser morph rather than a stall.
-  while (widest > MORPH_TEXELS_PER_CELL * k
-    && (mesh.cols * k * 2 + 1) * (mesh.rows * k * 2 + 1) <= MORPH_MAX_VERTICES) k *= 2;
-  return k;
-}
-
-// The subdivided grid a morphing layer is solved and drawn through, or
-// null when there is nothing to morph (no second shape painted, a shape
-// in pieces) or the mesh is already fine enough to carry it.
-export function pierceMorphMesh(part) {
-  if (!part || !part.isPierced || !part.mesh) return null;
-  if (part.pierceRegion.size === 0 || part.pierceEnteredRegion.size === 0) return null;
-  if (pierceMorphIssue(part) !== null) return null;
-
-  const mesh = part.mesh;
-  const factor = morphFactor(part, mesh);
-  if (factor <= 1) return null;
-  const version = `${mesh.cols}x${mesh.rows}:${mesh.vertices.length}:${factor}`;
-  const cached = morphMeshCache.get(part.id);
-  if (cached && cached.version === version) return cached.fine;
-
-  const fine = subdivideMesh(part, mesh, factor);
-  morphMeshCache.set(part.id, { version, fine });
-  return fine;
-}
-
-function morphFor(part, mesh) {
-  // The deform version belongs here because the weights below are solved
-  // only where the influence field is non-zero. Leave it out and repainting
-  // the Deformable mask leaves stale weights: the newly deformable vertices
-  // have none, so they never move however the mask says they may.
-  const version = `${part.pierceRegionVersion || 0}:${part.pierceEnteredRegionVersion || 0}:` +
-    `${part.pierceDeformRegionVersion || 0}:${mesh.vertices.length}`;
-  const cached = morphCache.get(part.id);
-  if (cached && cached.version === version) return cached.data;
-
-  let data = null;
-  // No entered shape means nothing to blend toward, so the region simply
-  // keeps its rest shape. That is a state the user has not finished
-  // configuring, not an error.
-  if (part.pierceRegion.size > 0 && part.pierceEnteredRegion.size > 0
-    && pierceMorphIssue(part) === null) {
-    const rest = outlineOf(part.pierceRegion, part.naturalWidth, part.naturalHeight);
-    const drawn = outlineOf(part.pierceEnteredRegion, part.naturalWidth, part.naturalHeight);
-    if (rest.length > 0 && rest.length === drawn.length) {
-      // Two steps, and they do different jobs: alignOutline fixes the
-      // gross cyclic offset between two independent traces, and
-      // correspondOutlines then pins the stretches where the drawings
-      // coincide so that an edge the artist left alone does not drift.
-      const entered = correspondOutlines(rest, alignOutline(rest, drawn));
-      const halfW = part.naturalWidth / 2;
-      const halfH = part.naturalHeight / 2;
-      // Only the vertices that can actually move get weights. On a fine
-      // grid that is a small fraction of them, and the ones left out are
-      // the ones writeMorph skips anyway -- which is what keeps a
-      // subdivided layer's memory and solve time in proportion to the
-      // painted region rather than to the whole layer.
-      const influence = regionInfluence(mesh, part);
-      // In the layer's own texel space, which is where both outlines live
-      // and the one space that does not move when the layer does.
-      const weights = mesh.vertices.map((vertex, i) => (influence[i] > 0
-        ? meanValueWeights({ x: vertex.restLocal.x + halfW, y: vertex.restLocal.y + halfH }, rest)
-        : null));
-      // Where each vertex sits on the REST outline never changes, so it is
-      // solved once here rather than re-evaluated on every frame of every
-      // contact.
-      const restAt = weights.map((w) => (w ? evaluateWeights(w, rest) : null));
-
-      // GATE THE OUTLINE, NOT ONLY THE VERTICES
-      //
-      // The per-vertex mask decides which artwork may END UP moved. On its
-      // own that is not enough, because mean value coordinates are a
-      // GLOBAL interpolation: move a few outline points and every interior
-      // point shifts a little, decaying with distance. So a notch drawn on
-      // firm artwork was cancelled where it was drawn -- correctly, that is
-      // the firm-edge feature -- while its leaked, much smaller motion
-      // survived wherever the mask did allow movement. The change did not
-      // disappear; it RELOCATED, which is what "it doesn't happen where it
-      // should, it happens up" is.
-      //
-      // Gating each outline point by the field at its own rest position
-      // fixes the source rather than the symptom: travel that is not
-      // allowed is never put into the outline, so there is nothing to leak.
-      // A change drawn on firm artwork now collapses everywhere, and one
-      // drawn on soft artwork lands exactly where it was drawn.
-      const gate = new Float64Array(rest.length);
-      for (let i = 0; i < rest.length; i++) gate[i] = influence.at(rest[i].x, rest[i].y);
-      data = { rest, entered, weights, restAt, gate };
-    }
-  }
-  morphCache.set(part.id, { version, data });
-  return data;
-}
-
-// Every vertex's offset at this contact's depth: where the blended outline
-// puts it, against where the rest outline did. Nothing here is integrated
-// or springs anywhere -- the shape IS the depth, so a given depth always
-// looks the same and there is no state to get out of step.
-function writeMorph(mesh, part, contact, offsetX, offsetY) {
-  const morph = morphFor(part, mesh);
-  if (!morph) {
-    offsetX.fill(0);
-    offsetY.fill(0);
-    return;
-  }
-
-  const influence = regionInfluence(mesh, part);
-  const pins = part.pins.size > 0 ? pinInfluence(mesh, part) : null;
-  const t = contact ? contact.t : 0;
-  const shape = new Array(morph.rest.length);
-  for (let i = 0; i < shape.length; i++) {
-    const k = t * morph.gate[i];
-    shape[i] = {
-      x: morph.rest[i].x + (morph.entered[i].x - morph.rest[i].x) * k,
-      y: morph.rest[i].y + (morph.entered[i].y - morph.rest[i].y) * k,
-    };
-  }
-  // Texel space to scene space: the layer's integer scale, then its
-  // rotation. The offsets are added to bone-skinned positions, which are
-  // already in scene space.
-  const cos = Math.cos(part.rotation) * part.scale;
-  const sin = Math.sin(part.rotation) * part.scale;
-
-  for (let i = 0; i < mesh.vertices.length; i++) {
-    const region = influence[i];
-    const pinned = pins ? pins[i] : 0;
-    const share = region * (1 - pinned);
-    if (share <= 0) {
-      offsetX[i] = 0;
-      offsetY[i] = 0;
-      continue;
-    }
-    const weights = morph.weights[i];
-    if (!weights) {
-      offsetX[i] = 0;
-      offsetY[i] = 0;
-      continue;
-    }
-    const moved = evaluateWeights(weights, shape);
-    const rest = morph.restAt[i];
-    const dx = (moved.x - rest.x) * share;
-    const dy = (moved.y - rest.y) * share;
-    offsetX[i] = dx * cos - dy * sin;
-    offsetY[i] = dx * sin + dy * cos;
-  }
+// What the dent currently is, for this layer, given its contact. Rebuilt
+// every frame from the live depth fraction -- the wedge IS the depth, so
+// there is no state to hold and nothing to get out of step.
+function dentFor(pierced, contact) {
+  if (!contact || !contact.engaged) return null;
+  if (pierceDentIssue(pierced) !== null) return null;
+  return dentTriangle(pierced, contact);
 }
 
 // ---------------------------------------------------------------------------

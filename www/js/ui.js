@@ -30,7 +30,7 @@ import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
-import { pierceOverlayEnabled, setPierceOverlay, pierceMorphIssue } from './pierce.js';
+import { pierceOverlayEnabled, setPierceOverlay, pierceDentIssue, markPierceStale } from './pierce.js';
 import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
 import { encodeGif, describeGif } from './gif.js';
@@ -145,6 +145,8 @@ function cacheElements() {
     'pierceRolePiercedBtn', 'pierceRoleHint', 'pierceDepthSummary',
     'piercePhysicsRow', 'piercePhysicsPiercerBtn', 'piercePhysicsPiercedBtn',
     'piercePhysicsBothBtn', 'piercePhysicsHint',
+    'pierceDentRow', 'pierceDentDepthSlider', 'pierceDentDepthValue',
+    'pierceDentWidthSlider', 'pierceDentWidthValue',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
@@ -1331,6 +1333,17 @@ function renderPierceModal() {
     els.piercePhysicsBothBtn.setAttribute('aria-pressed', String(physics === PiercePhysics.BOTH));
     els.piercePhysicsHint.textContent = PIERCE_PHYSICS_HINTS[physics];
   }
+  // The dent's two numbers belong to the PIERCED side: they describe the
+  // notch cut into this layer, which is a property of the material rather
+  // than of whatever goes into it.
+  els.pierceDentRow.hidden = !part.isPierced;
+  if (part.isPierced) {
+    els.pierceDentDepthSlider.value = String(part.pierceDentDepth);
+    els.pierceDentWidthSlider.value = String(part.pierceDentWidth);
+    els.pierceDentDepthValue.textContent = `${part.pierceDentDepth} px`;
+    els.pierceDentWidthValue.textContent = `${part.pierceDentWidth} px`;
+  }
+
   if (part.isPiercer) {
     els.pierceDepthReadout.textContent =
       `Enter ${part.pierceEnter} px · End ${part.pierceEnd} px — contact starts ` +
@@ -1339,32 +1352,25 @@ function renderPierceModal() {
 
   const painted = part.pierceRegion.size;
   els.piercePaintBtn.hidden = !part.hasPierceRole;
-  // On an pierced layer the second number is the one that decides how
-  // much of that area actually gives way, and "all" is what an unpainted
-  // deformable mask means -- worth saying, because a blank count there
-  // would read as "nothing will move".
   const walls = part.pierceBarrierRegion.size;
-  // The entered count decides whether anything will change shape at all.
-  // It used to be named only once it existed, on the reasoning that a
-  // layer without one is a legitimate setup rather than a missing step --
-  // which is true, and was still the wrong call. A pierced layer with
-  // roles set, depths set and its area painted looks completely configured
-  // and does not change shape by one pixel, and nothing on screen said
-  // why. So the absence is now stated as plainly as the presence: not a
-  // warning, because nothing is broken, but the sentence that turns
-  // "it isn't working" into "ah, I haven't drawn the other one yet".
-  const entered = part.pierceEnteredRegion.size;
+  // The bunching count is stated whether or not it exists. A pierced layer
+  // with roles set, depths set and its area painted is completely
+  // configured for a NOTCH -- the dent cuts with or without it -- but the
+  // material around it will sit dead still, and nothing else on screen
+  // would say why. Not a warning, because nothing is broken; just the
+  // sentence that turns "the edges aren't reacting" into "ah, I haven't
+  // painted which ones should".
+  const bunch = part.pierceDeformRegion.size;
   const soft = part.isPierced
-    ? ` · ${part.pierceDeformRegion.size || 'all'} deformable${walls ? ` · ${walls} wall` : ''}` +
-      `${entered ? ` · ${entered} entered` : ''}`
+    ? ` · ${bunch || 'no'} bunching${walls ? ` · ${walls} wall` : ''}`
     : '';
-  const issue = pierceMorphIssue(part);
-  const noShape = part.isPierced && painted > 0 && entered === 0;
+  const issue = pierceDentIssue(part);
+  const noBunch = part.isPierced && painted > 0 && bunch === 0;
   els.piercePaintBtn.textContent = issue
-    ? `Paint regions… (⚠ not blending — ${issue})`
+    ? `Paint regions… (⚠ no dent — ${issue})`
     : (painted
-      ? `Paint regions… (${painted} px marked${soft})${noShape
-        ? ' — no Entered shape drawn yet, so it keeps its rest shape'
+      ? `Paint regions… (${painted} px marked${soft})${noBunch
+        ? ' — nothing painted Deformable, so the notch cuts but the edges stay put'
         : ''}`
       : 'Paint regions…');
   els.pierceOverlayBtn.setAttribute('aria-pressed', String(pierceOverlayEnabled()));
@@ -1383,7 +1389,7 @@ function togglePierceOverlay() {
   renderPierceModal();
   canvasEngine.requestRender();
   showToast(on
-    ? 'Painted regions are tinted on the canvas — pink tip, cyan pierceable.'
+    ? 'Painted regions are tinted on the canvas — pink tip, cyan pierceable, amber bunching.'
     : 'Region tinting is off.');
 }
 
@@ -2534,6 +2540,29 @@ function bindEvents() {
       if (!part) return;
       history.run('Set physics direction', () => partsStore.setPiercePhysics(part.id, physics));
       renderPierceModal();
+    });
+  }
+  // Live while dragging, so the notch on the canvas is the one the finger
+  // is currently asking for -- the number alone says very little about how
+  // a wedge that size reads on this particular artwork. One undo step per
+  // drag rather than one per pixel of slider travel, the same treatment
+  // every other continuous control here gets.
+  for (const [slider, readout] of [
+    [els.pierceDentDepthSlider, els.pierceDentDepthValue],
+    [els.pierceDentWidthSlider, els.pierceDentWidthValue],
+  ]) {
+    attachContinuousHistory(slider, 'Change dent shape');
+    slider.addEventListener('input', () => {
+      const part = piercePart();
+      if (!part) return;
+      readout.textContent = `${slider.value} px`;
+      partsStore.setPierceDent(
+        part.id,
+        Number(els.pierceDentDepthSlider.value),
+        Number(els.pierceDentWidthSlider.value)
+      );
+      markPierceStale();
+      canvasEngine.requestRender();
     });
   }
   els.pierceOverlayBtn.addEventListener('click', togglePierceOverlay);

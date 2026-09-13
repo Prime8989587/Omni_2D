@@ -1707,34 +1707,45 @@ They are now two independently painted masks on the pierced layer:
 
 | Mask | Decides |
 | --- | --- |
-| **Pierceable** | where contact is detected at all — the Enter state, the z-order swap, the depth reading |
-| **Deformable** | which of those pixels are then allowed to displace |
+| **Pierceable** | where contact is detected at all — the Enter state, the z-order swap, the depth reading, and the only place the notch may cut |
+| **Deformable** | which pixels **bunch up** around that notch, pushing outward as it opens |
 
 A pierceable pixel that is *not* deformable registers the contact
 completely — the tip still sinks beneath the surface, the depth still
-reads, the solver still reports it engaged — and simply does not move. That
-is what a firm edge inside soft tissue looks like: bone under flesh, a
-buckle under a belt, a fingernail at the end of a finger.
+reads, the solver still reports it engaged, and the notch still cuts — and
+simply does not move. That is what a firm edge inside soft tissue looks
+like: bone under flesh, a buckle under a belt, a fingernail at the end of a
+finger.
 
-**An unpainted deformable mask means all of it gives way**, which is
-exactly how this behaved before the mask existed, so no existing project
-changes behaviour by being opened in a build that has it. The mask only
-ever takes movement away. The solver intersects it with the pierceable
-mask rather than trusting it alone, so a stray mark somewhere that can
-never be touched cannot make anything deform.
+**The mask's meaning was inverted by the dent rework, and so was its
+default.** It used to mean *which pixels may give way*, with an unpainted
+mask meaning all of them. It now means *which pixels gather around the
+dent*, with an unpainted mask meaning **none** of them. That is the right
+way round for what it now does: bunching is an effect you ask for on the
+pixels you want it on, not one every pierceable pixel gets until told
+otherwise. Anyone who learned the old meaning would read the same button
+and get the opposite answer, so the painter's hint line, the ⓘ popover and
+the Pierce window's own summary all state both halves outright rather than
+leaving it to be discovered.
 
-It is painted in the same window as the others, as one of five targets —
-Tip, Pierceable, Deformable, Barrier, Entered — with the same brush and the
-same stroke undo.
+A project saved under the old meaning is **not** migrated into a Depth and a
+Width: those numbers cannot be recovered from a freehand outline without
+inventing them, and inventing them would silently give an old project a
+dent nobody configured. It opens with the defaults, and the two sliders are
+then the whole setup.
+
+It is painted in the same window as the others, as one of four targets —
+Tip, Pierceable, Deformable, Barrier — with the same brush and the same
+stroke undo.
 
 **On a report that this mask was stored but not respected:** not
 reproducible. Traced through the actual deformation path and measured
 every way it could be set — the real brush in the painter as well as the
 store directly, patches from 6×6 px up to the full region, on a 32 px
-layer and a 96 px one, and through a save/load round trip. Displacement
+layer and a 96 px one, and through a save/load round trip. The bunching
 reads the mask in all of them: a sub-region painted where the tip arrives
-gives way at 15.0 px, and the same pixels left unpainted hold at 0.000 px
-while still registering contact. There is one real limit behind it, and it
+gathers, and the same pixels left unpainted hold at 0.000 px while still
+registering contact. There is one real limit behind it, and it
 is resolution rather than wiring: the mask is expressed through mesh cells,
 and a pierced layer that was never bound gets an auto-generated mesh
 6–10 cells across whatever its size — 12 px cells on a 96 px layer. A mask
@@ -1743,10 +1754,12 @@ cyan, so the split is visible at a glance: cyan is where a pierce
 registers, amber is where it actually moves something.
 
 Measured with the deformable mask painted away from where the tip arrives:
-the arriving pixels displaced **0.005 px** and rendered at row 431 — their
-exact rest position — while the same pixels with the mask painted over
-them displaced 15.36 px and rendered at row 371. Contact stayed engaged at
-full depth and the z-order swap still fired in both cases.
+the arriving pixels displaced **0.000 px** and rendered at row 431 — their
+exact rest position — while the same pixels with the mask painted over them
+displaced 2.68 px and rendered at row 421. Contact stayed engaged at full
+depth and the z-order swap still fired in both cases. With **nothing at all**
+painted Deformable the notch still cut its 42 texels and nothing moved,
+which is the two promises being separate.
 
 ### Walls: containing the tip sideways
 
@@ -1907,430 +1920,218 @@ only the sprite put the End handle 62 px below the bottom edge of a
 480×300 canvas for a needle pointing down, where it could be neither seen
 nor dragged.
 
-### Two drawn shapes, not a push
+### A wedge, not two drawn shapes
 
-The shape of a pierce is **drawn, not simulated**. A pierceable region has
-two outlines: **Rest**, which is the pierceable shape already painted, and
-**Entered**, a second shape painted in the same window. What renders at any
-moment is a blend between them, and depth chooses the mix:
+The shape of a pierce is a **notch, stated as two numbers**. On the pierced
+layer the artist sets a **Depth** and a **Width**, in that layer's own
+pixels, and the app builds a triangle at the contact point every frame:
+
+```
+        base, WIDTH across the surface
+     b1 ------------------ b2        <- the region's outline
+         \              /
+          \            /             <- the notch, cut out of the artwork
+           \          /
+            \        /   DEPTH along the approach
+             \      /
+              \    /
+               apex                  <- pointing inward, down the axis
+```
+
+The base is centred where the piercer's axis crosses the pierceable
+region's surface; the apex is driven inward along that same axis. Both
+dimensions are multiplied by the depth fraction:
 
 ```
 t = depth / End                      0 at first touch, 1 at the limit
-shape(k) = rest(k) + t * (entered(k) - rest(k))       for every outline point k
+half-width = Width * t / 2           reach-in = Depth * t
 ```
 
-That is morph-target interpolation — the same thing a blend shape is
-anywhere else — and it is why the result cannot tear. Both outlines are
-things a person drew, every intermediate is a straight line between a pair
-of drawn points, and there is no force anywhere to overshoot, oscillate or
-diverge. At `t = 0.5` the silhouette is the exact midpoint of the two
-drawings, measured: **8.92 px** of movement against **17.84 px** at `t = 1`.
+So at the Enter point the wedge has zero size, and it grows continuously to
+the configured Depth × Width at the End point. Measured over a full sweep
+with a 10 × 16 dent and a 1 scene px drag step: the wedge's depth advances
+**0.625 texels per step with no step larger than that**, and the cut area
+advances on **13 of 15 growth steps** — the two that do not are texel
+quantisation on a wedge one texel wide, not a stage. Past End it holds at
+full size rather than growing on.
 
-**What it replaced, and why.** Until now each vertex near the tip was given
-a spring target pushing it away from the contact point, and its offset
-sprang toward that target. Every vertex solved its own little problem
-independently, so neighbouring vertices could disagree about where the
-surface was — which is what produced a jagged, torn-looking silhouette over
-a wide area, rather than a shape. No amount of stiffness or damping fixes
-that, because it is not a tuning problem: a per-vertex push has no notion
-of the outline it is supposed to be making. Two drawn shapes do.
+**The cut is a per-texel draw mask, not a mesh deformation.** `dentCutMask`
+marks every texel whose centre falls inside the triangle — by the same
+all-edges-one-sign test and the same sample point the rasterizer uses for
+every other pixel in this renderer — and the pierced layer draws through
+that mask. So the notch is pixel-exact whatever the mesh density is. That
+matters: the failure mode that sank the system this replaced was a mesh too
+coarse to carry the shape, and a mask cannot have that problem. The cut is
+intersected with the **pierceable** mask, so a deep wedge cannot chew
+through whatever else the layer happens to draw nearby.
 
-**How the outlines are built.** Both masks are traced by Moore-neighbourhood
-border following with Jacob's stopping criterion, resampled to 64 points at
-equal arc length — so point *k* means "a quarter of the way round" on both
-shapes rather than "the 17th texel somebody happened to paint" — then
-cyclically rotated so the two point lists line up, by the rotation that
-minimises the sum of squared distances between centred pairs, and finally
-*corresponded*: the stretches where the two drawings coincide are pinned to
-themselves so an edge the artist left alone cannot drift. That last step is
-not a refinement — without it the shape changes in the wrong place, which
-is its own section below.
-
-**How the artwork follows the outline.** Every mesh vertex is expressed once,
-at bind time, in **mean value coordinates** (Floater, 2003) against the rest
-outline: weights that sum to 1 and vary smoothly, computed with the
-half-angle tangent identity so they stay stable on thin shapes. Evaluating
-the same weights against the blended outline is where the vertex goes.
-Because the weights are fixed and the blend is linear, the whole warp is a
-linear function of `t`: it cannot fold, and a one-pixel change in depth
-never moves a vertex more than **1.115 px**. Measured across a full sweep
-from first touch to past the End Point: **zero folds at every depth**, and
-no neighbouring pair torn apart.
-
-**Nothing integrates.** `stepPierce()` takes no timestep and always reports
-"nothing still moving", because there is nothing to still be moving: a given
-depth always looks exactly the same, however it was arrived at, and
-withdrawing is the same blend run backwards. Spring bones are untouched —
-they still integrate in `physics.js`'s frame loop, and the whole-object
-jiggle they produce composes with the blend rather than replacing it.
-
-**Both masks still gate it.** Deformable decides which vertices may move at
-all, and Px Pin still wins over everything, exactly as before. Only the
-local shape-changing effect at the contact point changed.
-
-### The morph ran, and never reached the screen
-
-The blend above was reported working once and was not. When it came back a
-second time, everything was re-derived from scratch rather than re-patched,
-one link of the chain at a time, and the answer turned out to be in the one
-place the earlier pass never looked — the screen: **the numbers were right,
-and the geometry carrying them was too coarse to show them.**
-
-**Where it actually broke.** Each step was measured on a 48x48 layer whose
-Entered shape chamfers the cap's top corners by four texels:
-
-| # | Question | Answer |
-| --- | --- | --- |
-| 1 | Are both shapes really stored, and distinct? | Yes. 240 texels of Rest, 220 of Entered, 20 differing, morph issue none. |
-| 2 | Is depth live, and changing? | Yes. `t` read 0 -> 0.286 -> 1 as the presser advanced. |
-| 3 | Does the blend produce different outlines? | Yes. Up to 2.9 texels between `t=0` and `t=1`, half that at `t=0.5`. |
-| 4 | **What reaches the scene bitmap?** | **18 pixels. Out of a shape whose two drawings differ by 20, with the debug overlay confirmed OFF.** |
-
-So nothing was masking a correct result and nothing was stuck; the solver
-was doing its job and the screen was not showing it. Rendering the
-full-depth shape and comparing it, pixel for pixel, against the drawn
-Entered mask gave the diagnosis outright: the result sat **11 pixels from
-the shape it was asked to reach and 9 from the one it was leaving** — it
-had barely moved off Rest.
-
-**Why.** A layer's mesh is sized for **bone skinning**: six to ten cells
-across, which is all a limb bending needs. This blend is a different job at
-a different scale — an artist rounding a corner by three texels — and a
-mesh with eight-texel cells has nothing to express that with. Worse, the
-density is capped at ten cells regardless of size, so the cells get *wider*
-as the artwork gets bigger: twenty texels on a 200x200 layer. The bug grew
-with the art. Sweeping the density and re-measuring the rendered silhouette
-each time puts a number on it:
-
-| texels per cell | 8 | 6 | 4 | 3 | 2 | 1.5 |
-| --- | --- | --- | --- | --- | --- | --- |
-| pixels off the DRAWN shape | 11 | 10 | 9 | 6 | 5 | **1** |
-| pixels off the REST shape | 9 | 16 | 15 | 20 | 17 | 19 |
-
-At the shipped density the render is closer to the shape it should be
-leaving than to the one it should be reaching. At about two texels a cell
-it lands on the drawing.
-
-**The fix: a subdivision, not a re-bind.** A layer with an Entered shape
-painted is now drawn through a **subdivision of its own mesh** — the same
-rectangle, k x k finer per cell, chosen so the cells come out at about two
-texels and capped at 12,000 vertices so a very large layer degrades to a
-coarser morph rather than to a stall.
-
-What makes this safe is where the fine vertices get their positions. They
-carry **no bone weights of their own** and are never re-skinned: each one is
-the barycentric blend of the coarse triangle it sits inside, using that
-triangle's already-deformed, already-snapped corners. That is exactly what
-the rasterizer computes at the same spot anyway, so a layer with no morph
-applied renders **pixel for pixel as it did before**. Skinning is untouched,
-hand-painted weights are untouched, Bind mode is untouched. The subdivision
-only gives the blend shape somewhere to land.
-
-**Two things that had to be right for that to hold, both found by
-measuring rather than by reasoning:**
-
-- **The split has to be a power of two.** A fine vertex sits a fraction of
-  the way across its cell and its position is that fraction blended between
-  the cell's whole-numbered corners. Halves and quarters are exact in binary;
-  thirds are not, and a threefold split put the sub-triangles a hair off the
-  parent's plane. Measured on a posed, bound layer: a threefold split moved
-  **13 pixels that nothing had asked to move** — a one-pixel wobble along the
-  silhouette, in artwork meant to be pixel-exact. A fourfold split moves
-  none. The check is now in the suite: flat and unbound, and posed and
-  bound, both render with **0 channel differences** through the subdivision.
-- **Every softening distance is a property of the artwork, not of the mesh.**
-  Two of them ease to zero over "about a cell", and both meant one cell of
-  the layer's mesh — so a subdivision quietly shrank both by the
-  subdivision factor.
-
-  The first is the edge of the **deformable area**, and it did precisely
-  what its own code comment warns of: the gradient went four times sharper,
-  the artwork just outside the painted area was stretched, and the
-  silhouette showed a **one-pixel notch** where the stretch reached past the
-  edge of anything drawn. Measuring the covering triangle proved it was
-  neither a fold nor a tear — zero folded triangles out of 1,152, the pixel
-  covered by exactly one triangle, which sampled source texel (36, 12) whose
-  alpha is zero, one texel past the artwork's own edge.
-
-  The second is **Px Pin**, found only because the full regression caught
-  it: the band over which a pin holds its neighbours had shrunk the same
-  way, so artwork a pin used to hold was free to take the shape change —
-  1.76 px where it should have been still. The pinned texels themselves were
-  never at risk (a finer grid holds those *more* tightly, not less); it was
-  the neighbourhood around them that had quietly narrowed.
-
-  Multiplying the subdivision factor back into both restores the original
-  distances. The notch is gone at **every depth**, and a vertex sitting on
-  pinned artwork now moves **exactly 0 px** through a full-depth morph while
-  unpinned artwork beside it takes the full 2.7 px — both now permanent
-  checks in the suite.
-
-**What it looks like now.** Same layer, same painting, debug region-colour
-overlay explicitly off, nothing on screen but the artwork:
-
-| Near Rest — blend 7%, depth 1/14 | Full depth — blend 100%, depth 14/14 |
-| --- | --- |
-| ![The cap at 7% depth, corners square](docs/images/morph-shallow-7pct.png) | ![The cap at 100% depth, corners rounded](docs/images/morph-full-100pct.png) |
-
-![The two silhouettes side by side, with the shallow outline in red over both](docs/images/morph-side-by-side.png)
-
-The red line is the shallow-depth outline drawn over both halves, so the
-right-hand shape can be seen pulling in from it. The rendered shape at full
-depth now sits **1 pixel from the drawn Entered mask and 19 from Rest** —
-the exact reverse of what it was — and walks there smoothly: 20, 20, 11, 6,
-1 pixels off the drawing as `t` goes 0, 0.21, 0.5, 0.79, 1.
-
-**Verified.** A new suite (`test_pierce_morph_render.mjs`) reads the
-rendered silhouette rather than the solver's arrays, which is the gap the
-first "fixed" report fell into: it checks that the overlay is off, that a
-subdivision is built only when a second shape exists, that its cells are
-about two texels, that rest depth renders the rest shape exactly, that full
-depth lands on the drawn shape, that the in-between depths close on it
-monotonically, that the silhouette stays one piece with no enclosed holes,
-that a layer with no Entered shape renders identically at every depth, that
-a vertex on pinned artwork does not move at all while unpinned artwork
-beside it does, and that a posed, bound layer is pixel-identical through the
-subdivision.
-
-Two older checks had to be corrected rather than made to pass. The first
-asserted that artwork outside the deformable mask moves *exactly* zero,
-which was only ever true because the coarse mesh had no vertices inside the
-falloff to measure. The falloff is deliberate — a hard edge between "may move" and
-"may not" creases the surface where the artist drew the line — so the check
-now tests the property that was actually designed: **zero movement beyond
-one falloff**, and an easing-in inside it. Measured profile, with the
-deformable mask starting at row 18 and a 12-texel falloff: rows 0-6 at
-exactly 0.00, then movement that rises from 0.08 with no step larger than
-0.15 against a peak of 0.48 — exactly one falloff wide, hard zero beyond
-it.
-
-The second was the wording of that same check: it first asked for a
-*monotone* ramp, and passed only while the whole outline was drifting
-uniformly — which was itself the bug fixed in `correspondOutlines` below.
-What a falloff has to guarantee is the absence of a **crease**, not
-monotonicity: a vertex's movement is its influence times the actual local
-warp, and the warp is not uniform across a layer, so a rising influence
-over a falling warp legitimately peaks in the middle. The check now
-measures the step size instead.
-
-### The shape changed in the wrong place
-
-With the morph finally visible on screen, a second fault became visible
-with it, reported from a real scene: a cone with a V opening drawn at its
-tip, a finger coming up into it, **neither layer bound and no bones
-anywhere**. The tip did not open. The **top edge** changed instead — an
-edge identical in both drawings.
-
-**The cause is the correspondence between the two outlines, not the
-geometry carrying them.** Step 2 above resamples both outlines to 64 points
-at equal arc length, and step 3 turns one against the other to the best
-whole-list rotation. That pairs them correctly only while both shapes have
-the same arc-length parameterisation — which stops being true the moment
-the artist draws the thing this feature exists for. Cut a notch and the
-perimeter grows: **173.7 texels at rest against 178.5 entered** on that
-cone. Equal spacing then slides every point past the notch a little further
-round, and a rigid rotation cannot undo it, because the stretch is *local*.
-Measured worst travel, by where the point sits on the shape:
-
-| | top | middle | tip |
-| --- | --- | --- | --- |
-| equal spacing and rotation only | 3.18 px | 4.07 px | 13.49 px |
-| **after corresponding** | **0.33 px** | **0.30 px** | **12.99 px** |
-
-3.18 px of travel along an edge the artist drew identically in both shapes
-is exactly what "the top is changing pixels instead of the tip opening"
-looks like.
-
-**The fix.** Both shapes are drawn by one person over one piece of artwork,
-so they coincide nearly everywhere and differ in the one place being drawn.
-The correspondence a person would draw by eye is therefore: where the two
-outlines lie on top of each other, **every point maps to itself**, and only
-across the stretch that differs does anything travel. So
-`correspondOutlines` finds each rest point's closest point on the entered
-outline, treats anything within **one texel** as the same place in both
-drawings and pins it there, drops any pin that would run backwards around
-the outline (a mis-hit on a thin neck, which would fold the shape), and
-spreads the points between consecutive pins evenly along the entered
-outline — so a notch gets its whole arc shared out across the points that
-have to describe it. Fewer than four pins means the two drawings share
-almost nothing, there is no "unchanged part" to hold still, and plain equal
-spacing is the honest answer.
-
-Measured on the rendered silhouette, splitting the cone into thirds by
-height, rest depth against full depth:
-
-| | top | middle | tip |
-| --- | --- | --- | --- |
-| before | 17 px | 14 px | 84 px |
-| **after** | **0 px** | **0 px** | **81 px** |
-
-| Apart — blend 0% | Full depth — blend 100% |
-| --- | --- |
-| ![The cone's tip closed to a point](docs/images/cone-apart-0pct.png) | ![The cone's tip opened, the finger inside it](docs/images/cone-full-100pct.png) |
-
-**And a second thing that scene revealed, which was not a bug in the
-maths.** A pierced layer with its role set, its depths set and its area
-painted — but **no Entered shape drawn** — changes shape by exactly zero
-pixels, correctly, because there is no second shape to blend toward. That
-is measured and true: `{top: 0, middle: 0, tip: 0}` at every depth. The
-problem was that nothing on screen said so. The Pierce window showed
-`Paint regions… (1664 px marked · all deformable)`, which reads as fully
-configured, and the entered count was deliberately hidden while it was zero
-so as not to show "a reproachful zero". That was the wrong call: a setup
-that looks complete and does nothing is worse than a count of zero. It now
-reads:
+**And the material has to go somewhere.** A wedge pushed into something
+does not leave a clean hole with dead artwork around it — what it displaces
+piles up at the rim. So the **Deformable** mask, in its new meaning, marks
+which pixels are allowed to do that. Each marked vertex is pushed away from
+its nearest point on the wedge's *boundary*, by
 
 ```
-Paint regions… (1664 px marked · all deformable)
-  — no Entered shape drawn yet, so it keeps its rest shape
+rise  = 0.45 * Depth * t                       how far the rim gathers
+reach = max(2, max(Depth, Width) * 0.85)       how far out it reaches
+push  = rise * smoothstep(1 - distance/reach) * influence
 ```
 
-Not a warning, because nothing is broken — just the sentence that turns
-"it isn't working" into "ah, I haven't drawn the other one yet".
+The reach is deliberately **not** scaled by `t`. The area that responds is a
+property of the dent the artist configured; only the *amount* it moves grows
+as the piercer goes in. Scaling the reach too makes the rim crawl outward as
+it rises, which reads as the material spreading rather than gathering.
 
-**Verified.** `test_pierce_cone_notch.mjs` rebuilds that exact scene — no
-bones, neither layer bound, checked rather than assumed — and asserts that
-with no Entered shape the silhouette is identical at every depth and the
-window says why; that with a V drawn at the tip the change lands **at the
-tip and nowhere else** (0 px top, 0 px middle, 81 px tip); that equal
-spacing alone really did drag the untouched top, and corresponding pins it;
-and that the opening is an opening rather than a tear — no pinholes, one
-connected piece.
+**One wedge, one push.** Both halves come off the same triangle object, built
+once per contact per frame in `publishOcclusion`, so they cannot drift out of
+step with each other or with the drag — the notch opening and the rim rising
+are one effect driven by one number, not two effects that happen to overlap.
 
-### A patch is not a silhouette
+**Nothing integrates.** The wedge *is* the depth. A given depth always
+produces exactly the same triangle and exactly the same rim, however it was
+arrived at, so withdrawing runs the identical numbers backwards to exactly
+zero. Measured across a 53-position sweep in and back out again: every depth
+on the way out reproduced the way in to the last decimal, and fully
+withdrawn the cut area, the wedge depth and the moving-vertex count were all
+zero. Px Pin still wins over everything, exactly as before.
 
-Then a third report, with the painter's own screenshot attached — and this
-one was not a bug in the maths at all. It was the interface teaching the
-wrong idea, and the maths then doing something indefensible with the
-result.
+### Why the two drawn outlines had to go
 
-**Every other target in that row is a mask.** Paint the texels that are the
-tip. Paint the ones that are a wall. Paint the ones that may move. The
-Entered target sits fifth in the same row, behaves identically, and is not
-a mask at all — it is a **silhouette**, the whole pierceable area drawn
-again as it looks at full depth, whose *outline* gets traced and paired
-against the rest outline point for point.
+The system this replaced asked the artist to draw the pierceable shape
+twice — once at rest, once "entered" — traced both with Moore-neighbourhood
+border following, resampled each to 64 points at equal arc length, and
+blended between them point for point with mean value coordinates.
 
-Offered as one more brush over an empty layer, it invites being used like
-the others: a band brushed in where the tip arrives. That stores perfectly.
-Then the blend traces its outline and pairs a **51-texel perimeter centred
-14 texels away** against the pierceable shape's **121**. Nothing about that
-is an opening at the tip — it is the whole region lurching somewhere else,
-which from outside reads exactly as *"the deformation is on top, inverse to
-where I drew."* Rebuilt and measured, three ways of painting the same
-intent on the same scene:
+On a rectangle or a cone that works. On real character art it does not, and
+the reason is not a bug that was left unfixed: **two freehand drawings of a
+curvy silhouette have no reliable point-to-point correspondence to blend
+along.** They have different perimeters (measured on one real pair: 173.7
+texels against 178.5), different local detail, and no agreement about which
+point means which place. Every fix tried against that — rigid rotation to
+the best cyclic alignment, then pinning the stretches where the two
+drawings coincide — narrowed the failure without removing it, because the
+premise was wrong.
 
-| Entered painted as | overlaps the pierceable shape | where the silhouette changed |
+Three separate faults were traced to that one premise, and each is worth
+recording because each looked like something else first:
+
+- **The change appeared in the wrong place.** Reported as *"instead of the
+  tip deforming into an opening, the top is changing pixels"*. Not a
+  geometry error: the two resampled point lists simply did not line up, so
+  the deformation landed wherever point 17 happened to be on each shape.
+- **The change appeared to be inverted.** Reported as *"look where it
+  deformed and look where I drew Deformable — it's the inverse"*. Mean value
+  coordinates are a **global** interpolation, so movement refused at the tip
+  did not vanish; it leaked out wherever the Deformable mask did allow
+  motion. A cancelled change *relocated* rather than disappearing.
+- **A patch is not a silhouette.** The Entered target sat fifth in a row of
+  four masks and so got used like one — a band brushed in where the tip
+  arrived. That stores perfectly well and then blends a 120-texel perimeter
+  toward a 51-texel one whose centre sits 14 texels away, which does not
+  read as an opening at all.
+
+It also asked for a whole second silhouette to express what is usually one
+small local change. The wedge asks for two numbers.
+
+**The wedge cannot have any of those faults.** There is no correspondence to
+get wrong, because there is no second drawing. The push is a pure function
+of distance from the triangle, so a Deformable mask painted twenty rows away
+from the notch does not relocate anything — it is simply out of reach, and
+the answer is zero in *both* places. `test_pierce_barrier.mjs` runs exactly
+the scene that produced the original report and measures **0.000 px at the
+tip and 0.000 px over the mask's own rows**.
+
+### Verified on organic artwork, not on a primitive
+
+The system this replaced worked on a triangle and a rectangle and failed on
+a character, so "it works" is only worth saying about artwork of the second
+kind. The check runs on a lumpy 96 × 96 blob built from four overlapping
+ellipses with a wobbling radius — no straight edge, no symmetry, no axis a
+test could accidentally line up with — pressed by a curved, tapered finger
+with a nail. The whole silhouette is pierceable (4,596 texels), a rim of 299
+texels is painted Deformable around where the finger lands, and Depth 14 /
+Width 22 are set by driving the real sliders in the real Pierce window.
+
+The frames below are the scene bitmap itself, magnified nearest-neighbour,
+with the region overlay **off** and the piercer hidden — so what is shown is
+the pierced layer's own silhouette and nothing else.
+
+| Apart | About half depth | At the End point |
 | --- | --- | --- |
-| the shape redrawn with a notch | 0.93 | 0 top · 0 middle · **14 tip** |
-| the shape plus a bulge | 0.96 | 0 top · 0 middle · **6 tip** |
-| **a band brushed in near the tip** | **0.18** | 0 top · **18 middle** · 6 tip, and a pinhole |
+| ![The organic blob at rest, its top edge smooth](docs/images/dent-rest.png) | ![The same blob half way in, a shallow V opening with slight shoulders](docs/images/dent-half.png) | ![The same blob at full depth, a deep V notch with the material raised either side](docs/images/dent-full.png) |
 
-The third row is the report. And `pierceMorphIssue` returned **null** for
-it — both masks were single blobs, both were stored, nothing was "broken".
+And the same moment with the finger drawn, its pad sunk beneath the surface
+by the z-order swap:
 
-**The fix is to stop teaching the wrong idea.** Selecting the Entered
-target now **opens it as a copy of the pierceable shape**, so the first
-stroke is an *edit*: erase where the flesh should pull in, paint where it
-should push out. Only when it is empty — deliberate work is never
-overwritten — and it goes through history like any other stroke, so it
-undoes. A line under the target row says what the target is, permanently,
-rather than as a toast that scrolls away:
+![The finger at full depth, its tip beneath the flesh, the notch closed around it](docs/images/dent-full-with-piercer.png)
 
-![The painter with Entered selected, seeded from the pierceable shape](docs/images/entered-seeded.png)
+Measured over the same sweep, one scene pixel at a time:
 
-**And the maths now refuses what it cannot honour.** Two drawn shapes are
-told apart from a shape and a patch by how much of each other they are: a
-notch cut measures 0.93, a bulge added 0.96, a band brushed in 0.18. Below
-half, `pierceMorphIssue` declines and names the remedy rather than just the
-fault — *"the Entered shape overlaps the pierceable one by only 18% — it
-looks like a patch rather than the whole shape drawn again. Clear it and
-reopen the Entered target to start from a copy of the pierceable shape,
-then edit that."* Nothing deforms at all, which is the right answer: a
-drawing that is quietly ignored is worse than one that is refused, and one
-that is silently turned into nonsense is worse than both.
-
-**Verified.** `test_pierce_entered_silhouette.mjs` drives the real painter:
-selecting Entered on an empty mask seeds all 883 texels of the pierceable
-shape, the hint says what the target is, undo returns it to empty,
-selecting it a second time does **not** re-seed over existing work, an
-untouched copy blends to itself and moves nothing at any depth, erasing a
-notch from the copy opens the tip and only the tip (0 top · 0 middle · 14
-tip), and a patch is refused with a message naming both the problem and the
-remedy while nothing is deformed.
-
-### Two masks that could cancel each other
-
-The next report was "it still doesn't happen where it should — it happens
-up", after the Entered shape had been drawn correctly. That one is a
-collision between two masks that decide different things.
-
-**Entered says WHAT changes. Deformable says WHICH artwork may move.**
-Nothing made them agree. Draw the notch somewhere the Deformable mask does
-not cover and the change is cancelled exactly where it was asked for —
-while the blend's smaller, incidental motion elsewhere is *not* cancelled,
-because that is where the mask does allow movement. So the shape changes
-somewhere other than where it was drawn. Measured, with the notch cut into
-the bottom of the shape every time:
-
-| Deformable covers | where the silhouette changed |
+| | |
 | --- | --- |
-| all of it | 0 top · 0 middle · **14 tip** |
-| **the upper half only** | **0 · 0 · 0 — nothing, anywhere** |
-| the lower half only | 0 top · 0 middle · **14 tip** |
+| Wedge at the End point | **14.00 texels**, exactly as configured |
+| Biggest single step in the wedge | **0.699 texels** — 5% of the dent, no stages |
+| Steps of the approach that grew the cut | **19 of 20** |
+| Rendered notch depth | **14 canvas px** against a 3 px raised rim |
+| Columns notched in / raised out | 24 / 8, adjacent rather than in one place |
+| Positions on the way out reproducing the way in | **65 of 65, exactly** |
+| Artwork after full withdrawal | **4,596 px, worst column drift 0 px** |
 
-`pierceMorphIssue` returned **null** for the middle row. Both masks stored,
-both single blobs, nothing "broken", and the feature silently did the
-opposite of what was drawn.
+### The wedge has to land in the artwork, not where the artwork used to be
 
-**The first fix was wrong, and the regression caught it.** Making the drawn
-difference always move, whatever the mask says, broke a deliberate and
-tested feature: a pierceable-but-firm area is *supposed* to hold even where
-the tip arrives — a firm edge inside soft tissue. Two suites failed with
-firm artwork moving exactly as much as deformable artwork, 7.83 px against
-7.831. Backed out.
+One real bug, found only by the bound-layer suite. `worldToTexel` inverts
+`localToWorld`, which reads the part's own `x`/`y` — and on a **bound** layer
+those are its *rest* coordinates. Dragging the character moves what is drawn
+without changing them by one pixel, which is why every scene-space number the
+solver works from comes out of `regionPoints`, which adds `pinCarriageOffset`
+on top.
 
-**What was actually wrong is subtler, and worse.** The per-vertex mask
-decides which artwork may *end up* moved. That is not enough, because mean
-value coordinates are a **global** interpolation: move a few outline points
-and every interior point shifts a little, decaying with distance. So a
-notch drawn on firm artwork was cancelled where it was drawn — correctly,
-that is the feature — while its leaked, much smaller motion **survived
-wherever the mask did allow movement**. The change did not disappear. It
-*relocated*.
+Inverting only the rest transform therefore put the wedge wherever the layer
+used to be. Measured on a 32-texel-wide bound layer after a 36 px
+whole-character drag: the notch's base came out at texel **x = 52**, twenty
+texels off the right-hand edge of the artwork — so nothing was cut, no vertex
+was anywhere near enough to bunch, and the whole effect silently did nothing
+on precisely the layers most likely to be rigged. The contact now carries the
+carriage it was measured with, and `worldToTexel` takes it off again.
 
-So the fix is to gate the **outline**, not only the vertices: each of the
-64 outline points is scaled by the influence field at its own rest
-position, so travel that is not allowed is never put into the shape and
-there is nothing left to leak. A change drawn on firm artwork now collapses
-everywhere; one drawn on soft artwork lands exactly where it was drawn.
+The unbound suites could never have caught this: their carriage is zero, so
+the bug is invisible there. `test_dent_math.mjs` now checks the conversion
+directly — a point carried 36 px with its layer maps back to the same texel,
+and ignoring the carriage lands 36 texels away.
 
-| Deformable covers | before | after |
-| --- | --- | --- |
-| all of it | 0 · 0 · 14 tip | 0 · 0 · **14 tip** |
-| the upper half only (not the notch) | the change leaked elsewhere | **0 · 0 · 0** |
-| the lower half only (the notch) | 0 · 0 · 14 tip | 0 · 0 · **14 tip** |
+### What the wedge breaks off, it takes with it
 
-**And collapsing silently is still baffling** — the drawing is stored, the
-contact registers, and nothing moves. So when the drawn difference lands
-almost entirely on artwork marked firm, it is reported: *"the shape you
-drew changes in an area marked NOT deformable, so nothing will move there —
-paint that area Deformable, or draw the change where the Deformable mask
-already is."*
+One more artifact, found by that same organic sweep and invisible on any
+primitive. The notch is cut out of artwork whose own boundary wobbles, and
+where the wedge's mouth meets a bump in that boundary it can clip the bump's
+base away and leave the top of it floating: **a single texel detached from
+the silhouette at five of 71 positions**, a speck hanging in the air just
+above the opening. Transient, one pixel, and on pixel art unmistakable.
 
-One stale cache came out with it. The morph's solved mean-value weights are
-computed only where the influence field is non-zero, so they depend on the
-Deformable mask — but the cache key did not include its version. Repainting
-Deformable left the newly deformable vertices with no weights at all, so
-they never moved however the mask said they might.
+Attributed rather than guessed at, by running each half of the effect alone:
+with the Deformable mask cleared the speck appeared at exactly the same five
+positions, and with the dent set to zero it never appeared at all. The cut
+does it; the bunching does not.
+
+So the wedge takes what it strands. After the cut, a flood fill seeded from
+the one-texel ring around the wedge's bounding box marks everything still
+joined to the rest of the artwork; anything left over is an island, and an
+island is removed **only if one of its neighbours is a texel this wedge
+actually cut** — so a speck the artist drew detached stays exactly as drawn.
+The box remembered for the next frame's reset is widened to cover that ring,
+or a texel cleaned up there would never be put back and the notch would
+leave a permanent nick behind it.
+
+Re-measured over the same 71 positions: **one connected piece at every
+one**, with each half alone and with both together.
 
 ### The painter's canvas, and a hint line that broke it
 
 The hint line added above — the one that says what each paint target is —
 sits in the same flex column as the painter's canvas, and its text differs
 per target. So selecting a target changes the controls' height and takes
-the difference out of the canvas: **448 css px down to 385** on tapping
-Entered.
+the difference out of the canvas: **448 css px down to 385** on tapping the
+target with the longest hint.
 
 `sizeCanvas()` ran on open and on window resize, and nothing else. The
 window had not resized, so the backing store kept its old size while the
@@ -2345,49 +2146,42 @@ size change re-measures rather than the one cause that happened to be
 known. `test_pierce_painter_touch.mjs` proves it both ways: with the
 observer removed the backing store runs 1.069× then 1.244× out of step,
 and with it the canvas stays exactly square-pixelled across four target
-changes while two taps at the same screen point land on the same texel.
+changes while each tap lands on the texel the painter's own camera says is
+under it. (That last check used to compare the two taps to each other, which
+only ever worked because the two targets happened to have hints of the same
+height. It now asks the app where the finger is, which is the thing that
+was always meant.)
 
-### Painting the Entered shape
+### The dent's two sliders
 
-The painter's fifth target. It draws over the pierceable shape in violet,
-so the two read as a before and an after, and the canvas debug overlay
-tints the texels the Entered shape *adds* beyond the rest shape — the
-question worth answering at a glance being "is what I drew actually
-different, and which way does it go?", not "can you fill my region in".
+The notch's size lives on the **pierced** layer, in the Pierce window, as
+two sliders rather than a paint target — it describes the material's
+reaction, which is a property of the material and not of whatever goes into
+it. Both run 0–128 in the layer's own pixels, update the canvas live while
+dragging, and take one undo step per drag rather than one per pixel of
+slider travel. Setting either to 0 means no notch, which is a finished,
+valid setup and not a missing step: contact, the depth reading and the
+z-order swap all carry on normally, and nothing errors or warns.
 
-**An unpainted Entered shape is a finished, valid setup**, not a missing
-step: the region holds its rest shape at every depth while contact, the
-depth reading and the z-order swap all carry on normally. Nothing errors
-and nothing warns.
+The one thing that genuinely cannot work is said out loud rather than
+silently ignored: a dent configured on a layer with **no pierceable area
+painted** has nothing to be cut out of, and `pierceDentIssue` names that in
+the painter's status line and on the Pierce window's own button.
 
-Two things a drawing genuinely cannot be, both caught and both said out
-loud in the painter and on the Pierce window rather than silently ignored:
-
-- **Cut into separate pieces.** A channel taken clean through a region
-  leaves two shapes, and one closed outline can only be paired with one
-  closed outline — blending a whole region toward one of its halves is the
-  torn silhouette this feature exists to avoid. Under 90% of the painted
-  texels in a single piece, the blend is declined and the region stays at
-  rest. A speck of overspray is nowhere near that line (99.5%); a region
-  cut in half is (51%).
-- **Painted from a region with no single outline of its own.** Same test,
-  applied to the pierceable mask.
-
-**One bug found by painting to the edge.** A mask is a flat array of texels,
-so column −1 is the previous row's last texel and column `width` is the
-next row's first. The boundary walk had no bounds test, so a region painted
-right up to the artwork's left or right edge — a band across a whole limb —
-wrapped round at the row end and marched off down the image. On a 32-texel
-sprite that produced an "outline" **1034 texels wide**, a largest-outline
-move of **1020 px** where 17 px was the most anything should have moved, and
-a shape change reaching **4962 px** at the far corner of the layer. Bounds
-are checked on both axes now, and the same band traces `x 0.5..31.5,
-y 0.5..3.5` — exactly the painted rectangle.
+**One bug found by painting to the edge**, from the system this replaced and
+worth keeping because the shape of it recurs. A mask is a flat array of
+texels, so column −1 is the previous row's last texel and column `width` is
+the next row's first. A boundary walk with no bounds test wrapped round at
+the row end and marched off down the image — on a 32-texel sprite that
+produced an "outline" **1034 texels wide** and a move of **1020 px** where
+17 px was the most anything should have moved. The wedge's cut does its own
+bounds clamping on both axes for the same reason.
 
 ### No skeleton required
 
-The blended outline is applied *per vertex*, so a pierced layer needs a
-mesh to carry it. Layers used to get a mesh only by being bound to a
+The bunching is applied *per vertex*, so a pierced layer needs a mesh to
+carry it. (The notch itself does not — it is a texel mask — but the two
+travel together.) Layers used to get a mesh only by being bound to a
 skeleton in Bind mode — which meant that unless you had already rigged and bound the
 flesh, the whole feature silently did nothing. Nothing in the Pierce UI
 ever asked for a rig, and piercing has nothing to do with bones.
@@ -2399,9 +2193,10 @@ painted: the contact read perfectly the whole way in — gap `31 → 7 → -1 �
 displacement sat at **0.000 px at every depth**, because the layer never
 reached the solver at all.
 
-(Both bugs in this section belong to the spring displacement that the
-blend-shape morph has since replaced; the mesh they needed is still exactly
-what the morph writes into, so the fixes still carry.)
+(Both bugs in this section belong to the spring displacement that the dent
+has since replaced, by way of a blend-shape morph that was itself replaced;
+the mesh they needed is still exactly what the bunching writes into, so the
+fixes still carry.)
 
 The solver now builds the mesh itself, the first time it looks at a
 pierceable layer. An unbound mesh has no bind pose and no weights, so
@@ -2573,9 +2368,9 @@ case was not the one the symptom suggested.
 **"The jagged, torn distortion is back, but only when the body is
 dragged."** The proposed cause was that the Physics Direction feature had
 been built on the old spring-target displacement and never moved over to
-blend-shape morphing, leaving two deformation techniques in two
-contact-direction paths. That is not what is there. There is exactly one
-deformation path: `publishOcclusion` writes the blended shape for every
+the new deformation, leaving two techniques in two contact-direction paths.
+That is not what is there. There is exactly one deformation path:
+`publishOcclusion` builds one wedge and writes both halves of it for every
 pierced layer in the scene, from one contact test that has no opinion about
 which side moved. Physics Direction touches only the *gap*, which is a
 number, not a technique. No spring-target displacement survives anywhere —
@@ -2633,7 +2428,7 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Eleven browser suites and one pure-maths suite cover this, all passing:
+Twelve browser suites cover this, all passing:
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -2645,12 +2440,12 @@ Eleven browser suites and one pure-maths suite cover this, all passing:
   the piercer (`needle +24`, `root 100.5 -> 100.5`) and Body moving the
   character and *only* the character (`root +36`, `needle 60,20 ->
   60,20`); nothing engaging at 1 px outside Enter and engaging at 1 px
-  inside it; the shape change rising monotonically with depth
-  (`0.19 < 0.93 < 1.87 < 2.99` px); depth and `t` pinned at End from 0 to
-  40 px past it, with the shape holding at 2.99 px rather than fading; a
-  flood fill of the rendered frame finding **0 enclosed hole pixels** at
-  maximum depth; a residual of 0.0000 px after retraction; a pinned band
-  at **0.00 px** where an unpinned one moved 2.99 px, rendering at the
+  inside it; the bunching rising monotonically with depth; depth and `t`
+  pinned at End from 0 to 40 px past it; a flood fill of the rendered frame
+  finding **0 enclosed hole pixels** at maximum depth, while the notch does
+  take **1.2%** of the layer's pixels out and gives every one of them back
+  on withdrawal; a residual of 0.0000 px after retraction; a pinned band
+  at **0.00 px** where an unpinned one moved 1.34 px, rendering at the
   identical row in contact and at rest; and the pierced layer's own spring
   bone still swinging 0.178 rad and settling while a contact is engaged.
 - **Visual** (35 checks) — the whole suite run on a scene with **no
@@ -2711,18 +2506,31 @@ Eleven browser suites and one pure-maths suite cover this, all passing:
   returning to 13.52 px once that area is painted deformable; a deformable
   mark on non-pierceable pixels moving nothing; the painter's third target;
   and the mask surviving a serialize/load round trip at 256 px.
-- **Blend-shape morphing** (20 checks) — a region with no Entered shape
-  painted engaging at full depth while moving **0 px**; with one painted,
-  the shape change running `0 → 1.12 → 4.46 → 8.92 → 13.38 → 17.84` px as
-  `t` runs `0 → 1`, monotonic, stopping at End and still 17.84 px 30 px
-  past it; **zero folds at every one of those depths** and no neighbour
-  torn apart (12 px at rest against a worst of 20.27 px in contact);
-  `t = 0.5` giving 8.92 px against 17.84 px at `t = 1`, the exact half; a
-  one-pixel change of depth never stepping a vertex more than 1.115 px; a
-  region painted edge to edge blending 9.17 px with 0 folds; an Entered
-  shape cut clean through declined at **0 px** with contact and the z-order
-  unaffected and the reason readable; the painter's Entered target naming
-  `P_slab · entered shape`; and 964 texels surviving a save/load round trip.
+- **The parametric dent** (18 checks, `test_dent_math.mjs`) — a 10 × 16 dent
+  driven through a full sweep: nothing at all before the Enter point across
+  14 positions; the wedge appearing at **0.625 deep × 1 wide** rather than
+  popping in at a size; its depth never going backwards and never stepping
+  more than 0.625 texels per scene px of travel; reaching exactly 10 × 16 at
+  End and **holding at 88 cut texels** across 24 further positions past it;
+  the cut advancing on 13 of 15 growth steps with a biggest jump of 12 against
+  a mean of 5.9 (a three-stage implementation would have to jump by a third of
+  the total); the rim moving 10 vertices with **nothing at all painted
+  Deformable moving 0**, while the notch still cuts its 88 texels either way;
+  every one of 53 positions on the way out reproducing the way in exactly,
+  ending at zero cut, zero depth and zero moving vertices; the renderer
+  publishing no mask out of contact and an 88-texel-zeroed one at full depth;
+  and the wedge landing inside the artwork, with a carried point mapping back
+  to its own texel while ignoring the carriage lands 36 texels away.
+- **Organic artwork, end to end** (16 checks, `verify_dent_organic.mjs`) —
+  the full setup on a lumpy 96 × 96 blob and a curved finger, with Depth and
+  Width driven through the real sliders in the real Pierce window; the wedge
+  reaching exactly 14.00 texels at End with a biggest step of 0.699; the cut
+  growing on 19 of 20 steps of the approach; a rendered notch **14 canvas px**
+  deep against a **3 px** raised rim, over 24 notched columns and 8 raised
+  ones sitting next to each other; **one connected piece at all 65
+  positions** of the sweep; every position on the way out reproducing the
+  way in exactly; and 4,596 px of artwork back with **0 px** of column drift
+  once withdrawn.
 - **Enter/End markers** (23 checks) — both handles found by their own
   colours on the drawing, 77.2 px apart; dragging End 40 px moving End
   38.5 px and Enter **0.00 px**, with the Enter field untouched at 12;
@@ -2734,17 +2542,6 @@ Eleven browser suites and one pure-maths suite cover this, all passing:
   the handle; Confirm storing exactly what the drawing showed
   (`{enter: 9, end: 49}`); and the solver then honouring it — nothing
   engaged outside the placed Enter, depth capping at the placed End.
-- **Morph maths** (23 checks, pure Node, no browser) — outlines at the
-  requested point count, hugging the painted shape rather than its bounding
-  box, evenly spaced to a spread of 0.000; the largest blob winning over a
-  stray speck; a shape painted to the artwork's edge tracing inside the
-  artwork (`x 0.5..39.5`) instead of running off it, and a small drawn
-  change staying a small change (2.83 px); coverage reporting 1 for a whole
-  shape, 0.995 with a speck and 0.513 for one cut in half; mean value
-  weights summing to 1 and reproducing both interior and exterior points to
-  **3e-14**; the halfway blend being the exact midpoint of every
-  corresponding pair; and across a full sweep, **0 folds**, no pair
-  stretched apart, and a biggest step of 0.151 px.
 - **Force transfer and the two reported regressions** (32 checks) — the
   along-axis hold measured with walls painted and with none, identical at
   every depth (`0/0/0/0/0/10/40`) so Barrier adds exactly zero to
@@ -3101,7 +2898,8 @@ one-line route the component was built for.
 | **Pierce role** | Pierce modal | Piercer vs Pierced, and that a layer is always exactly one, the other, or neither. |
 | **Physics direction** | Pierce modal (piercer only) | Piercer / Pierced / Both, as *whose movement* deepens contact — not who is "allowed" to move, since both sides always can. |
 | **Depths** | Pierce modal (piercer only) | Enter vs End, adapted from the Enter & End Points dialog's own wording so the two never drift apart. |
-| **Paint target** | Pierce painter | All four masks on the pierced layer at once — Pierceable, Deformable, Barrier — plus Rest vs Entered, stating outright that an unpainted Entered shape leaves the region at Rest and does **not** activate morphing on its own. |
+| **Paint target** | Pierce painter | All three masks on the pierced layer at once — Pierceable, Deformable, Barrier — giving Deformable its *inverted* new meaning (which pixels bunch outward, empty meaning none rather than all) and saying outright that the notch itself is not painted at all. |
+| **Dent shape** | Pierce modal (pierced only) | Depth and Width as the notch measured at the End point, that it grows from nothing at Enter and shrinks back on the way out, and that 0 means no notch. |
 | **Follows parent** | Rig mode's bone editor | Rigid / Physics / Pivot, side by side rather than one at a time. |
 | **Paint tool** | Px Pin's own window | What a pin does (held exactly at rest, immune to bone rotation and spring physics) and the difference between Pin and Eraser Pin. |
 | **Weight tool** | Bind panel | Paint vs Erase sharing one brush, that erasing hands the freed weight to the other bones influencing those vertices so the total stays at 1, and what erasing a vertex's last influence means. |
@@ -3133,8 +2931,9 @@ button, dismissing by tapping outside, dismissing by Escape, switching
 cleanly between two different topics, every priority topic's text
 containing the specific facts it is meant to teach (Physics Direction
 naming Piercer/Pierced/Both by name; Paint target distinguishing
-Pierceable/Deformable/Barrier and stating that Entered "won't turn on by
-itself"; Px Pin naming Eraser Pin and "rest position"), and the popover
+Pierceable/Deformable/Barrier and stating that an empty Deformable mask
+means "none" while the notch "still cuts"; Dent shape naming Depth, Width
+and the End point; Px Pin naming Eraser Pin and "rest position"), and the popover
 staying on screen rather than clipping off any edge. Full regression
 otherwise unchanged. The two later topics are exercised by the suites for
 the features they belong to (`test_weight_eraser.mjs` and
@@ -3690,10 +3489,11 @@ underneath it, not the toast.
 
 **Also verified end to end, screenshot by screenshot**, in
 `walkthrough.mjs`: a fresh Piercer + Pierced pair, tip painted, pierceable
-area painted, Deformable left blank on purpose, Entered opened as a seeded
-copy and edited down to a notch — and dragging the piercer in reaches
-**blend 100%**, with the pierceable region's own outline visibly pulling in
-around the tip exactly where the notch was cut, and nowhere else.
+area painted, a Deformable rim painted around where the tip arrives, and
+Depth and Width set on the two sliders — and dragging the piercer in reaches
+**dent 100%**, with the pierceable region's own outline visibly notching in
+around the tip exactly where the wedge is cut, and the painted rim bunching
+outward around it.
 
 ## What's next
 

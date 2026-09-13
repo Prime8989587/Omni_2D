@@ -15,13 +15,13 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
-import { deformVerticesSnapped, deformSubdivided, partQuad } from './mesh.js';
+import { deformVerticesSnapped, partQuad } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture, pierceOffsets,
-  pierceMorphMesh,
+  pierceDentCuts,
   pierceReadout, pierceHold,
 } from './pierce.js';
 
@@ -132,19 +132,6 @@ function partGeometry(part, boneTransforms) {
     triangles: part.mesh.triangles,
   });
 
-  // A layer with a blend shape painted is drawn through a SUBDIVISION of
-  // its mesh: the same surface, fine enough to hold the shape the artist
-  // drew. Its fine vertices ride inside the coarse triangles, so with no
-  // morph applied this draws exactly what the line below would have.
-  const fine = part.mesh ? pierceMorphMesh(part) : null;
-  if (fine) {
-    return {
-      positions: place(deformSubdivided(part, fine, boneTransforms || {})),
-      uvs: fine.vertices,
-      triangles: fine.triangles,
-    };
-  }
-
   if (part.mesh && part.mesh.isBound && boneTransforms) return through(boneTransforms);
 
   // A pierceable layer deforms whether or not it was ever bound to a
@@ -166,11 +153,19 @@ function partGeometry(part, boneTransforms) {
 // it was. Both halves keep the SAME geometry and differ only by which
 // texels they are allowed to touch, so the split cannot open a seam.
 function buildDrawList(boneTransforms) {
+  // The notch. A dented layer draws through a mask with the wedge's texels
+  // zeroed, which is the whole of the cut: the artwork is unchanged and the
+  // silhouette closes in around a triangle that is simply not drawn. It
+  // rides the same mask slot as the piercer split below, so the two can
+  // never disagree about how a masked entry is drawn -- and the two never
+  // land on the same layer, since a part cannot be both roles at once.
+  const cuts = pierceDentCuts();
   const entries = partsStore.partsBottomFirst
     .filter((part) => part.visible)
     .map((part) => {
       const geometry = partGeometry(part, boneTransforms);
-      return { part, geometry, mask: null, bounds: boundsOf(geometry.positions) };
+      const mask = cuts.get(part.id) || null;
+      return { part, geometry, mask, bounds: boundsOf(geometry.positions) };
     });
 
   for (const [piercerId, pierced] of pierceOcclusion()) {
@@ -542,7 +537,7 @@ function drawPierceProbe() {
     const press = r.press > 0.005 ? `  press ${(r.press * 100).toFixed(0)}%` : '';
     return `${r.piercer} -> ${r.pierced}\n` +
       `  gap ${gap}  enter ${r.enter}  end ${r.end}\n` +
-      `  depth ${r.depth.toFixed(1)}  blend ${(r.t * 100).toFixed(0)}%${press}  ` +
+      `  depth ${r.depth.toFixed(1)}  dent ${(r.t * 100).toFixed(0)}%${press}  ` +
       `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';

@@ -314,6 +314,28 @@
           <p id="piercePhysicsHint" class="joint-hint"></p>
         </div>
 
+        <div id="pierceDentRow" hidden>
+          <div class="field-label-row">
+            <div class="field-label">Dent shape</div>
+            <button class="info-btn" type="button" data-info="pierce-dent" aria-haspopup="true" aria-expanded="false" aria-label="What do Depth and Width do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          </div>
+          <label class="slider-field slider-field--wide">
+            <span>Depth <b id="pierceDentDepthValue">6 px</b></span>
+            <input id="pierceDentDepthSlider" class="slider" type="range" min="0" max="128" step="1" value="6" />
+          </label>
+          <label class="slider-field slider-field--wide">
+            <span>Width <b id="pierceDentWidthValue">10 px</b></span>
+            <input id="pierceDentWidthSlider" class="slider" type="range" min="0" max="128" step="1" value="10" />
+          </label>
+          <p class="joint-hint">
+            The notch a pierce cuts into this layer, in its own pixels, at the
+            End Point. Depth is how far the point drives in along the approach;
+            Width is how wide the opening is across the surface. Both grow from
+            nothing at the Enter Point, and shrink back to nothing on the way
+            out. Set Depth or Width to 0 for no notch.
+          </p>
+        </div>
+
         <div id="pierceDepthSummary" hidden>
           <div class="field-label-row">
             <div class="field-label">Depths</div>
@@ -327,8 +349,8 @@
         <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show painted regions on the canvas</button>
         <p class="joint-hint">
           A testing aid, right on the artwork: tips pink, pierceable cyan,
-          the part of it that gives way amber, and walls white — plus the live
-          contact reading. Leave it off for normal work.
+          the part that bunches up around a dent amber, and walls white — plus
+          the live contact reading. Leave it off for normal work.
         </p>
         <button id="pierceRemoveBtn" class="btn btn--sm btn--danger px-pin-launch" type="button">Remove Pierce Role</button>
 
@@ -565,7 +587,6 @@
           <button id="pierceTargetAreaBtn" class="segmented__btn" type="button" aria-pressed="false">Pierceable</button>
           <button id="pierceTargetDeformBtn" class="segmented__btn" type="button" aria-pressed="false">Deformable</button>
           <button id="pierceTargetBarrierBtn" class="segmented__btn" type="button" aria-pressed="false">Barrier</button>
-          <button id="pierceTargetEnteredBtn" class="segmented__btn" type="button" aria-pressed="false">Entered</button>
         </div>
         <div class="segmented" role="group" aria-label="Paint tools">
           <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>

@@ -30,7 +30,7 @@ const FALLOFF_EXPONENT = 2;
 // The pierce solver's current displacement, read while deforming. Its own
 // state module rather than pierce.js, which imports THIS file -- routing
 // through a leaf keeps the import graph acyclic.
-import { pierceOffsets, pierceOffsetsFor } from './pierceState.js';
+import { pierceOffsets } from './pierceState.js';
 
 export const DEFAULT_MAX_INFLUENCES = 3;
 export const MIN_DENSITY = 3;
@@ -111,121 +111,6 @@ export function generateMesh(part, density) {
   }
 
   return new PartMesh({ cols, rows, density, vertices, triangles });
-}
-
-// ---------------------------------------------------------------------------
-// Subdivision: the same surface, described more finely.
-//
-// WHY THIS EXISTS
-//
-// A mesh here is sized for BONE SKINNING -- six to ten cells across a
-// layer, which is all a limb bending needs. A pierce blend shape is a
-// different job with a different scale: the artist draws a corner
-// softening by two or three TEXELS, and a mesh whose cells are eight,
-// twenty, fifty texels wide has nothing to express that with. Measured on
-// a 48x48 layer with a 4-texel chamfer drawn: at the shipped density the
-// rendered shape came out 11 pixels away from the drawn one and only 9
-// from the shape it was supposed to be leaving. The morph was running --
-// it simply had no geometry to land on.
-//
-// So a morphing layer is drawn through a SUBDIVISION of its own mesh: the
-// same rectangle, k x k finer per cell. What makes this safe is where the
-// fine vertices get their positions. They are not re-skinned and they
-// carry no bone weights of their own; each one is the barycentric blend of
-// the coarse triangle it sits inside, using that triangle's already-
-// deformed corners. That is EXACTLY what the rasterizer computes at the
-// same spot today, so with no morph applied the subdivided layer renders
-// pixel-for-pixel as it did before. Skinning is untouched, hand-painted
-// weights are untouched, Bind mode is untouched -- the subdivision only
-// gives the blend shape somewhere to put itself.
-
-// Which of a cell's two triangles a point falls in, and where in it.
-// generateMesh splits every cell along the top-right -> bottom-left
-// diagonal, so the test is s + t against 1, and the two weight sets below
-// are that split solved.
-function cellParent(s, t, topLeft, stride) {
-  const topRight = topLeft + 1;
-  const bottomLeft = topLeft + stride;
-  const bottomRight = bottomLeft + 1;
-  if (s + t <= 1) {
-    return [topLeft, topRight, bottomLeft, 1 - s - t, s, t];
-  }
-  return [topRight, bottomRight, bottomLeft, 1 - t, s + t - 1, 1 - s];
-}
-
-export function subdivideMesh(part, mesh, factor) {
-  const k = Math.max(1, Math.round(factor));
-  const cols = mesh.cols * k;
-  const rows = mesh.rows * k;
-  const width = part.naturalWidth;
-  const height = part.naturalHeight;
-  const stride = mesh.cols + 1;
-
-  const vertices = [];
-  const parent = new Int32Array((cols + 1) * (rows + 1) * 3);
-  const parentWeight = new Float64Array((cols + 1) * (rows + 1) * 3);
-
-  for (let row = 0; row <= rows; row++) {
-    for (let col = 0; col <= cols; col++) {
-      const u = (col / cols) * width;
-      const v = (row / rows) * height;
-      vertices.push(new MeshVertex(u, v, { x: u - width / 2, y: v - height / 2 }));
-
-      // The coarse cell this fine vertex sits in. Clamped at the far edge
-      // so the last row and column belong to the last cell rather than to
-      // a cell past the end of the grid.
-      const cu = Math.min(mesh.cols - 1, Math.floor(col / k));
-      const cv = Math.min(mesh.rows - 1, Math.floor(row / k));
-      const [a, b, c, wa, wb, wc] = cellParent(col / k - cu, row / k - cv, cv * stride + cu, stride);
-      const i = (vertices.length - 1) * 3;
-      parent[i] = a; parent[i + 1] = b; parent[i + 2] = c;
-      parentWeight[i] = wa; parentWeight[i + 1] = wb; parentWeight[i + 2] = wc;
-    }
-  }
-
-  const triangles = [];
-  const fineStride = cols + 1;
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      const topLeft = row * fineStride + col;
-      triangles.push(topLeft, topLeft + 1, topLeft + fineStride);
-      triangles.push(topLeft + 1, topLeft + fineStride + 1, topLeft + fineStride);
-    }
-  }
-
-  return { cols, rows, factor: k, vertices, triangles, parent, parentWeight };
-}
-
-// A subdivided layer's deformed positions. The coarse mesh is deformed
-// exactly as it always was -- bones, pins and all -- and the fine vertices
-// ride inside it; the morph is then added at full fine resolution.
-//
-// The coarse positions are taken ALREADY SNAPPED, and the fine ones are
-// not snapped again. That ordering is what makes the subdivision exact
-// rather than merely close: the sub-triangles then tile the snapped coarse
-// triangle precisely, with the same affine UV map across it, so a layer
-// with no morph rasterizes to the identical pixels. Rounding the fine
-// vertices too would pull every internal edge to its own nearest whole
-// coordinate and shift source texels about by a pixel -- which is exactly
-// what it did when tried: 58 channel differences on a posed, bound layer
-// that should not have changed at all.
-export function deformSubdivided(part, fine, boneTransforms) {
-  const coarse = snapToGrid(deformVertices(part.mesh, part, boneTransforms));
-  const offsets = pierceOffsetsFor(part, fine.vertices.length);
-  const parent = fine.parent;
-  const weight = fine.parentWeight;
-  const out = new Array(fine.vertices.length);
-  for (let i = 0; i < out.length; i++) {
-    const j = i * 3;
-    const a = coarse[parent[j]];
-    const b = coarse[parent[j + 1]];
-    const c = coarse[parent[j + 2]];
-    let x = a.x * weight[j] + b.x * weight[j + 1] + c.x * weight[j + 2];
-    let y = a.y * weight[j] + b.y * weight[j + 1] + c.y * weight[j + 2];
-    if (offsets) { x += offsets.offsetX[i]; y += offsets.offsetY[i]; }
-    out[i] = { x, y };
-  }
-  return out;
 }
 
 // Shortest distance from a point to a bone's head->tail segment.
@@ -542,15 +427,8 @@ export function pinInfluence(mesh, part) {
   const height = part.naturalHeight;
   const cellW = width / Math.max(1, mesh.cols);
   const cellH = height / Math.max(1, mesh.rows);
-  // One mesh cell, in texels: the width of the transition band. One cell
-  // of the LAYER's mesh, which is why the subdivision factor is multiplied
-  // back in -- a morphing layer is solved on a finer grid (see
-  // subdivideMesh), and taking one of ITS cells would shrink this band by
-  // the subdivision factor and stop holding neighbours the pin used to
-  // hold. The pinned texels themselves are unaffected either way: they are
-  // held at 1, and a finer grid holds them more tightly, not less.
-  const factor = mesh.factor || 1;
-  const radius = Math.max(1, Math.max(cellW, cellH) * factor);
+  // One mesh cell, in texels: the width of the transition band.
+  const radius = Math.max(1, Math.max(cellW, cellH));
 
   // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
   // what its vertices can express, and the vertices are cell corners -- so

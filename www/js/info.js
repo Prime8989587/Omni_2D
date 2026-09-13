@@ -54,19 +54,30 @@ const TOPICS = {
   'pierce-targets': {
     title: 'Paint targets',
     body: 'Tip (on the piercer) is what counts as "in".\n\n' +
-      'On the pierced layer, four masks, each a different question:\n' +
-      '• Pierceable -- the Rest shape; where contact is detected at all.\n' +
-      '• Deformable -- of those pixels, which may actually move. ' +
-      'Pierceable-but-not-deformable pixels still register contact and ' +
-      'sink beneath the tip, but hold still -- like bone under flesh. ' +
-      'Empty means the whole pierceable area gives way.\n' +
+      'On the pierced layer, three masks, each a different question:\n' +
+      '• Pierceable -- where contact is detected at all, and the only ' +
+      'place the notch is allowed to cut.\n' +
+      '• Deformable -- which pixels BUNCH UP around that notch, pushing ' +
+      'outward as it grows, the way material does when something is ' +
+      'pressed into it. Empty means none of them do: the notch still cuts, ' +
+      'the edges around it just stay put.\n' +
       '• Barrier -- solid pixels that stop the piercer sideways while ' +
-      'in contact. Never blocks it going deeper -- that’s Enter/End.\n' +
-      '• Entered -- a second outline for the SAME area, showing its ' +
-      'shape at full depth. The outline blends from Rest to Entered as ' +
-      'depth goes from Enter to End.\n\n' +
-      'Nothing painted on Entered means the region simply stays at Rest: ' +
-      'morphing needs a shape to blend toward, and won’t turn on by itself.',
+      'in contact. Never blocks it going deeper -- that’s Enter/End.\n\n' +
+      'The notch itself is not painted. Its size is the Depth and Width ' +
+      'pair back in the Pierce window.',
+  },
+  'pierce-dent': {
+    title: 'Dent shape',
+    body: 'The notch a pierce cuts into this layer, in its own pixels. ' +
+      'Measured at the End point -- it grows from nothing at Enter, and ' +
+      'shrinks back to nothing as the piercer comes out.\n\n' +
+      '• Depth -- how far the point drives in, along the direction the ' +
+      'piercer is travelling.\n' +
+      '• Width -- how wide the opening is across the surface, where the ' +
+      'piercer goes in.\n\n' +
+      'Set either to 0 for no notch at all. Paint Deformable on the same ' +
+      'layer to make the material around the notch bunch up as it opens; ' +
+      'the two are one effect, driven by the same depth.',
   },
   'joint-type': {
     title: 'Follows parent',

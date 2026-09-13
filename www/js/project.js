@@ -18,6 +18,7 @@ import {
   Part, partsStore, reservePartId,
   PierceRole, PIERCE_ROLES, clampPierceDepth,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
+  clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH,
   PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
@@ -102,7 +103,8 @@ function serializePart(part, copyPixels) {
     pierceRegion: [...part.pierceRegion],
     pierceDeformRegion: [...part.pierceDeformRegion],
     pierceBarrierRegion: [...part.pierceBarrierRegion],
-    pierceEnteredRegion: [...part.pierceEnteredRegion],
+    pierceDentDepth: part.pierceDentDepth,
+    pierceDentWidth: part.pierceDentWidth,
     piercePhysics: part.piercePhysics,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
@@ -146,9 +148,15 @@ function deserializePart(data) {
   // Absent before barriers existed; empty means no walls, which is how
   // those projects behaved.
   part.pierceBarrierRegion = new Set(data.pierceBarrierRegion || []);
-  // Absent before the morph existed; empty means the region keeps its rest
-  // shape, which is what those projects looked like.
-  part.pierceEnteredRegion = new Set(data.pierceEnteredRegion || []);
+  // The dent's two numbers. A project saved before them carries a painted
+  // pierceEnteredRegion instead -- a second silhouette for a blend that no
+  // longer exists. It is deliberately NOT migrated into a depth and a
+  // width: those numbers cannot be recovered from a freehand outline
+  // without inventing them, and inventing them would silently give an old
+  // project a dent nobody configured. It loads with the defaults, and the
+  // Pierce window's two sliders are then the whole setup.
+  part.pierceDentDepth = clampDentSize(data.pierceDentDepth ?? DEFAULT_DENT_DEPTH);
+  part.pierceDentWidth = clampDentSize(data.pierceDentWidth ?? DEFAULT_DENT_WIDTH);
   // Absent before the setting existed, and its default is the behaviour
   // those projects were saved under.
   part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)

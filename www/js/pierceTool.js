@@ -30,7 +30,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
-import { pierceMorphIssue } from './pierce.js';
+import { pierceDentIssue } from './pierce.js';
 
 // The tip is the app's accent; the pierceable area is deliberately NOT,
 // because the two are painted in the same window and confusing them would
@@ -41,18 +41,15 @@ const AREA_COLOR = 'rgba(46, 230, 255, 0.45)';
 const AREA_EDGE = '#2EE6FF';
 // Deformable is a SUBSET of pierceable and is drawn on top of it, so it
 // needs a colour that reads clearly against cyan rather than blending
-// into it -- amber, the warm opposite of both the other two.
+// into it -- amber, the warm opposite of both the other two. It marks the
+// material that BUNCHES around a dent, so amber reading as "this is the
+// part that moves" is exactly right.
 const DEFORM_COLOR = 'rgba(255, 176, 46, 0.6)';
 const DEFORM_EDGE = '#FFB02E';
 // Walls. Near-white, and the most opaque of the four: a barrier is not a
 // degree of anything, it is solid or it is not.
 const BARRIER_COLOR = 'rgba(236, 238, 248, 0.85)';
 const BARRIER_EDGE = '#FFFFFF';
-// The shape at full depth. Violet: it is a second STATE of the pierceable
-// area rather than a subdivision of it, so it wants a colour that reads as
-// a different thing from the cyan rather than a shade of it.
-const ENTERED_COLOR = 'rgba(178, 122, 255, 0.55)';
-const ENTERED_EDGE = '#B27AFF';
 
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -65,7 +62,7 @@ function cacheElements() {
   for (const id of [
     'pierceWindow', 'pierceWindowTarget', 'pierceWindowStatus', 'pierceWindowDoneBtn',
     'pierceCanvas', 'pierceTargetTipBtn', 'pierceTargetAreaBtn', 'pierceTargetDeformBtn',
-    'pierceTargetBarrierBtn', 'pierceTargetEnteredBtn', 'pierceTargetHint', 'pierceToolPaintBtn',
+    'pierceTargetBarrierBtn', 'pierceTargetHint', 'pierceToolPaintBtn',
     'pierceToolEraseBtn', 'pierceBrushBtn', 'pierceBrushMenu',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
     'piercePiercedOpacity', 'piercePiercedOpacityValue',
@@ -155,10 +152,10 @@ function endSession() {
   session = null;
 }
 
-// The three masks the brush can write into. Tip lives on the piercer;
-// pierceable and deformable BOTH live on the pierced layer, which is
-// why the target rather than the layer has to decide which Set is being
-// edited -- two of them share a part.
+// The masks the brush can write into. Tip lives on the piercer;
+// pierceable, deformable and barrier all live on the pierced layer, which
+// is why the target rather than the layer has to decide which Set is being
+// edited -- several of them share a part.
 const MASKS = {
   tip: {
     region: (part) => part.pierceRegion,
@@ -179,11 +176,6 @@ const MASKS = {
     region: (part) => part.pierceBarrierRegion,
     write: (id, indices, marked) => partsStore.setPierceBarrierRegion(id, indices, marked),
     label: 'barrier',
-  },
-  entered: {
-    region: (part) => part.pierceEnteredRegion,
-    write: (id, indices, marked) => partsStore.setPierceEnteredRegion(id, indices, marked),
-    label: 'entered shape',
   },
 };
 
@@ -307,9 +299,6 @@ function render() {
   drawRegion(ctx, pierced, piercedAt, AREA_COLOR, AREA_EDGE);
   // On top of the pierceable area, because it is a part of it.
   drawRegion(ctx, pierced, piercedAt, DEFORM_COLOR, DEFORM_EDGE, pierced.pierceDeformRegion);
-  // The entered shape over the rest one, since it is where that area is
-  // going -- the two read as a before and an after.
-  drawRegion(ctx, pierced, piercedAt, ENTERED_COLOR, ENTERED_EDGE, pierced.pierceEnteredRegion);
   // Walls last: they are what the tip is stopped by, so they belong on top
   // of whatever they are bounding.
   drawRegion(ctx, pierced, piercedAt, BARRIER_COLOR, BARRIER_EDGE, pierced.pierceBarrierRegion);
@@ -318,28 +307,29 @@ function render() {
   els.pierceWindowTarget.textContent = session.target === 'tip'
     ? `${piercer.name} · tip`
     : `${pierced.name} · ${targetMask().label}`;
-  const deform = pierced.pierceDeformRegion.size;
-  // A drawing that cannot be blended is called out here rather than left
-  // to look like it took: the counts alone would say the texels are stored,
-  // which they are, while nothing on the canvas ever moved.
-  const issue = pierceMorphIssue(pierced);
+  // A dent that cannot be cut is called out here rather than left to look
+  // like it took: the numbers alone would say a depth and a width are
+  // stored, which they are, while nothing on the canvas ever moved.
+  const issue = pierceDentIssue(pierced);
   els.pierceWindowStatus.textContent = issue
-    ? `⚠ not blending — ${issue}`
+    ? `⚠ no dent — ${issue}`
     : `tip ${piercer.pierceRegion.size} px · flesh ${pierced.pierceRegion.size} px · ` +
-      `soft ${deform || 'all'} · wall ${pierced.pierceBarrierRegion.size} · ` +
-      `entered ${pierced.pierceEnteredRegion.size || 'none'} · ` +
+      `bunch ${pierced.pierceDeformRegion.size || 'none'} · ` +
+      `wall ${pierced.pierceBarrierRegion.size} · ` +
+      `dent ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} · ` +
       `${Math.round(cam.zoom * 100)}%`;
 }
 
 // What the selected target is for, said where it is being used. The
-// Entered one earns its line: it is the only target that is a SILHOUETTE
-// rather than a mask, and nothing else on this screen distinguishes those
-// two ideas.
+// Deformable one earns its length: it used to mean "which pixels are
+// allowed to give way", with unpainted meaning all of them, and it now
+// means very nearly the opposite -- the pixels that pile up around the
+// notch, with unpainted meaning none. Somebody who learned the old meaning
+// will read the same button and get the wrong answer unless it says so.
 const TARGET_HINT = {
-  entered: 'A whole second silhouette, not a mask: this is the pierceable '
-    + 'shape as it looks at full depth. It starts as a copy — ERASE where the '
-    + 'flesh should pull in, PAINT where it should push out.',
-  deform: 'Which pierceable pixels may actually move. Unpainted means all of them.',
+  deform: 'Which pixels BUNCH UP around the dent — they push outward as the '
+    + 'notch grows. Unpainted means none of them do; paint the rim you want '
+    + 'to react.',
   barrier: 'Solid: the tip cannot cross these, however hard it is pushed.',
   area: 'Where a pierce registers at all on this layer.',
   tip: 'The part of the piercer that goes in.',
@@ -353,7 +343,6 @@ function renderTools() {
   els.pierceTargetAreaBtn.setAttribute('aria-pressed', String(session.target === 'area'));
   els.pierceTargetDeformBtn.setAttribute('aria-pressed', String(session.target === 'deform'));
   els.pierceTargetBarrierBtn.setAttribute('aria-pressed', String(session.target === 'barrier'));
-  els.pierceTargetEnteredBtn.setAttribute('aria-pressed', String(session.target === 'entered'));
   els.pierceToolPaintBtn.setAttribute('aria-pressed', String(session.tool === 'paint'));
   els.pierceToolEraseBtn.setAttribute('aria-pressed', String(session.tool === 'erase'));
   els.pierceBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
@@ -450,36 +439,6 @@ function stampLine(from, to) {
     });
   }
   stamp(run);
-}
-
-// THE ENTERED SHAPE IS AN EDIT OF THE REST ONE, NOT A DRAWING FROM NOTHING
-//
-// Every other target here is a mask: paint the texels that are the tip,
-// the wall, the part that gives way. The Entered shape is not a mask. It
-// is a SILHOUETTE -- the whole pierceable area drawn again, as it looks at
-// full depth -- and the blend traces its outline and pairs that against
-// the rest outline point for point.
-//
-// Presented as one more brush over an empty layer, it invites being used
-// like the others: a band brushed in where the tip arrives. That stores
-// perfectly well and then blends a 120-texel perimeter toward a 51-texel
-// one whose centre sits 14 texels away, which does not read as an opening
-// at the tip. It reads as the shape lurching somewhere else entirely --
-// reported from a real scene as "the deformation is on top, inverse to
-// where I drew".
-//
-// So the target opens with the rest shape already in it. The first stroke
-// is then an EDIT: erase where the flesh should pull in, paint where it
-// should push out. Only when it is empty -- deliberate work is never
-// overwritten -- and it goes through history like any other stroke, so it
-// undoes.
-function seedEnteredFromRest() {
-  const pierced = session.pierced;
-  if (!pierced || pierced.pierceEnteredRegion.size > 0) return;
-  if (pierced.pierceRegion.size === 0) return;
-  const token = history.capture('Start Entered shape from the pierceable shape');
-  partsStore.setPierceEnteredRegion(pierced.id, [...pierced.pierceRegion], true);
-  history.commitCapture(token, true);
 }
 
 function beginStroke(point) {
@@ -637,13 +596,6 @@ export function initPierceTool() {
   els.pierceTargetBarrierBtn.addEventListener('click', () => {
     if (!session) return;
     session.target = 'barrier';
-    renderTools();
-    render();
-  });
-  els.pierceTargetEnteredBtn.addEventListener('click', () => {
-    if (!session) return;
-    session.target = 'entered';
-    seedEnteredFromRest();
     renderTools();
     render();
   });

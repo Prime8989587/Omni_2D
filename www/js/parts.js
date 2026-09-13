@@ -82,6 +82,20 @@ export const PIERCE_DEPTH_RANGE = Object.freeze({ min: 1, max: 128 });
 export const DEFAULT_PIERCE_ENTER = 12;
 export const DEFAULT_PIERCE_END = 24;
 
+// The dent's two numbers, in the pierced layer's own texels. Zero is a
+// legitimate setting -- no dent -- so the floor is zero rather than one,
+// and the ceiling is generous enough for a wedge across a large sprite
+// without being large enough to be a typo nobody notices.
+export const MAX_DENT_SIZE = 128;
+export const DEFAULT_DENT_DEPTH = 6;
+export const DEFAULT_DENT_WIDTH = 10;
+
+export function clampDentSize(value) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(MAX_DENT_SIZE, number));
+}
+
 export function clampPierceDepth(value) {
   const n = Math.round(Number(value));
   if (!Number.isFinite(n)) return PIERCE_DEPTH_RANGE.min;
@@ -149,22 +163,19 @@ export class Part {
     this.pierceEnter = DEFAULT_PIERCE_ENTER;
     this.pierceEnd = DEFAULT_PIERCE_END;
 
-    // WHICH PIERCEABLE PIXELS ARE ALLOWED TO GIVE WAY
+    // WHICH PIXELS BUNCH AROUND A DENT
     //
-    // pierceRegion answers "can a piercer make contact here". This answers
-    // the separate question "and may this pixel then MOVE" -- so an
-    // pierced layer can register a pierce across its whole surface
-    // while only part of that surface actually dents. Bone, a fingernail,
-    // a belt buckle: contact happens, the z-order swap happens, and the
-    // pixels themselves hold firm.
+    // A wedge pushed into something has to put the material it displaces
+    // somewhere, and it piles up at the rim. These are the pixels allowed
+    // to do that: painted anywhere on this layer, they are shoved outward
+    // along the dent's own faces, by an amount that falls off with distance
+    // from it and grows with depth.
     //
-    // EMPTY MEANS ALL OF IT. A layer that has never had this painted
-    // behaves exactly as it did before the mask existed -- everything
-    // pierceable deforms -- so this only ever takes movement AWAY, and no
-    // existing project changes behaviour by being loaded into a build that
-    // has it. Meaningful only where the pixel is also pierceable; the
-    // solver intersects the two rather than letting a stray mark outside
-    // the pierceable area do anything.
+    // EMPTY MEANS NONE. This is opt-in -- gathering is an effect asked for
+    // on the pixels it should happen to, not one every pierceable pixel
+    // gets until told otherwise. It is also NOT intersected with the
+    // pierceable area: the material that rises around a dent is usually the
+    // material just outside where the pierce itself registers.
     this.pierceDeformRegion = new Set();
     this.pierceDeformRegionVersion = 0;
 
@@ -183,20 +194,19 @@ export class Part {
     this.pierceBarrierRegion = new Set();
     this.pierceBarrierRegionVersion = 0;
 
-    // THE SHAPE THIS REGION TAKES AT FULL DEPTH
+    // THE DENT THIS REGION TAKES AT FULL DEPTH
     //
-    // The pierceable mask doubles as the REST outline -- the shape with
-    // nothing in it. This is the other end: the outline the artist drew
-    // for maximum depth, the tip opened to receive the piercer. At any
-    // depth between, the rendered outline is a point-for-point blend of
-    // the two, so every frame shows a shape somebody actually drew half of
-    // rather than one computed by shoving vertices about.
+    // Two numbers rather than a second painted silhouette. How far the
+    // wedge's point pushes in, and how wide its base is across the surface
+    // -- both in this layer's own texels, both scaled by the live depth
+    // fraction, so the dent grows from nothing and shrinks back the same
+    // way. See dent.js for what is built from them and why drawing a whole
+    // second outline turned out not to work on real artwork.
     //
-    // Empty means no morph. Blending needs something to blend toward, and
-    // a region with only a rest shape simply keeps it -- the same way
-    // Enter and End had to be set before a pierce did anything at all.
-    this.pierceEnteredRegion = new Set();
-    this.pierceEnteredRegionVersion = 0;
+    // Zero on either means no dent, which is a finished, valid setup for a
+    // layer that registers contact without giving way.
+    this.pierceDentDepth = DEFAULT_DENT_DEPTH;
+    this.pierceDentWidth = DEFAULT_DENT_WIDTH;
 
     // Which side's movement may deepen this piercer's contacts. Lives on
     // the piercer with Enter and End, because like them it describes the
@@ -496,8 +506,8 @@ class PartsStore {
       part.pierceDeformRegionVersion++;
       part.pierceBarrierRegion = new Set();
       part.pierceBarrierRegionVersion++;
-      part.pierceEnteredRegion = new Set();
-      part.pierceEnteredRegionVersion++;
+      part.pierceDentDepth = DEFAULT_DENT_DEPTH;
+      part.pierceDentWidth = DEFAULT_DENT_WIDTH;
       part.piercePhysics = PiercePhysics.PIERCER;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
@@ -523,22 +533,16 @@ class PartsStore {
     return true;
   }
 
-  setPierceEnteredRegion(id, indices, marked) {
+  setPierceDent(id, depth, width) {
     const part = this._parts.find((candidate) => candidate.id === id);
-    if (!part) return 0;
-    let changed = 0;
-    for (const index of indices) {
-      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
-      if (marked ? !part.pierceEnteredRegion.has(index) : part.pierceEnteredRegion.has(index)) {
-        if (marked) part.pierceEnteredRegion.add(index); else part.pierceEnteredRegion.delete(index);
-        changed++;
-      }
-    }
-    if (changed) {
-      part.pierceEnteredRegionVersion++;
-      this._emit('transform');
-    }
-    return changed;
+    if (!part) return false;
+    const nextDepth = clampDentSize(depth);
+    const nextWidth = clampDentSize(width);
+    if (part.pierceDentDepth === nextDepth && part.pierceDentWidth === nextWidth) return false;
+    part.pierceDentDepth = nextDepth;
+    part.pierceDentWidth = nextWidth;
+    this._emit('transform');
+    return true;
   }
 
   setPierceBarrierRegion(id, indices, marked) {

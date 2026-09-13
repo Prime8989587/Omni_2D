@@ -35,19 +35,9 @@ export function pierceStateFor(partId, vertexCount) {
 // advanced them too, the simulation would run once per redraw rather than
 // once per frame, and would speed up on a busy screen.
 export function pierceOffsets(part) {
-  if (!part || !part.mesh) return null;
-  return pierceOffsetsFor(part, part.mesh.vertices.length);
-}
-
-// The same, against a vertex count the caller names rather than the
-// layer's own mesh. A morphing layer is solved and drawn through a
-// SUBDIVISION of that mesh (see mesh.js), so its offsets are sized to the
-// fine grid -- and the count check above is exactly what then keeps the
-// coarse path from adding them a second time.
-export function pierceOffsetsFor(part, vertexCount) {
-  if (!part || !part.isPierced) return null;
+  if (!part || !part.isPierced || !part.mesh) return null;
   const entry = state.get(part.id);
-  if (!entry || entry.count !== vertexCount) return null;
+  if (!entry || entry.count !== part.mesh.vertices.length) return null;
   return entry;
 }
 
