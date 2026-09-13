@@ -210,6 +210,151 @@ function alignTo(reference, points) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// 3b. Correspond
+//
+// WHY EQUAL ARC LENGTH IS NOT ENOUGH ON ITS OWN
+//
+// Step 2 gives both outlines 64 points at equal spacing, and step 3 turns
+// one against the other to the best whole-list rotation. That pairs them
+// correctly only while the two shapes have the SAME arc-length
+// parameterisation -- which stops being true the moment the artist draws
+// the thing this feature exists for.
+//
+// Cut a notch into one shape and its perimeter grows. Measured on a cone
+// with a V opening drawn at its tip: 173.7 texels of perimeter at rest
+// against 178.5 entered. Equal spacing then slides every point past the
+// notch a little further round, so the point that was the cone's top-left
+// corner is now paired with somewhere slightly along the top edge -- and a
+// rigid rotation cannot undo that, because the stretch is local. The
+// result is a shape that changes where the artist drew nothing: 3.18 px of
+// travel along a top edge that is identical in both drawings, which is
+// exactly what "the top is changing pixels instead of the tip opening"
+// looks like.
+//
+// WHAT CORRESPONDENCE ACTUALLY MEANS HERE
+//
+// Both shapes are drawn by one person over one piece of artwork, so they
+// coincide nearly everywhere and differ in the one place being drawn. The
+// correspondence a person would draw by eye is therefore: where the two
+// outlines lie on top of each other, every point maps to ITSELF, and only
+// across the stretch that differs does anything travel.
+//
+// So the coinciding stretches are found and pinned, and the rest is spread
+// evenly between them.
+
+// The closest point on a closed polyline to `point`, as a distance and a
+// position measured in arc length from the start of the line.
+function closestOn(point, polygon, cumulative, perimeter) {
+  let bestDistance = Infinity;
+  let bestAt = 0;
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy;
+    let t = 0;
+    if (lengthSquared > 1e-12) {
+      t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared;
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    }
+    const distance = Math.hypot(a.x + dx * t - point.x, a.y + dy * t - point.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestAt = cumulative[i] + Math.sqrt(lengthSquared) * t;
+    }
+  }
+  return { distance: bestDistance, at: bestAt % perimeter };
+}
+
+function pointAt(polygon, cumulative, perimeter, at) {
+  const target = ((at % perimeter) + perimeter) % perimeter;
+  let i = 0;
+  while (i < polygon.length - 1 && cumulative[i + 1] <= target) i++;
+  const a = polygon[i];
+  const b = polygon[(i + 1) % polygon.length];
+  const span = cumulative[i + 1] - cumulative[i];
+  const t = span > 1e-12 ? (target - cumulative[i]) / span : 0;
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+// Within this much of the other outline, a point is taken to be ON it --
+// the same place in both drawings, and therefore something that must not
+// move. One texel: closer than an artist can draw a difference, and
+// comfortably wider than the sampling error from two independent traces.
+const COINCIDENT = 1.0;
+
+// The rest outline needs at least this many anchors before the pinning is
+// trusted at all. Below it the two drawings share almost nothing, there is
+// no "unchanged part" to hold still, and plain equal spacing is the honest
+// answer.
+const MIN_ANCHORS = 4;
+
+export function correspondOutlines(rest, entered) {
+  const n = rest.length;
+  if (n === 0 || entered.length !== n) return entered;
+
+  const cumulative = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    const a = entered[i];
+    const b = entered[(i + 1) % n];
+    cumulative[i + 1] = cumulative[i] + Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  const perimeter = cumulative[n];
+  if (perimeter < 1e-9) return entered;
+
+  // Where each rest point sits on the entered outline, and whether it is
+  // close enough to count as the same place in both drawings.
+  const at = new Float64Array(n);
+  const anchored = new Uint8Array(n);
+  let anchors = 0;
+  for (let i = 0; i < n; i++) {
+    const hit = closestOn(rest[i], entered, cumulative, perimeter);
+    at[i] = hit.at;
+    if (hit.distance <= COINCIDENT) { anchored[i] = 1; anchors++; }
+  }
+  if (anchors < MIN_ANCHORS || anchors === n) return entered;
+
+  // Anchors must advance around the outline in the same order the points
+  // do; one that runs backwards is a mis-hit (a thin neck, two edges close
+  // together) and is dropped rather than allowed to fold the shape.
+  const first = anchored.indexOf(1);
+  let previous = at[first];
+  let travelled = 0;
+  const order = [first];
+  for (let step = 1; step < n; step++) {
+    const i = (first + step) % n;
+    if (!anchored[i]) continue;
+    let advance = at[i] - previous;
+    while (advance < 0) advance += perimeter;
+    if (travelled + advance > perimeter) { anchored[i] = 0; continue; }
+    travelled += advance;
+    previous = at[i];
+    order.push(i);
+  }
+  if (order.length < MIN_ANCHORS) return entered;
+
+  // Every point between two anchors is spread evenly along the entered
+  // outline between them -- so a notch the artist cut gets its whole arc
+  // shared out across the points that have to describe it.
+  const out = new Array(n);
+  for (let k = 0; k < order.length; k++) {
+    const startIndex = order[k];
+    const endIndex = order[(k + 1) % order.length];
+    let gap = (endIndex - startIndex + n) % n;
+    if (gap === 0) gap = n;
+    let arc = at[endIndex] - at[startIndex];
+    while (arc < 0) arc += perimeter;
+    for (let step = 0; step < gap; step++) {
+      const i = (startIndex + step) % n;
+      out[i] = pointAt(entered, cumulative, perimeter, at[startIndex] + (arc * step) / gap);
+    }
+  }
+  for (let i = 0; i < n; i++) if (!out[i]) out[i] = entered[i];
+  return out;
+}
+
 // How much of a painted mask its biggest single piece accounts for, 0..1.
 //
 // An outline is ONE closed path, so a mask painted as two separate pieces

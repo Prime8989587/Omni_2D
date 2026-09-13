@@ -89,7 +89,8 @@ import {
 } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
 import {
-  outlineOf, alignOutline, meanValueWeights, evaluateWeights, blendOutlines, blobCoverage,
+  outlineOf, alignOutline, correspondOutlines, meanValueWeights, evaluateWeights,
+  blendOutlines, blobCoverage,
 } from './morph.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
@@ -1224,7 +1225,11 @@ function morphFor(part, mesh) {
     const rest = outlineOf(part.pierceRegion, part.naturalWidth, part.naturalHeight);
     const drawn = outlineOf(part.pierceEnteredRegion, part.naturalWidth, part.naturalHeight);
     if (rest.length > 0 && rest.length === drawn.length) {
-      const entered = alignOutline(rest, drawn);
+      // Two steps, and they do different jobs: alignOutline fixes the
+      // gross cyclic offset between two independent traces, and
+      // correspondOutlines then pins the stretches where the drawings
+      // coincide so that an edge the artist left alone does not drift.
+      const entered = correspondOutlines(rest, alignOutline(rest, drawn));
       const halfW = part.naturalWidth / 2;
       const halfH = part.naturalHeight / 2;
       // Only the vertices that can actually move get weights. On a fine

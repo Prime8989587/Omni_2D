@@ -1344,19 +1344,29 @@ function renderPierceModal() {
   // deformable mask means -- worth saying, because a blank count there
   // would read as "nothing will move".
   const walls = part.pierceBarrierRegion.size;
-  // The entered count is the one that says whether a second silhouette has
-  // been drawn at all: with none, the region simply holds its rest shape,
-  // which is a legitimate setup rather than a missing step -- so it is
-  // named only once it exists, and never shown as a reproachful zero.
+  // The entered count decides whether anything will change shape at all.
+  // It used to be named only once it existed, on the reasoning that a
+  // layer without one is a legitimate setup rather than a missing step --
+  // which is true, and was still the wrong call. A pierced layer with
+  // roles set, depths set and its area painted looks completely configured
+  // and does not change shape by one pixel, and nothing on screen said
+  // why. So the absence is now stated as plainly as the presence: not a
+  // warning, because nothing is broken, but the sentence that turns
+  // "it isn't working" into "ah, I haven't drawn the other one yet".
   const entered = part.pierceEnteredRegion.size;
   const soft = part.isPierced
     ? ` · ${part.pierceDeformRegion.size || 'all'} deformable${walls ? ` · ${walls} wall` : ''}` +
       `${entered ? ` · ${entered} entered` : ''}`
     : '';
   const issue = pierceMorphIssue(part);
+  const noShape = part.isPierced && painted > 0 && entered === 0;
   els.piercePaintBtn.textContent = issue
     ? `Paint regions… (⚠ not blending — ${issue})`
-    : (painted ? `Paint regions… (${painted} px marked${soft})` : 'Paint regions…');
+    : (painted
+      ? `Paint regions… (${painted} px marked${soft})${noShape
+        ? ' — no Entered shape drawn yet, so it keeps its rest shape'
+        : ''}`
+      : 'Paint regions…');
   els.pierceOverlayBtn.setAttribute('aria-pressed', String(pierceOverlayEnabled()));
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;
 }

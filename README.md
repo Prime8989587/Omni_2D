@@ -1938,9 +1938,13 @@ of the outline it is supposed to be making. Two drawn shapes do.
 **How the outlines are built.** Both masks are traced by Moore-neighbourhood
 border following with Jacob's stopping criterion, resampled to 64 points at
 equal arc length — so point *k* means "a quarter of the way round" on both
-shapes rather than "the 17th texel somebody happened to paint" — and then
+shapes rather than "the 17th texel somebody happened to paint" — then
 cyclically rotated so the two point lists line up, by the rotation that
-minimises the sum of squared distances between centred pairs.
+minimises the sum of squared distances between centred pairs, and finally
+*corresponded*: the stretches where the two drawings coincide are pinned to
+themselves so an edge the artist left alone cannot drift. That last step is
+not a refinement — without it the shape changes in the wrong place, which
+is its own section below.
 
 **How the artwork follows the outline.** Every mesh vertex is expressed once,
 at bind time, in **mean value coordinates** (Floater, 2003) against the rest
@@ -2098,6 +2102,90 @@ one falloff**, and a smooth monotone ramp inside it. Measured profile, with
 the deformable mask starting at row 18 and a 12-texel falloff: rows 0-6 at
 exactly 0.00, then 0.11, 0.33, 0.65, 1.00, 1.33, 1.58, 1.73 — the ramp is
 exactly one falloff wide and hard zero beyond it.
+
+### The shape changed in the wrong place
+
+With the morph finally visible on screen, a second fault became visible
+with it, reported from a real scene: a cone with a V opening drawn at its
+tip, a finger coming up into it, **neither layer bound and no bones
+anywhere**. The tip did not open. The **top edge** changed instead — an
+edge identical in both drawings.
+
+**The cause is the correspondence between the two outlines, not the
+geometry carrying them.** Step 2 above resamples both outlines to 64 points
+at equal arc length, and step 3 turns one against the other to the best
+whole-list rotation. That pairs them correctly only while both shapes have
+the same arc-length parameterisation — which stops being true the moment
+the artist draws the thing this feature exists for. Cut a notch and the
+perimeter grows: **173.7 texels at rest against 178.5 entered** on that
+cone. Equal spacing then slides every point past the notch a little further
+round, and a rigid rotation cannot undo it, because the stretch is *local*.
+Measured worst travel, by where the point sits on the shape:
+
+| | top | middle | tip |
+| --- | --- | --- | --- |
+| equal spacing and rotation only | 3.18 px | 4.07 px | 13.49 px |
+| **after corresponding** | **0.33 px** | **0.30 px** | **12.99 px** |
+
+3.18 px of travel along an edge the artist drew identically in both shapes
+is exactly what "the top is changing pixels instead of the tip opening"
+looks like.
+
+**The fix.** Both shapes are drawn by one person over one piece of artwork,
+so they coincide nearly everywhere and differ in the one place being drawn.
+The correspondence a person would draw by eye is therefore: where the two
+outlines lie on top of each other, **every point maps to itself**, and only
+across the stretch that differs does anything travel. So
+`correspondOutlines` finds each rest point's closest point on the entered
+outline, treats anything within **one texel** as the same place in both
+drawings and pins it there, drops any pin that would run backwards around
+the outline (a mis-hit on a thin neck, which would fold the shape), and
+spreads the points between consecutive pins evenly along the entered
+outline — so a notch gets its whole arc shared out across the points that
+have to describe it. Fewer than four pins means the two drawings share
+almost nothing, there is no "unchanged part" to hold still, and plain equal
+spacing is the honest answer.
+
+Measured on the rendered silhouette, splitting the cone into thirds by
+height, rest depth against full depth:
+
+| | top | middle | tip |
+| --- | --- | --- | --- |
+| before | 17 px | 14 px | 84 px |
+| **after** | **0 px** | **0 px** | **81 px** |
+
+| Apart — blend 0% | Full depth — blend 100% |
+| --- | --- |
+| ![The cone's tip closed to a point](docs/images/cone-apart-0pct.png) | ![The cone's tip opened, the finger inside it](docs/images/cone-full-100pct.png) |
+
+**And a second thing that scene revealed, which was not a bug in the
+maths.** A pierced layer with its role set, its depths set and its area
+painted — but **no Entered shape drawn** — changes shape by exactly zero
+pixels, correctly, because there is no second shape to blend toward. That
+is measured and true: `{top: 0, middle: 0, tip: 0}` at every depth. The
+problem was that nothing on screen said so. The Pierce window showed
+`Paint regions… (1664 px marked · all deformable)`, which reads as fully
+configured, and the entered count was deliberately hidden while it was zero
+so as not to show "a reproachful zero". That was the wrong call: a setup
+that looks complete and does nothing is worse than a count of zero. It now
+reads:
+
+```
+Paint regions… (1664 px marked · all deformable)
+  — no Entered shape drawn yet, so it keeps its rest shape
+```
+
+Not a warning, because nothing is broken — just the sentence that turns
+"it isn't working" into "ah, I haven't drawn the other one yet".
+
+**Verified.** `test_pierce_cone_notch.mjs` rebuilds that exact scene — no
+bones, neither layer bound, checked rather than assumed — and asserts that
+with no Entered shape the silhouette is identical at every depth and the
+window says why; that with a V drawn at the tip the change lands **at the
+tip and nowhere else** (0 px top, 0 px middle, 81 px tip); that equal
+spacing alone really did drag the untouched top, and corresponding pins it;
+and that the opening is an opening rather than a tear — no pinholes, one
+connected piece.
 
 ### Painting the Entered shape
 
