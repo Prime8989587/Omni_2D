@@ -342,7 +342,7 @@
             <button class="info-btn" type="button" data-info="pierce-depths" aria-haspopup="true" aria-expanded="false" aria-label="What do Enter and End points mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
           </div>
           <p id="pierceDepthReadout" class="modal__text"></p>
-          <button id="pierceEditDepthsBtn" class="toggle-chip toggle-chip--wide" type="button">Edit Enter / End Points…</button>
+          <button id="pierceEditDepthsBtn" class="toggle-chip toggle-chip--wide" type="button">Edit Enter / Dent / End Points…</button>
         </div>
 
         <button id="piercePaintBtn" class="toggle-chip toggle-chip--wide" type="button">Paint regions…</button>
@@ -362,16 +362,30 @@
 
     <div id="pierceDepthModal" class="modal-backdrop" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pierceDepthTitle">
-        <h2 id="pierceDepthTitle" class="modal__title">Enter &amp; End Points</h2>
+        <h2 id="pierceDepthTitle" class="modal__title">Enter, Dent &amp; End Points</h2>
         <p class="modal__text">
           In scene pixels, measured from this piercer's painted tip to the nearest
           pierceable pixel. <b>Enter</b> is the gap where contact starts;
           <b>End</b> is how much deeper the push keeps growing before it stops.
         </p>
+        <div class="field-row">
+          <div class="field-label">Dent Trigger Distance</div>
+          <button class="info-btn" type="button" data-info="pierce-dent-start" aria-haspopup="true" aria-expanded="false" aria-label="What is the Dent Trigger Distance?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <p class="modal__text">
+          A separate gap: where the notch <b>starts to appear</b>. Contact,
+          z-order and force all begin at the Enter Point; the dent begins here
+          and is complete at the End Point. Set it closer than Enter for a tip
+          that touches first and only dents once it is further in.
+        </p>
         <div class="bind-row">
           <label class="slider-field">
             <span>Enter Point</span>
             <input id="pierceEnterInput" class="text-input text-input--inline" type="number" min="1" max="128" step="1" inputmode="numeric" />
+          </label>
+          <label class="slider-field">
+            <span>Dent Trigger</span>
+            <input id="pierceDentStartInput" class="text-input text-input--inline" type="number" min="1" max="128" step="1" inputmode="numeric" />
           </label>
           <label class="slider-field">
             <span>End Point</span>
@@ -389,8 +403,9 @@
         <div class="pierce-draw">
           <canvas id="pierceDepthCanvas" class="pierce-draw__canvas" width="480" height="300"></canvas>
           <p id="pierceDrawHint" class="px-pin__hint">
-            Drag the two handles along the needle's path: <b>Enter</b> where
-            contact begins, <b>End</b> where the push stops growing.
+            Drag the three handles along the needle's path: <b>Enter</b> where
+            contact begins, <b>Dent</b> where the notch starts to appear, and
+            <b>End</b> where both stop growing.
           </p>
         </div>
 
@@ -398,6 +413,7 @@
           <div id="pierceDepthBar" class="pierce-depth__bar">
             <div id="pierceDepthContact" class="pierce-depth__contact"></div>
             <div id="pierceDepthEnterMark" class="pierce-depth__mark pierce-depth__mark--enter"><span>Enter</span></div>
+            <div id="pierceDepthDentMark" class="pierce-depth__mark pierce-depth__mark--dent"><span>Dent</span></div>
             <div id="pierceDepthEndMark" class="pierce-depth__mark pierce-depth__mark--end"><span>End</span></div>
           </div>
           <p id="pierceDepthLegend" class="px-pin__hint"></p>
@@ -587,8 +603,9 @@
           <button id="pierceTargetAreaBtn" class="segmented__btn" type="button" aria-pressed="false">Pierceable</button>
           <button id="pierceTargetDeformBtn" class="segmented__btn" type="button" aria-pressed="false">Deformable</button>
           <button id="pierceTargetBarrierBtn" class="segmented__btn" type="button" aria-pressed="false">Barrier</button>
+          <button id="pierceTargetDentBtn" class="segmented__btn" type="button" aria-pressed="false">Dent</button>
         </div>
-        <div class="segmented" role="group" aria-label="Paint tools">
+        <div id="pierceToolRow" class="segmented" role="group" aria-label="Paint tools">
           <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
           <button id="pierceToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
           <button id="pierceBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pierceBrushMenu">1 × 1 ⌄</button>

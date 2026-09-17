@@ -1643,9 +1643,12 @@ gap   = how far the tip still has to travel to reach the pierceable
 depth = clamp(Enter - gap, 0, End)          t = depth / End
 ```
 
-`t` runs 0 at first touch to 1 at the limit and is the blend between the
-region's two drawn shapes, so a tip barely in contact changes the flesh's
-shape barely at all.
+`t` runs 0 at first touch to 1 at the limit, and scales how hard the contact
+presses back on the pierced layer's bones.
+
+The **notch** has a third depth of its own and does not read `t` — see
+[the Dent Trigger Distance](#the-dent-trigger-distance-touching-and-denting-are-two-events).
+Enter governs contact, z-order and force; the trigger governs the dent.
 
 The axis is read from the artwork: it points from the middle of the whole
 piercer layer toward the middle of its painted tip — a needle has its
@@ -1734,9 +1737,53 @@ inventing them, and inventing them would silently give an old project a
 dent nobody configured. It opens with the defaults, and the two sliders are
 then the whole setup.
 
-It is painted in the same window as the others, as one of four targets —
-Tip, Pierceable, Deformable, Barrier — with the same brush and the same
-stroke undo.
+It is painted in the same window as the others, as one of four paint targets
+— Tip, Pierceable, Deformable, Barrier — with the same brush and the same
+stroke undo, alongside a fifth target, Dent, which places rather than paints.
+
+### Deformable bulges. It never cuts.
+
+The two halves of a dent are produced by two completely separate calculations,
+and only one of them removes anything:
+
+| | reads | does |
+| --- | --- | --- |
+| **the cut** | the triangle ∩ **Pierceable** | zeroes texels in the draw mask |
+| **the bunching** | the triangle + **Deformable** | moves mesh vertices |
+
+`dentCutMask` does not consult the Deformable mask anywhere, and the suite
+pins that down rather than trusting the reading: the published draw mask is
+**byte-identical** with Deformable full, empty, and every other texel — and
+with no dent configured at all, `dentTriangleAt` returns null, every vertex
+offset is exactly 0, and nothing is cut.
+
+**One real bug, and it is why this is worth stating.** The push direction was
+computed as `vertex − nearestPointOnWedge` for *every* vertex. Outside the
+wedge that points away from it, which is right. **Inside** the wedge it points
+from the face into the interior — so material the artist had marked "pile up
+here" was driven *into the hole*, and with a Deformable mask painted over the
+notch the mask read as though it were doing the carving. Measured on a wedge 8
+texels wide and 10 deep with a rise of 1: a vertex sitting **0.186 texels
+inside** the left face came out **1.184 texels inside** it, further in than it
+started and travelling toward the middle of the hole. With a larger rise it
+was worse in a different way — the same direction carried vertices straight
+*across* the notch and out the far side.
+
+The direction is now chosen by side. Outside, away from the nearest boundary
+point; inside, toward it — out through the face it sits on. The magnitude for
+an inside vertex carries it clear of the face first and then gives it the same
+rim rise everything else gets, so the two cases agree exactly at the boundary:
+at distance 0 both are a plain `rise`.
+
+The invariant is checked directly rather than by eye. A signed clearance —
+positive outside the wedge, negative inside — is measured for every vertex
+before and after the push, at twenty dent fractions, with **every** pixel on
+the layer painted Deformable (the worst case, since the mask then covers the
+notch itself). It never decreases for any vertex at any fraction, and every
+vertex that starts inside the wedge ends up clear of it.
+
+So: one tool cuts, one tool bulges, and the bulging one can only ever move
+material away from the notch.
 
 **On a report that this mask was stored but not respected:** not
 reproducible. Traced through the actual deformation path and measured
@@ -1884,13 +1931,13 @@ It simply stops being able to push it further. The accumulator is
 re-baselined whenever the pair drifts out of range, so it cannot wander
 over a long session.
 
-### Setting Enter and End by hand, on the piercer
+### Setting the three depths by hand, on the piercer
 
-The depth window still has both numeric fields, and now also draws the
+The depth window still has the numeric fields, and now also draws the
 piercer's own artwork with its painted tip tinted and a ruler running out
-along the direction that tip points. The two depths sit on that ruler as
-handles: **Enter** where contact begins, **End** where the shape change
-stops growing.
+along the direction that tip points. The depths sit on that ruler as
+handles: **Enter** where contact begins, **Dent** where the notch starts to
+appear, **End** where both stop growing.
 
 Neither input owns the value — the Part does, and both are views onto it.
 Dragging a handle writes the field; typing in the field moves the handle.
@@ -1913,6 +1960,11 @@ leaves `enter + end` — End's place on the ruler — unchanged at 48. Aiming a
 handle at a spot on the artwork lands it **1.00 px** from the target, and
 the field then reads the ruler distance of where it landed.
 
+The Dent handle is the simple case of the same rule: it is a **gap**, exactly
+like Enter, so it sits on the ruler at its own value and a drag writes it
+directly. Neither of the other two moves — that independence is the whole
+point of the setting.
+
 The handle positions are projected onto the tip's axis rather than assumed
 horizontal, so this works for a tip pointing in any direction — and the
 whole drawing, sprite and ruler together, is fitted to the canvas. Fitting
@@ -1924,7 +1976,8 @@ nor dragged.
 
 The shape of a pierce is a **notch, stated as two numbers**. On the pierced
 layer the artist sets a **Depth** and a **Width**, in that layer's own
-pixels, and the app builds a triangle at the contact point every frame:
+pixels — by dragging the wedge itself, or by typing — and the app builds a
+triangle where the artist placed it, every frame:
 
 ```
         base, WIDTH across the surface
@@ -1938,17 +1991,17 @@ pixels, and the app builds a triangle at the contact point every frame:
                apex                  <- pointing inward, down the axis
 ```
 
-The base is centred where the piercer's axis crosses the pierceable
-region's surface; the apex is driven inward along that same axis. Both
-dimensions are multiplied by the depth fraction:
+The base sits at the placed point; the apex is driven inward along the placed
+direction. Neither moves. Both dimensions are multiplied by the **dent
+fraction**, which is the only thing the piercer contributes:
 
 ```
-t = depth / End                      0 at first touch, 1 at the limit
+t = (dentStart - gap) / (dentStart - (enter - end))    clamped to 0..1
 half-width = Width * t / 2           reach-in = Depth * t
 ```
 
-So at the Enter point the wedge has zero size, and it grows continuously to
-the configured Depth × Width at the End point. Measured over a full sweep
+So at the Dent Trigger Distance the wedge has zero size, and it grows
+continuously to the configured Depth × Width at the End point. Measured over a full sweep
 with a 10 × 16 dent and a 1 scene px drag step: the wedge's depth advances
 **0.625 texels per step with no step larger than that**, and the cut area
 advances on **13 of 15 growth steps** — the two that do not are texel
@@ -2077,27 +2130,92 @@ Measured over the same sweep, one scene pixel at a time:
 | Positions on the way out reproducing the way in | **65 of 65, exactly** |
 | Artwork after full withdrawal | **4,596 px, worst column drift 0 px** |
 
-### The wedge has to land in the artwork, not where the artwork used to be
+### Where the dent is, is placed; how big it is, is driven
 
-One real bug, found only by the bound-layer suite. `worldToTexel` inverts
-`localToWorld`, which reads the part's own `x`/`y` — and on a **bound** layer
-those are its *rest* coordinates. Dragging the character moves what is drawn
-without changing them by one pixel, which is why every scene-space number the
-solver works from comes out of `regionPoints`, which adds `pinCarriageOffset`
-on top.
+The dent used to appear wherever the piercer's tip happened to be touching,
+which made its position a live readout of the drag rather than a decision
+anybody got to make. It is now the other way round. The artist **places** the
+wedge — base point and the direction it points — once, and it stays exactly
+there. The piercer's approach drives only *how much* of it there is.
 
-Inverting only the rest transform therefore put the wedge wherever the layer
-used to be. Measured on a 32-texel-wide bound layer after a 36 px
-whole-character drag: the notch's base came out at texel **x = 52**, twenty
-texels off the right-hand edge of the artwork — so nothing was cut, no vertex
-was anywhere near enough to bunch, and the whole effect silently did nothing
-on precisely the layers most likely to be rigged. The contact now carries the
-carriage it was measured with, and `worldToTexel` takes it off again.
+The placement lives on the pierced layer in its **own texel grid**, like every
+other mask on a Part:
 
-The unbound suites could never have caught this: their carriage is zero, so
-the bug is invisible there. `test_dent_math.mjs` now checks the conversion
-directly — a point carried 36 px with its layer maps back to the same texel,
-and ignoring the carriage lands 36 texels away.
+| Field | Means |
+| --- | --- |
+| `pierceDentX`, `pierceDentY` | the base's centre, in this layer's texels |
+| `pierceDentAngle` | the direction the apex is driven in |
+| `pierceDentPlaced` | whether the artist has placed it yet |
+
+A layer that has never had one placed still needs somewhere sensible for the
+handles to start, so `dentPlacement` derives one from the pierceable paint:
+the middle of the region's topmost run, pointing at the region's middle — a
+point *on* the outline aimed *into* the material. It is a starting position
+rather than a stored decision, and the first drag replaces it with a real one.
+
+**Storing it in texel space is what removed a whole class of bug rather than
+fixing one instance of it.** The previous version read the contact point out
+of the solver — scene space, with the bone carriage already folded in — and
+inverted the layer's rest transform to get back to texels. On a **bound**
+layer `x`/`y` are *rest* coordinates: dragging the character moves what is
+drawn without changing them by one pixel, so inverting only the rest transform
+put the wedge wherever the layer used to be. Measured on a 32-texel-wide bound
+layer after a 36 px whole-character drag: the notch's base came out at texel
+**x = 52**, twenty texels off the right-hand edge of the artwork — nothing cut,
+no vertex near enough to bunch, the whole effect silently doing nothing on
+precisely the layers most likely to be rigged.
+
+That was patched by carrying the carriage through the contact and subtracting
+it again. The placement rework deletes the conversion instead: `worldToTexel`,
+`directionToTexel` and the contact's `carriage` field are all gone, because a
+number stored in the grid it is used in never has to be converted into it. The
+wedge now rides the layer's transform for free — re-measured with the layer
+dragged 37 px across and 11 px up, the base stays on the same texel to the
+last bit.
+
+### Placing it by hand, on the artwork
+
+Two numbers in a slider are a poor way to answer *where should this notch
+happen*, so the wedge itself is draggable. The Pierce painter gains a fifth
+target, **Dent**, which paints nothing: it draws the triangle at full size
+over the pierced layer's artwork with three handles on it.
+
+| Handle | Sets |
+| --- | --- |
+| **base** | where on the artwork the notch opens — moves the whole wedge |
+| **apex** | how deep it goes *and* which way it faces |
+| **width** | how wide its mouth is, and nothing else |
+
+Three, because a triangle pinned to a surface has exactly three degrees of
+freedom worth exposing. The apex carries both depth and direction since
+dragging it around the base swings the wedge and dragging it away deepens it;
+too close to the base to read an angle from, it keeps the one it has rather
+than letting the wedge spin under a fingertip. The width handle counts only
+the component *across* the wedge, so dragging at any angle widens it without
+knocking it off its own axis.
+
+The Depth and Width sliders in the Pierce window show the same two numbers and
+write the same fields. Neither is the source of truth — the Part is, and both
+are views onto it. Verified in a real browser by dispatching the pointer
+events a fingertip produces: dragging the base marks the dent placed and lands
+it under the finger to within a pixel, dragging the apex 14 texels from the
+base sets Depth to exactly **14**, dragging the width handle 9 texels out sets
+Width to exactly **18**, and reopening the Pierce window shows `14` and `18` on
+the sliders and `14 px` / `18 px` on their labels. Typing into the slider
+writes back to the same field the handle does.
+
+Because the wedge is a large opaque shape, it is drawn **only** while the Dent
+target is selected; the rest of the time it would hide the paint underneath
+it. The Paint/Erase pair and the brush menu are hidden on that target rather
+than greyed — an active-looking Paint button on a target that cannot paint is
+a worse lie than no button.
+
+A placed dent can be dragged somewhere there is nothing to cut, which the
+numbers alone cannot show: Depth and Width would both read as set while the
+notch never appeared. `pierceDentIssue` asks the wedge at **full size** whether
+it cuts anything — so a dent that only reaches the paint part-way through its
+growth still counts as working — and names the problem in the painter's status
+line and on the Pierce window's own button.
 
 ### What the wedge breaks off, it takes with it
 
@@ -2152,6 +2270,73 @@ only ever worked because the two targets happened to have hints of the same
 height. It now asks the app where the finger is, which is the thing that
 was always meant.)
 
+### The Dent Trigger Distance: touching and denting are two events
+
+Enter used to answer two questions at once — *are these two in contact* and
+*has the surface started to give way* — so a piercer could not touch anything
+without immediately denting it. They are now separate settings.
+
+**Dent Trigger Distance** is a third depth on the piercer, in the same scene
+pixels as the other two, measured the same way: from the painted tip to the
+nearest pierceable pixel.
+
+| Setting | Decides |
+| --- | --- |
+| **Enter** | when the pair is in **contact** — the tip draws beneath the surface, the depth starts counting, force transfers to the pierced layer's bones |
+| **Dent Trigger** | when the **notch** starts to appear |
+| **End** | where both stop growing — the one place they share |
+
+The dent's fraction runs on its own scale: 0 at the trigger, 1 at the End
+Point. Sharing the far end is deliberate; a drag should not have two different
+"all the way in" positions, one for the numbers and one for the artwork.
+
+```
+dentT = clamp((dentStart - gap) / (dentStart - (enter - end)), 0, 1)
+```
+
+Set it closer than Enter and the tip touches, sinks in, and only then does the
+notch open — a needle resting on skin before it breaks it. Set it equal to
+Enter and the dent begins on contact, which is how every project behaved
+before this setting existed, so that is the default and old saves load with
+it.
+
+**It is gated on the trigger alone, not on `contact.engaged`.** Two
+independent settings have to be able to disagree: a trigger further out than
+Enter has to be able to start the notch *before* contact, and one closer has
+to hold it back *after* contact has begun. Reading engagement would quietly
+overrule both.
+
+Enter and End stay editable underneath it, and nothing stops a later edit
+leaving the trigger behind the End Point — where the growth span would be zero
+or negative. Rather than refuse the edit or divide by nothing, the trigger is
+held one pixel clear of the End Point, so the dent starts as late as it still
+can. Measured with Enter 20, End 24 and a trigger of 1 (an End Point at gap
+−4): still a finite fraction, still exactly **1.000** at the End Point.
+
+Measured on organic artwork with Enter 20, End 24, trigger 6:
+
+| gap | engaged | depth | dent |
+| --- | --- | --- | --- |
+| 24 | no | 0.0 | 0% |
+| 12 | **yes** | 8.0 | **0%** |
+| 6 | yes | 14.0 | 0% |
+| 4 | yes | 16.0 | 20% |
+| 2 | yes | 18.0 | 40% |
+| 0 | yes | 20.0 | 60% |
+| −2 | yes | 22.0 | 80% |
+| −4 | yes | 24.0 | 100% |
+| −12 | yes | 24.0 | 100% |
+
+The row that matters is **gap 12**: in contact, eight pixels deep, and the
+artwork has not moved. That is the whole feature, and it was not expressible
+before.
+
+It is set the same two ways Enter and End are — typed into a third field, or
+dragged as a third handle on the piercer's own ruler. All three handle labels
+are drawn out to one side, alternating, because the default puts the trigger
+exactly under the Enter handle and that is precisely where a user goes looking
+for it.
+
 ### The dent's two sliders
 
 The notch's size lives on the **pierced** layer, in the Pierce window, as
@@ -2163,10 +2348,8 @@ slider travel. Setting either to 0 means no notch, which is a finished,
 valid setup and not a missing step: contact, the depth reading and the
 z-order swap all carry on normally, and nothing errors or warns.
 
-The one thing that genuinely cannot work is said out loud rather than
-silently ignored: a dent configured on a layer with **no pierceable area
-painted** has nothing to be cut out of, and `pierceDentIssue` names that in
-the painter's status line and on the Pierce window's own button.
+They are the secondary way in. The primary one is dragging the wedge itself,
+above.
 
 **One bug found by painting to the edge**, from the system this replaced and
 worth keeping because the shape of it recurs. A mask is a flat array of
@@ -2428,7 +2611,10 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-Twelve browser suites cover this, all passing:
+Twelve browser suites cover this, all passing. The dent's own suite is
+committed, in `tests/dent.mjs`, and runs anywhere Node does — `node
+tests/dent.mjs`, no dependencies, no browser. The rest were run against the
+build they describe; their figures are what was measured at the time.
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -2462,7 +2648,7 @@ Twelve browser suites cover this, all passing:
   reading one pixel either side of Enter; the overlay tinting the painted
   band to 0 remaining yellow pixels while leaving the unpainted body and
   shaft untouched to the pixel, the readout tracking
-  `OUT → IN → AT END / tip sunk` with its blend percentage, and switching
+  `OUT → IN → AT END / tip sunk` with its dent percentage, and switching
   it off restoring the artwork exactly.
 - **Walls as painted pixels** (10 checks) — a 20 px cavity with barriers
   on its left and right only and a tip whose own spread is 12.3 px, the
@@ -2506,31 +2692,43 @@ Twelve browser suites cover this, all passing:
   returning to 13.52 px once that area is painted deformable; a deformable
   mark on non-pierceable pixels moving nothing; the painter's third target;
   and the mask surviving a serialize/load round trip at 256 px.
-- **The parametric dent** (18 checks, `test_dent_math.mjs`) — a 10 × 16 dent
-  driven through a full sweep: nothing at all before the Enter point across
-  14 positions; the wedge appearing at **0.625 deep × 1 wide** rather than
-  popping in at a size; its depth never going backwards and never stepping
-  more than 0.625 texels per scene px of travel; reaching exactly 10 × 16 at
-  End and **holding at 88 cut texels** across 24 further positions past it;
-  the cut advancing on 13 of 15 growth steps with a biggest jump of 12 against
-  a mean of 5.9 (a three-stage implementation would have to jump by a third of
-  the total); the rim moving 10 vertices with **nothing at all painted
-  Deformable moving 0**, while the notch still cuts its 88 texels either way;
-  every one of 53 positions on the way out reproducing the way in exactly,
-  ending at zero cut, zero depth and zero moving vertices; the renderer
-  publishing no mask out of contact and an 88-texel-zeroed one at full depth;
-  and the wedge landing inside the artwork, with a carried point mapping back
-  to its own texel while ignoring the carriage lands 36 texels away.
-- **Organic artwork, end to end** (16 checks, `verify_dent_organic.mjs`) —
-  the full setup on a lumpy 96 × 96 blob and a curved finger, with Depth and
-  Width driven through the real sliders in the real Pierce window; the wedge
-  reaching exactly 14.00 texels at End with a biggest step of 0.699; the cut
-  growing on 19 of 20 steps of the approach; a rendered notch **14 canvas px**
-  deep against a **3 px** raised rim, over 24 notched columns and 8 raised
-  ones sitting next to each other; **one connected piece at all 65
-  positions** of the sweep; every position on the way out reproducing the
-  way in exactly; and 4,596 px of artwork back with **0 px** of column drift
-  once withdrawn.
+- **The dent** (25 checks, `tests/dent.mjs` — pure Node, no dependencies,
+  run it with `node tests/dent.mjs`) — the whole system on a lumpy 48 × 48
+  blob, driven through the real solver rather than a re-implementation of it.
+  *Deformable never cuts*: no vertex displaced toward the notch at any of 20
+  dent fractions with **every** pixel painted Deformable, every vertex that
+  starts inside the wedge evicted clear of it, the published draw mask
+  **byte-identical** with the mask full, empty and half-painted, and with no
+  dent configured every offset exactly 0 and nothing cut. *The trigger*:
+  contact at gap 19 with the dent still at **0%**, the dent starting at the
+  trigger and not before, reaching exactly 1.000 at the End Point and never
+  more however far past it, growth monotonic over 100 positions, moving the
+  trigger changing where the dent starts and leaving depth and engagement
+  untouched, a trigger set beyond Enter starting the notch *before* contact,
+  and a trigger stranded behind the End Point still finite and still full at
+  End. *The placement*: an unplaced dent landing on the painted region and
+  cutting; the wedge built at the placed spot; the base fixed across a
+  41-position approach, across a sideways sweep of the piercer, and across a
+  37 px drag of the pierced layer itself; both dimensions scaling about it;
+  and withdrawal reproducing the approach's fractions exactly, back to zero.
+  *All of it together*: the cut growing from the trigger and holding past
+  End, every zeroed texel inside the pierceable region, one wedge feeding
+  both halves, and everything back to nothing when the piercer leaves.
+- **The dent's UI, in a real browser** (12 checks) — Chromium, the real page,
+  the pointer events a fingertip produces. The Dent target selectable; the
+  dent starting unplaced; dragging the base marking it placed and landing it
+  under the finger to within a pixel; the apex dragged 14 texels from the base
+  setting Depth to **14**; the width handle dragged 9 texels out setting Width
+  to **18**; the Pierce window — opened through the layer's own ⋮ menu — then
+  reading `14` / `18` on its sliders and `14 px` / `18 px` on its labels;
+  typing into a slider writing back to the same field; and the dent's base
+  staying on **one** position across the piercer's whole travel.
+- **The effect on screen** (9 frames, overlay off) — Enter 20, End 24,
+  trigger 6, dent 11 × 16 placed on the blob's surface. Rendered at gaps 24
+  through −12: untouched and not engaged at 24; **engaged, 8 px deep, and
+  visibly untouched at 12**; still nothing at the trigger itself; then 20%,
+  40%, 60%, 80%, 100% as it closes, holding at 100% past End. The notch sits
+  on the same texel in every frame, with the rim raised either side of it.
 - **Enter/End markers** (23 checks) — both handles found by their own
   colours on the drawing, 77.2 px apart; dragging End 40 px moving End
   38.5 px and Enter **0.00 px**, with the Enter field untouched at 12;

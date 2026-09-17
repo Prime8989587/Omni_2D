@@ -19,6 +19,7 @@ import {
   PierceRole, PIERCE_ROLES, clampPierceDepth,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
   clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH,
+  clampDentCoord, normalizeAngle,
   PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
@@ -105,9 +106,14 @@ function serializePart(part, copyPixels) {
     pierceBarrierRegion: [...part.pierceBarrierRegion],
     pierceDentDepth: part.pierceDentDepth,
     pierceDentWidth: part.pierceDentWidth,
+    pierceDentPlaced: part.pierceDentPlaced,
+    pierceDentX: part.pierceDentX,
+    pierceDentY: part.pierceDentY,
+    pierceDentAngle: part.pierceDentAngle,
     piercePhysics: part.piercePhysics,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
+    pierceDentStart: part.pierceDentStart,
     mesh: serializeMesh(part.mesh),
   };
 }
@@ -157,12 +163,23 @@ function deserializePart(data) {
   // Pierce window's two sliders are then the whole setup.
   part.pierceDentDepth = clampDentSize(data.pierceDentDepth ?? DEFAULT_DENT_DEPTH);
   part.pierceDentWidth = clampDentSize(data.pierceDentWidth ?? DEFAULT_DENT_WIDTH);
+  // Where the dent sits. Absent in a project saved while the wedge still
+  // followed the piercer's live contact point, and left unplaced for one:
+  // there is no stored spot to recover, so dent.js derives a starting
+  // position from the pierceable paint and the first drag makes it real.
+  part.pierceDentPlaced = Boolean(data.pierceDentPlaced);
+  part.pierceDentX = clampDentCoord(data.pierceDentX ?? 0, part.naturalWidth);
+  part.pierceDentY = clampDentCoord(data.pierceDentY ?? 0, part.naturalHeight);
+  part.pierceDentAngle = normalizeAngle(data.pierceDentAngle ?? Math.PI / 2);
   // Absent before the setting existed, and its default is the behaviour
   // those projects were saved under.
   part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)
     ? data.piercePhysics : PiercePhysics.PIERCER;
   part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
   part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
+  // Absent before the dent had its own starting line, when it began at the
+  // Enter Point -- so that is what those projects load with.
+  part.pierceDentStart = clampPierceDepth(data.pierceDentStart ?? part.pierceEnter);
   part.mesh = deserializeMesh(data.mesh);
   return part;
 }

@@ -82,6 +82,22 @@ export const PIERCE_DEPTH_RANGE = Object.freeze({ min: 1, max: 128 });
 export const DEFAULT_PIERCE_ENTER = 12;
 export const DEFAULT_PIERCE_END = 24;
 
+// THE DENT'S OWN STARTING LINE
+//
+// A third distance on the same scale as Enter and End, and independent of
+// both: the gap at which the notch BEGINS TO APPEAR. Enter says when the
+// pair is in contact -- z-order swaps, force transfers, the depth starts
+// counting -- and this says when the artwork starts visibly giving way.
+// They are two different questions and were previously answered by one
+// number, so a piercer could not touch something without immediately
+// denting it.
+//
+// Set it closer than Enter and the tip makes contact, sinks under the
+// surface and only then starts the notch. Set it equal to Enter and the
+// dent begins on contact, which is what every project did before this
+// existed -- hence the default.
+export const DEFAULT_PIERCE_DENT_START = DEFAULT_PIERCE_ENTER;
+
 // The dent's two numbers, in the pierced layer's own texels. Zero is a
 // legitimate setting -- no dent -- so the floor is zero rather than one,
 // and the ceiling is generous enough for a wedge across a large sprite
@@ -94,6 +110,22 @@ export function clampDentSize(value) {
   const number = Math.round(Number(value));
   if (!Number.isFinite(number)) return 0;
   return Math.max(0, Math.min(MAX_DENT_SIZE, number));
+}
+
+// The dent's base, kept on the artwork. Sub-texel positions are allowed --
+// a handle dragged with a fingertip has no reason to snap -- but a base off
+// the sprite entirely would put the whole wedge where nothing can be cut.
+export function clampDentCoord(value, extent) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(extent, number));
+}
+
+export function normalizeAngle(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return Math.PI / 2;
+  const turn = Math.PI * 2;
+  return ((number % turn) + turn) % turn;
 }
 
 export function clampPierceDepth(value) {
@@ -162,6 +194,9 @@ export class Part {
     this.pierceRegionVersion = 0;
     this.pierceEnter = DEFAULT_PIERCE_ENTER;
     this.pierceEnd = DEFAULT_PIERCE_END;
+    // The gap at which this piercer starts CUTTING a dent, as opposed to
+    // the gap at which it makes contact. See DEFAULT_PIERCE_DENT_START.
+    this.pierceDentStart = DEFAULT_PIERCE_DENT_START;
 
     // WHICH PIXELS BUNCH AROUND A DENT
     //
@@ -207,6 +242,26 @@ export class Part {
     // layer that registers contact without giving way.
     this.pierceDentDepth = DEFAULT_DENT_DEPTH;
     this.pierceDentWidth = DEFAULT_DENT_WIDTH;
+
+    // WHERE THE DENT IS, IN THIS LAYER'S OWN TEXELS
+    //
+    // The base's centre and the direction the apex is driven in. Placed by
+    // the artist, by dragging the wedge onto the spot it should happen at,
+    // and FIXED once placed: the piercer's approach decides how much of the
+    // dent there is, never where it is.
+    //
+    // Texel space, like every other mask on a Part, so the dent stays glued
+    // to the artwork through any amount of dragging, rigging or rotation
+    // without a single coordinate conversion.
+    //
+    // Unplaced, these are ignored and dent.js derives a starting position
+    // from the pierceable paint instead -- so the handles always have
+    // somewhere sensible to appear, and nothing is stored until a drag
+    // stores it.
+    this.pierceDentPlaced = false;
+    this.pierceDentX = 0;
+    this.pierceDentY = 0;
+    this.pierceDentAngle = Math.PI / 2;
 
     // Which side's movement may deepen this piercer's contacts. Lives on
     // the piercer with Enter and End, because like them it describes the
@@ -508,9 +563,14 @@ class PartsStore {
       part.pierceBarrierRegionVersion++;
       part.pierceDentDepth = DEFAULT_DENT_DEPTH;
       part.pierceDentWidth = DEFAULT_DENT_WIDTH;
+      part.pierceDentPlaced = false;
+      part.pierceDentX = 0;
+      part.pierceDentY = 0;
+      part.pierceDentAngle = Math.PI / 2;
       part.piercePhysics = PiercePhysics.PIERCER;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
+      part.pierceDentStart = DEFAULT_PIERCE_DENT_START;
     }
     this._emit('structure');
     return true;
@@ -524,11 +584,15 @@ class PartsStore {
     return true;
   }
 
-  setPierceDepths(id, enter, end) {
+  // The dent's trigger distance is optional here so that callers with only
+  // the two older numbers to offer leave it alone rather than silently
+  // resetting it to a default the user did not ask for.
+  setPierceDepths(id, enter, end, dentStart) {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part) return false;
     part.pierceEnter = clampPierceDepth(enter);
     part.pierceEnd = clampPierceDepth(end);
+    if (dentStart !== undefined) part.pierceDentStart = clampPierceDepth(dentStart);
     this._emit('transform');
     return true;
   }
@@ -541,6 +605,25 @@ class PartsStore {
     if (part.pierceDentDepth === nextDepth && part.pierceDentWidth === nextWidth) return false;
     part.pierceDentDepth = nextDepth;
     part.pierceDentWidth = nextWidth;
+    this._emit('transform');
+    return true;
+  }
+
+  // Where the wedge sits on this layer's artwork. Writing any placement
+  // marks it placed, so the derived starting position stops applying and
+  // the dent stays exactly where it was put.
+  setPierceDentPlacement(id, x, y, angle) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return false;
+    const nextX = clampDentCoord(x, part.naturalWidth);
+    const nextY = clampDentCoord(y, part.naturalHeight);
+    const nextAngle = normalizeAngle(angle);
+    if (part.pierceDentPlaced && part.pierceDentX === nextX &&
+        part.pierceDentY === nextY && part.pierceDentAngle === nextAngle) return false;
+    part.pierceDentPlaced = true;
+    part.pierceDentX = nextX;
+    part.pierceDentY = nextY;
+    part.pierceDentAngle = nextAngle;
     this._emit('transform');
     return true;
   }

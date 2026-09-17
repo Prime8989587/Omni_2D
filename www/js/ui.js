@@ -149,6 +149,7 @@ function cacheElements() {
     'pierceDentWidthSlider', 'pierceDentWidthValue',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
+    'pierceDentStartInput', 'pierceDepthDentMark',
     'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
     'pierceDepthCanvas', 'pierceDrawHint',
     'pierceDepthLegend', 'pierceDepthOkBtn', 'pierceDepthCancelBtn',
@@ -1345,9 +1346,13 @@ function renderPierceModal() {
   }
 
   if (part.isPiercer) {
+    const denting = part.pierceDentStart === part.pierceEnter
+      ? 'the dent starts with it'
+      : `the dent holds off until ${part.pierceDentStart} px`;
     els.pierceDepthReadout.textContent =
-      `Enter ${part.pierceEnter} px · End ${part.pierceEnd} px — contact starts ` +
-      `${part.pierceEnter} px out, and the push stops growing ${part.pierceEnd} px deeper.`;
+      `Enter ${part.pierceEnter} px · Dent ${part.pierceDentStart} px · ` +
+      `End ${part.pierceEnd} px — contact starts ${part.pierceEnter} px out and ` +
+      `${denting}; both stop growing ${part.pierceEnd} px deeper.`;
   }
 
   const painted = part.pierceRegion.size;
@@ -1442,6 +1447,7 @@ function openPierceDepthModal(mode) {
   pierceDepthMode = mode;
   els.pierceEnterInput.value = String(part.pierceEnter);
   els.pierceEndInput.value = String(part.pierceEnd);
+  els.pierceDentStartInput.value = String(part.pierceDentStart);
   renderPierceDepthBar();
   // The modal has to be visible before the canvas is measured: a hidden
   // element has no layout box, and the drawing is laid out from one.
@@ -1454,6 +1460,7 @@ function readPierceDepthInputs() {
   return {
     enter: clampPierceDepth(els.pierceEnterInput.value),
     end: clampPierceDepth(els.pierceEndInput.value),
+    dentStart: clampPierceDepth(els.pierceDentStartInput.value),
   };
 }
 
@@ -1464,17 +1471,31 @@ function readPierceDepthInputs() {
 // two numbers change; it is a proportion, not a second distance reading,
 // which is why the legend names distances only where there is one to name.
 function renderPierceDepthBar() {
-  const { enter, end } = readPierceDepthInputs();
+  const { enter, end, dentStart } = readPierceDepthInputs();
   const span = Math.max(1, enter + end);
   const enterPct = (enter / span) * 100;
+  // The bar's axis is how far the tip has come IN, so a gap threshold g
+  // lands at 2*enter - g: Enter itself falls on `enter` and the End Point
+  // (a gap of enter - end) falls on the right-hand edge, which is where
+  // those two marks already are. The trigger is clamped onto the bar rather
+  // than escaping it, since a later edit to Enter or End can leave it
+  // outside the range those two now describe.
+  const dentPct = Math.max(0, Math.min(100, ((2 * enter - dentStart) / span) * 100));
   els.pierceDepthEnterMark.style.left = `${enterPct}%`;
+  els.pierceDepthDentMark.style.left = `${dentPct}%`;
   els.pierceDepthEndMark.style.left = '100%';
   els.pierceDepthContact.style.left = `${enterPct}%`;
   els.pierceDepthContact.style.right = '0';
+  const denting = dentStart === enter
+    ? 'The dent starts on contact.'
+    : (dentStart < enter
+      ? `The dent holds off until ${dentStart} px away — ${enter - dentStart} px ` +
+        'further in than first contact.'
+      : `The dent starts at ${dentStart} px away, before contact does.`);
   els.pierceDepthLegend.textContent =
     `Left edge: the tip still approaching, nothing moves. Enter at ${enter} px ` +
-    `away: contact begins. Right edge: ${end} px deeper still, maximum push — ` +
-    'going deeper than this changes nothing more.';
+    `away: contact begins. ${denting} Right edge: ${end} px deeper still, ` +
+    'maximum push and a full dent — going deeper than this changes nothing more.';
 }
 
 // ---- Placing Enter and End by hand, on the piercer itself
@@ -1599,7 +1620,7 @@ function renderPierceDepthCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!plan) return;
 
-  const { enter, end } = readPierceDepthInputs();
+  const { enter, end, dentStart } = readPierceDepthInputs();
   const { part, axis, scale } = plan;
 
   ctx.imageSmoothingEnabled = false;
@@ -1646,7 +1667,12 @@ function renderPierceDepthCanvas() {
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
 
-  const handle = (point, label, colour) => {
+  // Labels sit clear of the ruler, on whichever side has room -- and out to
+  // one SIDE of it, alternating, because three marks on a short ruler can
+  // easily land within a line-height of each other. Enter and the trigger
+  // coincide exactly on a default setup, which is the case that has to stay
+  // readable: that is where a user goes looking for the handle to drag.
+  const handle = (point, label, colour, side) => {
     ctx.beginPath();
     ctx.arc(point.x, point.y, 9, 0, Math.PI * 2);
     ctx.fillStyle = colour;
@@ -1654,21 +1680,26 @@ function renderPierceDepthCanvas() {
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.stroke();
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = colour;
     ctx.font = '15px monospace';
-    ctx.textAlign = 'center';
-    // Labels sit clear of the ruler, on whichever side has room.
-    ctx.fillText(label, point.x, point.y - 15 + (axis.y < 0 ? 34 : 0));
+    ctx.textAlign = side < 0 ? 'right' : 'left';
+    ctx.fillText(label, point.x + side * 14, point.y + 5);
   };
   // Not the accent pink: the painted tip is already tinted with it just
   // along the ruler, and two pinks a few pixels apart is the one pairing
   // on this canvas that cannot be read at a glance.
-  handle(a, `Enter ${enter}`, '#2EE6FF');
-  handle(b, `End ${end}`, '#FFB02E');
+  handle(a, `Enter ${enter}`, '#2EE6FF', -1);
+  handle(b, `End ${end}`, '#FFB02E', -1);
+  // Last, so it draws over the Enter handle on the projects where the two
+  // coincide -- which is the default, and where the whole point is that the
+  // dent's own mark is there to be dragged off it. Labelled on the far side
+  // for the same reason.
+  handle(depthDrawPoint(plan, dentStart), `Dent ${dentStart}`, '#A078FF', 1);
 
   els.pierceDrawHint.textContent = plan.axis.known
-    ? 'Drag either handle along the needle\u2019s path. Enter is where contact ' +
-      'begins; End is how much deeper the push keeps growing.'
+    ? 'Drag any handle along the needle\u2019s path. Enter is where contact ' +
+      'begins, Dent is where the notch starts to appear, and End is where ' +
+      'both stop growing.'
     : 'This piercer has no painted tip yet, so the path below is a guess at ' +
       'straight down. Paint the tip and these will follow it.';
 }
@@ -1679,13 +1710,21 @@ function renderPierceDepthCanvas() {
 function grabPierceHandle(x, y) {
   const plan = depthDraw;
   if (!plan) return null;
-  const { enter, end } = readPierceDepthInputs();
-  const a = depthDrawPoint(plan, enter);
-  const b = depthDrawPoint(plan, enter + end);
-  const da = Math.hypot(x - a.x, y - a.y);
-  const db = Math.hypot(x - b.x, y - b.y);
-  if (Math.min(da, db) > DRAW_GRAB_PX) return null;
-  return db <= da ? 'end' : 'enter';
+  const { enter, end, dentStart } = readPierceDepthInputs();
+  const near = (distance) => {
+    const point = depthDrawPoint(plan, distance);
+    return Math.hypot(x - point.x, y - point.y);
+  };
+  // Dent first on a tie, because it is drawn on top and because the default
+  // puts it exactly under the Enter handle -- where a user reaching for it
+  // has no other way to get hold of it.
+  const candidates = [['dent', near(dentStart)], ['end', near(enter + end)], ['enter', near(enter)]];
+  let best = null;
+  for (const [which, distance] of candidates) {
+    if (distance > DRAW_GRAB_PX) continue;
+    if (!best || distance < best[1]) best = [which, distance];
+  }
+  return best ? best[0] : null;
 }
 
 // A canvas point back to a distance along the ruler, by projecting onto
@@ -1724,7 +1763,12 @@ function dragPierceHandle(which, x, y) {
   const { enter, end } = readPierceDepthInputs();
   const min = PIERCE_DEPTH_RANGE.min;
 
-  if (which === 'enter') {
+  if (which === 'dent') {
+    // A gap, exactly like Enter, and placed on the ruler at its own value --
+    // so it takes the finger's position directly and neither of the other
+    // two moves. That independence is the whole feature.
+    els.pierceDentStartInput.value = String(clampPierceDepth(distance));
+  } else if (which === 'enter') {
     // Hold End's place on the ruler; Enter takes the finger, and the gap
     // between them is whatever is left. Enter cannot retreat so far that
     // the remaining gap would exceed End's own maximum, because then End
@@ -1771,14 +1815,14 @@ function initPierceDepthCanvas() {
 function confirmPierceDepths() {
   const part = piercePart();
   if (!part) return;
-  const { enter, end } = readPierceDepthInputs();
+  const { enter, end, dentStart } = readPierceDepthInputs();
   const assigning = pierceDepthMode === 'assign';
   pierceDepthMode = null;
   els.pierceDepthModal.hidden = true;
 
   history.run(assigning ? 'Set pierce role' : 'Edit pierce depths', () => {
     if (assigning) partsStore.setPierceRole(part.id, PierceRole.PIERCER);
-    partsStore.setPierceDepths(part.id, enter, end);
+    partsStore.setPierceDepths(part.id, enter, end, dentStart);
   });
   renderPierceModal();
 
@@ -1786,7 +1830,7 @@ function confirmPierceDepths() {
     showPierceTipOnce();
     showToast(`"${part.name}" is now a Piercer. Paint its tip next — Paint regions….`);
   } else {
-    showToast(`Enter ${enter} px · End ${end} px.`);
+    showToast(`Enter ${enter} px · Dent ${dentStart} px · End ${end} px.`);
   }
 }
 
@@ -2576,6 +2620,7 @@ function bindEvents() {
   };
   els.pierceEnterInput.addEventListener('input', onDepthTyped);
   els.pierceEndInput.addEventListener('input', onDepthTyped);
+  els.pierceDentStartInput.addEventListener('input', onDepthTyped);
   els.pierceDepthOkBtn.addEventListener('click', confirmPierceDepths);
   els.pierceDepthCancelBtn.addEventListener('click', cancelPierceDepths);
   els.pierceTipOkBtn.addEventListener('click', () => { els.pierceTipModal.hidden = true; });

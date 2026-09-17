@@ -39,45 +39,72 @@ const TOPICS = {
       'than competing.',
   },
   'pierce-depths': {
-    title: 'Enter & End points',
-    body: 'Both are measured in scene pixels, from the piercer’s painted ' +
-      'tip to the nearest pierceable pixel.\n\n' +
+    title: 'Enter, Dent & End points',
+    body: 'All three are measured in scene pixels, from the piercer’s ' +
+      'painted tip to the nearest pierceable pixel.\n\n' +
       '• Enter is the gap where contact starts -- get this close and the ' +
-      'pierced area begins to react.\n' +
-      '• End is how much deeper the push keeps growing before it stops ' +
-      'advancing. Past End the shape change and the piercer itself both ' +
-      'hold at their deepest.\n\n' +
-      'Set them by typing the numbers, or by dragging the two handles ' +
+      'tip sinks under the surface and starts pressing on its bones.\n' +
+      '• Dent Trigger is the gap where the NOTCH starts to appear. Its own ' +
+      'setting, so touching and denting need not happen at the same moment.\n' +
+      '• End is how much deeper both keep growing before they stop ' +
+      'advancing. Past End the notch and the piercer itself hold at their ' +
+      'deepest.\n\n' +
+      'Set them by typing the numbers, or by dragging the three handles ' +
       'drawn on the piercer’s own artwork -- both write the same values, ' +
       'so neither one is more "real" than the other.',
+  },
+  'pierce-dent-start': {
+    title: 'Dent Trigger Distance',
+    body: 'The gap at which the notch begins to appear -- separate from the ' +
+      'Enter point, and measured the same way, in scene pixels from the ' +
+      'painted tip to the nearest pierceable pixel.\n\n' +
+      'Enter and this answer two different questions. Enter is when the two ' +
+      'layers are IN CONTACT: the tip draws beneath the surface and starts ' +
+      'pressing back on the pierced layer’s bones. This is when the surface ' +
+      'starts to GIVE WAY.\n\n' +
+      '• Closer than Enter -- the tip touches, sinks in, and only then does ' +
+      'the notch start to open. A needle resting on skin before it breaks it.\n' +
+      '• Equal to Enter -- the dent starts on contact, which is how every ' +
+      'project behaved before this setting existed.\n' +
+      '• Further out than Enter -- the surface flinches before anything ' +
+      'touches it.\n\n' +
+      'Whichever you choose, the notch is complete at the End point: that is ' +
+      'the one place both the dent and the depth finish.',
   },
   'pierce-targets': {
     title: 'Paint targets',
     body: 'Tip (on the piercer) is what counts as "in".\n\n' +
-      'On the pierced layer, three masks, each a different question:\n' +
+      'On the pierced layer, three masks and one placement:\n' +
       '• Pierceable -- where contact is detected at all, and the only ' +
       'place the notch is allowed to cut.\n' +
       '• Deformable -- which pixels BUNCH UP around that notch, pushing ' +
       'outward as it grows, the way material does when something is ' +
-      'pressed into it. Empty means none of them do: the notch still cuts, ' +
-      'the edges around it just stay put.\n' +
+      'pressed into it. They only ever move AWAY from the notch, and they ' +
+      'never cut anything themselves. Empty means none of them react: the ' +
+      'notch still cuts, the edges around it just stay put.\n' +
       '• Barrier -- solid pixels that stop the piercer sideways while ' +
-      'in contact. Never blocks it going deeper -- that’s Enter/End.\n\n' +
-      'The notch itself is not painted. Its size is the Depth and Width ' +
-      'pair back in the Pierce window.',
+      'in contact. Never blocks it going deeper -- that’s Enter/End.\n' +
+      '• Dent -- not a mask. The wedge itself, dragged onto the spot where ' +
+      'the notch should happen. This is the only thing that cuts.',
   },
   'pierce-dent': {
     title: 'Dent shape',
     body: 'The notch a pierce cuts into this layer, in its own pixels. ' +
-      'Measured at the End point -- it grows from nothing at Enter, and ' +
-      'shrinks back to nothing as the piercer comes out.\n\n' +
-      '• Depth -- how far the point drives in, along the direction the ' +
-      'piercer is travelling.\n' +
-      '• Width -- how wide the opening is across the surface, where the ' +
-      'piercer goes in.\n\n' +
-      'Set either to 0 for no notch at all. Paint Deformable on the same ' +
-      'layer to make the material around the notch bunch up as it opens; ' +
-      'the two are one effect, driven by the same depth.',
+      'Measured at the End point -- it grows from nothing at the Dent ' +
+      'Trigger Distance, and shrinks back to nothing as the piercer comes ' +
+      'out.\n\n' +
+      '• Depth -- how far the point drives in.\n' +
+      '• Width -- how wide the opening is across the surface.\n\n' +
+      'Set either to 0 for no notch at all.\n\n' +
+      'Both are easier to set by hand: Paint regions…, then the Dent ' +
+      'target, and drag the wedge on the artwork. Its base handle places ' +
+      'it, its apex handle sets depth and direction, its width handle sets ' +
+      'the opening. These sliders and those handles are the same two ' +
+      'numbers.\n\n' +
+      'WHERE the dent happens is fixed once you place it. The piercer ' +
+      'decides how much of it appears, never where.\n\n' +
+      'Paint Deformable on the same layer to make the material around the ' +
+      'notch bunch up as it opens.',
   },
   'joint-type': {
     title: 'Follows parent',

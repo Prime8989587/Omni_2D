@@ -21,8 +21,8 @@
 // WHAT THIS DOES INSTEAD
 //
 // A pierce makes a dent, and a dent has a shape you can state in two
-// numbers: how deep and how wide. So the artist types those, and the app
-// builds the wedge:
+// numbers: how deep and how wide. So the artist sets those -- by dragging
+// the thing itself, or by typing -- and the app builds the wedge:
 //
 //        base, WIDTH across the surface
 //     b1 ------------------ b2        <- the region's outline
@@ -34,25 +34,52 @@
 //              \    /
 //               apex                  <- pointing inward, down the axis
 //
-// Both sizes scale with the contact's depth fraction, so the wedge starts
-// at nothing and grows continuously as the piercer goes in, and shrinks
-// back through the same values on the way out. Nothing is integrated and
-// nothing is remembered: a given depth always produces exactly the same
-// wedge, which is what makes the whole effect reversible for free.
+// Both sizes scale with the dent fraction, so the wedge starts at nothing
+// and grows continuously as the piercer comes in, and shrinks back through
+// the same values on the way out. Nothing is integrated and nothing is
+// remembered: a given fraction always produces exactly the same wedge,
+// which is what makes the whole effect reversible for free.
 //
 // The cut is a per-TEXEL mask rather than a mesh deformation, so the notch
 // is pixel-exact whatever the mesh density is -- the failure mode that
 // sank the outline blend (a mesh too coarse to carry the shape) cannot
 // happen to it.
 //
+// WHERE IT IS, IS PLACED. HOW BIG IT IS, IS DRIVEN.
+//
+// The dent used to appear wherever the piercer's tip happened to be
+// touching, which made its position a live readout of the drag rather than
+// a decision anybody got to make. It is now the other way round: the artist
+// PLACES the wedge -- base point and the direction it points -- once, in
+// the pierced layer's own texel grid, and it stays exactly there. The
+// piercer's approach drives only HOW MUCH of it there is.
+//
+// The placement living in TEXEL space rather than scene space is the whole
+// reason there is no longer a coordinate correction to get wrong. The
+// previous version read the contact point out of the solver (scene space,
+// bone carriage already folded in) and inverted the layer's rest transform
+// to get back to texels -- which landed the wedge wherever a bound layer
+// USED to be, twenty texels off the edge of the artwork after a modest
+// drag. A number stored in the grid it is used in cannot drift from it.
+//
 // AND THE MATERIAL HAS TO GO SOMEWHERE
 //
 // A wedge pushed into something does not leave a clean hole with dead
 // artwork around it. The material it displaces piles up at the rim. So the
 // artist paints WHICH pixels are allowed to do that -- the Deformable mask
-// in its new meaning -- and those get shoved along the wedge's own faces,
-// outward, by an amount that falls off with distance from the notch and
-// grows with depth. One wedge, one push, driven by the same number.
+// -- and those get shoved outward, by an amount that falls off with
+// distance from the notch and grows as the notch grows.
+//
+// DEFORMABLE NEVER CUTS. The notch is the wedge's doing and only the
+// wedge's: it is a per-texel mask built from the triangle and intersected
+// with the PIERCEABLE region, and the Deformable mask is not consulted
+// anywhere in it. Deformable's only power is to move a vertex, and the one
+// direction it may move it is away from the notch. See writeBunch for the
+// rule and for the bug that made this worth stating: material sitting
+// inside the wedge used to be pushed away from the nearest FACE, which
+// points into the wedge's own interior -- so the pixels the artist marked
+// as "pile up here" were dragged into the hole instead, and Deformable
+// looked like it was doing the carving.
 
 // How far the displaced material rises, as a fraction of the dent's depth.
 // The wedge has to put what it removes somewhere, and at a bit under half
@@ -73,81 +100,86 @@ const BUNCH_REACH = 0.85;
 const MIN_REACH = 2;
 
 // ---------------------------------------------------------------------------
-// Texel space
+// Where the dent is
 
-// Scene coordinates back into the layer's own pixel grid. localToWorld's
-// inverse, with the half-size added so the result is in texels rather than
-// centred local units -- the space every painted mask already lives in.
+// The placement is stored on the layer in its own texel grid: a base point
+// and the direction the apex is driven in. Both are the artist's, set by
+// dragging the wedge itself in the Pierce window.
 //
-// THE CARRIAGE IS NOT OPTIONAL ON A BOUND LAYER
-//
-// localToWorld reads the part's own x/y, which on a bound layer are its
-// REST coordinates: dragging the character around moves what is drawn
-// without changing them by one pixel. Every scene-space number the solver
-// works from -- the tip, the surface scalar -- comes out of regionPoints,
-// which adds pinCarriageOffset on top precisely for that reason. Inverting
-// only the rest transform therefore lands the wedge wherever the layer
-// USED to be. Measured on a 32-texel-wide bound layer after a 36 px
-// whole-character drag: the notch's base came out at texel x = 52, twenty
-// texels off the right-hand edge of the artwork, so nothing was cut and no
-// vertex was anywhere near enough to bunch.
-export function worldToTexel(part, point, carriage = null) {
-  const cos = Math.cos(-part.rotation);
-  const sin = Math.sin(-part.rotation);
-  const dx = point.x - (carriage ? carriage.x : 0) - part.centerX;
-  const dy = point.y - (carriage ? carriage.y : 0) - part.centerY;
-  const scale = part.scale || 1;
-  return {
-    x: (dx * cos - dy * sin) / scale + part.naturalWidth / 2,
-    y: (dx * sin + dy * cos) / scale + part.naturalHeight / 2,
-  };
+// A layer that has never had one placed still needs somewhere sensible for
+// the handles to start, so one is derived from the pierceable paint: the
+// middle of the region's topmost run, pointing at the region's middle. That
+// is a point ON the outline aimed INTO the material, which is what a dent
+// wants, and it is a starting position rather than a stored decision --
+// the first drag replaces it with a real one.
+const defaultCache = new Map();
+
+function derivePlacement(part) {
+  let top = Infinity;
+  let sumX = 0;
+  let sumY = 0;
+  let topSum = 0;
+  let topCount = 0;
+  for (const index of part.pierceRegion) {
+    const u = (index % part.naturalWidth) + 0.5;
+    const v = Math.floor(index / part.naturalWidth) + 0.5;
+    sumX += u;
+    sumY += v;
+    if (v < top) { top = v; topSum = u; topCount = 1; }
+    else if (v === top) { topSum += u; topCount++; }
+  }
+  const n = part.pierceRegion.size;
+  if (n === 0) {
+    return { x: part.naturalWidth / 2, y: 0, angle: Math.PI / 2 };
+  }
+  const x = topSum / topCount;
+  const y = top;
+  const toMiddleX = sumX / n - x;
+  const toMiddleY = sumY / n - y;
+  const angle = Math.hypot(toMiddleX, toMiddleY) < 1e-6
+    ? Math.PI / 2
+    : Math.atan2(toMiddleY, toMiddleX);
+  return { x, y, angle };
 }
 
-// A DIRECTION into the same space: rotation only, no translation, and
-// re-normalised because a uniform scale leaves the direction alone but
-// floating point does not.
-function directionToTexel(part, vector) {
-  const cos = Math.cos(-part.rotation);
-  const sin = Math.sin(-part.rotation);
-  const x = vector.x * cos - vector.y * sin;
-  const y = vector.x * sin + vector.y * cos;
-  const length = Math.hypot(x, y);
-  return length < 1e-9 ? null : { x: x / length, y: y / length };
+export function dentPlacement(part) {
+  if (!part) return null;
+  if (part.pierceDentPlaced) {
+    return { x: part.pierceDentX, y: part.pierceDentY, angle: part.pierceDentAngle };
+  }
+  const version = `${part.pierceRegionVersion || 0}:${part.pierceRegion.size}`;
+  const cached = defaultCache.get(part.id);
+  if (cached && cached.version === version) return cached.placement;
+  const placement = derivePlacement(part);
+  defaultCache.set(part.id, { version, placement });
+  return placement;
 }
 
 // ---------------------------------------------------------------------------
 // The wedge
 
-// The triangle this contact currently makes, in the pierced layer's texel
-// space -- or null when there is no dent to make: nothing configured, no
-// measurable surface, or a depth fraction of zero.
-export function dentTriangle(part, contact) {
-  if (!part || !contact || !contact.axis) return null;
-  if (!Number.isFinite(contact.surface)) return null;
+// The triangle at growth fraction t, in the pierced layer's texel space --
+// or null when there is no dent to make: nothing configured, or a fraction
+// of zero.
+//
+// Position and direction come from the PLACEMENT and never from t, so the
+// wedge grows and shrinks about a base that does not move. t scales the two
+// sizes only.
+export function dentTriangleAt(part, t) {
+  if (!part) return null;
   const depth = part.pierceDentDepth || 0;
   const width = part.pierceDentWidth || 0;
   if (depth <= 0 || width <= 0) return null;
-  const t = contact.t || 0;
-  if (t <= 0) return null;
+  if (!(t > 0)) return null;
+  const grow = t > 1 ? 1 : t;
 
-  // Where the axis through the tip crosses the region's surface. The
-  // surface scalar is measured along the axis by the same sweep that
-  // measures the gap, so this is the point the contact is actually at
-  // rather than wherever the tip's middle happens to be.
-  const along = contact.tip.x * contact.axis.x + contact.tip.y * contact.axis.y;
-  const reach = contact.surface - along;
-  const scene = {
-    x: contact.tip.x + contact.axis.x * reach,
-    y: contact.tip.y + contact.axis.y * reach,
-  };
-
-  const base = worldToTexel(part, scene, contact.carriage);
-  const inward = directionToTexel(part, contact.axis);
-  if (!inward) return null;
+  const placement = dentPlacement(part);
+  const base = { x: placement.x, y: placement.y };
+  const inward = { x: Math.cos(placement.angle), y: Math.sin(placement.angle) };
   const across = { x: -inward.y, y: inward.x };
 
-  const half = (width * t) / 2;
-  const reachIn = depth * t;
+  const half = (width * grow) / 2;
+  const reachIn = depth * grow;
   return {
     // The two ends of the base, lying along the surface.
     b1: { x: base.x + across.x * half, y: base.y + across.y * half },
@@ -158,9 +190,9 @@ export function dentTriangle(part, contact) {
     inward,
     across,
     depth: reachIn,
-    width: width * t,
+    width: width * grow,
     reach: Math.max(MIN_REACH, Math.max(depth, width) * BUNCH_REACH),
-    rise: BUNCH_RISE * depth * t,
+    rise: BUNCH_RISE * depth * grow,
   };
 }
 
@@ -363,6 +395,7 @@ export function dentCutArea(part, tri) {
 
 export function resetDentCache() {
   cutCache.clear();
+  defaultCache.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -380,10 +413,11 @@ function nearestOnSegment(px, py, ax, ay, bx, by) {
   return { x: ax + dx * t, y: ay + dy * t };
 }
 
-// The closest point on the wedge's BOUNDARY, not on its area. A vertex
-// that happens to sit inside the wedge still gets pushed out through the
-// nearest face rather than being handed a zero-length direction -- which is
-// what "the material the wedge is passing through" should do.
+// The closest point on the wedge's BOUNDARY, not on its area, plus which
+// side of that boundary the query point is on. Both halves matter: the
+// distance sets how much the material moves, and the side sets which way,
+// because "away from the notch" is a different direction depending on
+// whether you are already in it.
 function nearestOnWedge(tri, x, y) {
   const candidates = [
     nearestOnSegment(x, y, tri.b1.x, tri.b1.y, tri.b2.x, tri.b2.y),
@@ -396,7 +430,37 @@ function nearestOnWedge(tri, x, y) {
     const d = Math.hypot(point.x - x, point.y - y);
     if (d < bestDistance) { bestDistance = d; best = point; }
   }
-  return { point: best, distance: bestDistance };
+  return { point: best, distance: bestDistance, within: inside(tri, x, y) };
+}
+
+// WHICH WAY IS AWAY
+//
+// Outside the wedge, away from it is away from the nearest boundary point:
+// the vertex is already clear and simply gets pushed further clear.
+//
+// Inside the wedge it is the OPPOSITE vector -- toward that nearest point,
+// out through the face it sits on. This is the correction worth naming,
+// because getting it backwards is what made Deformable look like it was
+// cutting. The old code used `vertex - nearest` for both cases, and inside
+// a triangle that vector points from the face into the interior: material
+// the artist had marked "pile up here" was driven INTO the notch instead.
+// Measured on a wedge 8 texels wide and 10 deep with a rise of 1: a vertex
+// 0.186 texels inside the left face came out 1.184 texels inside it --
+// further in than it started, and travelling toward the middle of the hole.
+//
+// The magnitude for an inside vertex carries it clear of the face first
+// (`distance`) and then gives it the same rim rise everything else gets, so
+// the two cases agree exactly at the boundary: at distance 0 both are a
+// plain `rise`.
+function bunchPush(tri, x, y) {
+  const { point, distance, within } = nearestOnWedge(tri, x, y);
+  const dx = within ? point.x - x : x - point.x;
+  const dy = within ? point.y - y : y - point.y;
+  const length = Math.hypot(dx, dy);
+  // Exactly on a face: there is no direction to read, and a zero here is
+  // both harmless and honest.
+  if (length < 1e-6) return null;
+  return { x: dx / length, y: dy / length, distance, evict: within ? distance : 0 };
 }
 
 // WHICH PIXELS BUNCH
@@ -488,29 +552,20 @@ export function writeBunch(mesh, part, tri, offsetX, offsetY, pins) {
     }
     const u = mesh.vertices[i].restLocal.x + halfW;
     const v = mesh.vertices[i].restLocal.y + halfH;
-    const { point, distance } = nearestOnWedge(tri, u, v);
-    if (distance > tri.reach) {
+    const push = bunchPush(tri, u, v);
+    if (!push || push.distance > tri.reach) {
       offsetX[i] = 0;
       offsetY[i] = 0;
       continue;
     }
-    const k = 1 - distance / tri.reach;
+    const k = 1 - push.distance / tri.reach;
     const fall = k * k * (3 - 2 * k);
-    let dx = u - point.x;
-    let dy = v - point.y;
-    const length = Math.hypot(dx, dy);
-    if (length < 1e-6) {
-      // Exactly on a face: push straight out along that face's outward
-      // normal is ambiguous, and a zero here is both harmless and honest.
-      offsetX[i] = 0;
-      offsetY[i] = 0;
-      continue;
-    }
-    dx /= length;
-    dy /= length;
-    const amount = tri.rise * fall * share;
-    const tx = dx * amount;
-    const ty = dy * amount;
+    // Out of the notch first if it is in it, then the rim rise. Both terms
+    // are along the same outward direction, so nothing here can ever carry
+    // a vertex toward the wedge.
+    const amount = (push.evict + tri.rise * fall) * share;
+    const tx = push.x * amount;
+    const ty = push.y * amount;
     offsetX[i] = tx * cos - ty * sin;
     offsetY[i] = tx * sin + ty * cos;
   }
@@ -527,11 +582,11 @@ export function bunchProbe(mesh, part, tri) {
     if (!tri) continue;
     const u = mesh.vertices[i].restLocal.x + part.naturalWidth / 2;
     const v = mesh.vertices[i].restLocal.y + part.naturalHeight / 2;
-    const { distance } = nearestOnWedge(tri, u, v);
-    if (distance > tri.reach) continue;
-    const k = 1 - distance / tri.reach;
+    const push = bunchPush(tri, u, v);
+    if (!push || push.distance > tri.reach) continue;
+    const k = 1 - push.distance / tri.reach;
     const fall = k * k * (3 - 2 * k);
-    const amount = tri.rise * fall * influence[i];
+    const amount = (push.evict + tri.rise * fall) * influence[i];
     if (amount > 1e-9) moving++;
     worst = Math.max(worst, amount);
   }

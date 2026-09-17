@@ -535,9 +535,11 @@ function drawPierceProbe() {
     // line then because a press with nothing visibly reacting is a lever
     // problem rather than a missing force, and this is what says so.
     const press = r.press > 0.005 ? `  press ${(r.press * 100).toFixed(0)}%` : '';
+    // The dent's trigger is printed next to its percentage because the two
+    // together are the only way to tell "not denting yet" from "not working".
     return `${r.piercer} -> ${r.pierced}\n` +
-      `  gap ${gap}  enter ${r.enter}  end ${r.end}\n` +
-      `  depth ${r.depth.toFixed(1)}  dent ${(r.t * 100).toFixed(0)}%${press}  ` +
+      `  gap ${gap}  enter ${r.enter}  end ${r.end}  dent at ${r.dentStart}\n` +
+      `  depth ${r.depth.toFixed(1)}  dent ${(r.dent * 100).toFixed(0)}%${press}  ` +
       `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';

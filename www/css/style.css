@@ -938,6 +938,20 @@ button, input, select {
   color: var(--color-text);
 }
 
+/* The dent's own starting line. Violet, the same hue the wedge is drawn in
+   over the artwork, so the mark on this bar and the shape in the Pierce
+   window read as the same setting. Its label hangs BELOW the bar because
+   the Enter mark's sits above and the two can coincide. */
+.pierce-depth__mark--dent {
+  background: #a078ff;
+}
+
+.pierce-depth__mark--dent span {
+  top: auto;
+  bottom: -18px;
+  color: #a078ff;
+}
+
 /* ---------- Toast ---------- */
 
 .toast {

@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "sync": "cap sync android",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/dent.mjs"
   },
   "repository": {
     "type": "git",

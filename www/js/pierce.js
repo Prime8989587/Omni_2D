@@ -94,7 +94,9 @@ import {
   localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity,
 } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
-import { dentTriangle, dentCutMask, writeBunch, resetDentCache } from './dent.js';
+import {
+  dentTriangleAt, dentCutMask, dentCutArea, writeBunch, resetDentCache,
+} from './dent.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
 
@@ -277,6 +279,7 @@ export function resetPierceContainment() {
   containedTips.clear();
   motionState.clear();
   dentCuts = new Map();
+  placementIssues.clear();
   resetDentCache();
 }
 
@@ -426,6 +429,30 @@ function axialGap(tip, flesh, tipMiddle, tipSpread, axis) {
 function meshFor(part) {
   if (!part.mesh) part.mesh = generateMesh(part, defaultDensity(part));
   return part.mesh;
+}
+
+// THE DENT'S OWN TWO ENDS
+//
+// The notch starts at the Dent Trigger Distance -- the piercer's third
+// depth, independent of Enter -- and is complete at the End Point, the same
+// place the depth stops. Sharing the far end is deliberate: a drag should
+// not have two different "all the way in" positions, one for the numbers
+// and one for the artwork.
+//
+// The near end has to stay in front of the far one, and nothing stops the
+// user from editing Enter or End afterwards into a pair that puts it
+// behind. Rather than refuse the edit or divide by a span of nothing, the
+// trigger is held one pixel clear of the End Point: the dent then starts as
+// late as it still can, which is the closest thing to what was asked for.
+const MIN_DENT_SPAN = 1;
+
+function dentStartOf(piercer, enter, end) {
+  const stored = Number.isFinite(piercer.pierceDentStart) ? piercer.pierceDentStart : enter;
+  return Math.max(stored, enter - end + MIN_DENT_SPAN);
+}
+
+function dentSpan(piercer, enter, end) {
+  return dentStartOf(piercer, enter, end) - (enter - end);
 }
 
 export function contactOf(piercer, pierced, transforms) {
@@ -591,6 +618,13 @@ export function contactOf(piercer, pierced, transforms) {
   if (!engaged || walls.length === 0) containedTips.delete(pair);
 
   return {
+    // How much of the configured dent is currently cut, 0 to 1. Measured on
+    // its OWN scale -- 0 at the Dent Trigger Distance, 1 at the End Point --
+    // which is the whole point of that setting: contact and the notch are
+    // two different events and the artist places them separately.
+    dentT: inPath
+      ? Math.min(1, Math.max(0, (dentStartOf(piercer, enter, end) - gap) / dentSpan(piercer, enter, end)))
+      : 0,
     piercer,
     axis,
     // How far PAST the End Point the piercer has been driven. The depth
@@ -612,11 +646,6 @@ export function contactOf(piercer, pierced, transforms) {
     // lands exactly on the outline the piercer is going through, which is
     // where the dent's base is centred.
     surface,
-    // How far the pierced layer's bones are carrying it from its own rest
-    // coordinates. Every scene number above already includes this (see
-    // regionPoints); anything converting one of them back into the layer's
-    // texel grid has to take it off again.
-    carriage: pinCarriageOffset(pierced, transforms),
     // 0 at first contact, 1 at the End Point and never more, however far
     // past it the piercer is pushed.
     t: depth / end,
@@ -878,10 +907,13 @@ function publishOcclusion(contacts) {
     enter: contact ? contact.piercer.pierceEnter : null,
     end: contact ? contact.end : null,
     depth: contact ? contact.depth : 0,
-    // The dent fraction: 0 is no notch at all, 1 the full configured
-    // Depth and Width. Worth reporting because it IS the wedge's size
-    // rather than a scale factor on a push.
-    t: contact ? contact.t : 0,
+    // The dent fraction: 0 is no notch at all, 1 the full configured Depth
+    // and Width. Worth reporting because it IS the wedge's size rather than
+    // a scale factor on a push -- and because it runs on its own scale, so
+    // seeing it sit at 0 while the depth climbs is how the trigger distance
+    // proves it is doing something.
+    dent: contact ? contact.dentT : 0,
+    dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
     engaged: Boolean(contact && contact.engaged),
     sunk: Boolean(contact && next.has(contact.piercer.id)),
     overshoot: contact ? contact.overshoot : 0,
@@ -1072,6 +1104,8 @@ export function pierceOverlayTexture(part) {
 // numbers is a legitimate setting -- a depth or a width of zero is simply
 // "this layer registers contact without giving way" -- so this reports the
 // one combination that is configured to do something and then cannot.
+const placementIssues = new Map();
+
 export function pierceDentIssue(part) {
   if (!part || !part.isPierced) return null;
   if (!(part.pierceDentDepth > 0) || !(part.pierceDentWidth > 0)) return null;
@@ -1079,16 +1113,43 @@ export function pierceDentIssue(part) {
     return 'a dent is configured but no Pierceable area is painted, so there ' +
       'is nothing for it to be cut out of';
   }
+  // A placed dent can be dragged somewhere there is nothing to cut, which
+  // the numbers alone cannot show: Depth and Width would both read as set
+  // while the notch never appeared. Asked at FULL size, so a dent that only
+  // reaches the paint part-way through its growth still counts as working.
+  //
+  // Cached, because this is asked once per pierced layer per frame and the
+  // answer only moves when the paint or the placement does -- and the scan
+  // is the wedge's whole bounding box, which at the top of the size range
+  // is sixteen thousand texels.
+  const key = `${part.pierceRegionVersion || 0}:${part.pierceRegion.size}:` +
+    `${part.pierceDentDepth}:${part.pierceDentWidth}:${part.pierceDentPlaced}:` +
+    `${part.pierceDentX}:${part.pierceDentY}:${part.pierceDentAngle}`;
+  let cached = placementIssues.get(part.id);
+  if (!cached || cached.key !== key) {
+    cached = { key, empty: dentCutArea(part, dentTriangleAt(part, 1)) === 0 };
+    placementIssues.set(part.id, cached);
+  }
+  if (cached.empty) {
+    return 'the dent is placed where this layer has no Pierceable pixels, so ' +
+      'there is nothing for it to cut — drag it onto the painted area';
+  }
   return null;
 }
 
 // What the dent currently is, for this layer, given its contact. Rebuilt
-// every frame from the live depth fraction -- the wedge IS the depth, so
+// every frame from the live dent fraction -- the wedge IS that fraction, so
 // there is no state to hold and nothing to get out of step.
+//
+// Gated on the DENT's fraction, not on contact.engaged. Enter and the
+// trigger distance are separate settings and have to be able to disagree:
+// a trigger set further out than Enter has to be able to start the notch
+// before contact, and one set closer has to be able to hold it back after
+// contact has begun. Reading engagement here would quietly overrule both.
 function dentFor(pierced, contact) {
-  if (!contact || !contact.engaged) return null;
+  if (!contact || !(contact.dentT > 0)) return null;
   if (pierceDentIssue(pierced) !== null) return null;
-  return dentTriangle(pierced, contact);
+  return dentTriangleAt(pierced, contact.dentT);
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,6 +1208,7 @@ export function pierceDebug() {
       gap: contact ? contact.gap : null,
       depth: contact ? contact.depth : 0,
       t: contact ? contact.t : 0,
+      dentT: contact ? contact.dentT : 0,
       maxOffset: worst,
     };
   });
