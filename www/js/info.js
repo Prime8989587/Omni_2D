@@ -106,6 +106,19 @@ const TOPICS = {
       'Paint Deformable on the same layer to make the material around the ' +
       'notch bunch up as it opens.',
   },
+  'clayer-tools': {
+    title: 'Boundary and Fill',
+    body: '• Boundary -- draws a line on the imported picture marking the ' +
+      'outline of the piece you want to pull out. It has to form ONE ' +
+      'unbroken loop, fully closed, before Fill will work.\n' +
+      '• Fill -- tap anywhere inside a closed loop to select everything it ' +
+      'encloses, shown in green. Tap the line itself, tap outside every ' +
+      'loop, or tap inside a loop with a gap in it, and you get a message ' +
+      'explaining why instead of a wrong or silent fill.\n\n' +
+      'The CLayer button only lights up once a fill has succeeded, and it ' +
+      'extracts exactly those pixels from the original picture -- nothing ' +
+      'resampled, nothing outside the fill kept.',
+  },
   'joint-type': {
     title: 'Follows parent',
     body: '• Rigid -- turns with its parent instantly, like a normal ' +

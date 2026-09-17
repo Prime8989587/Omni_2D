@@ -30,6 +30,7 @@ import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
+import { initClayer, openClayer } from './clayer.js';
 import { pierceOverlayEnabled, setPierceOverlay, pierceDentIssue, markPierceStale } from './pierce.js';
 import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
@@ -250,6 +251,7 @@ function cacheElements() {
   els.poseTargetPiercerBtn = document.getElementById('poseTargetPiercerBtn');
   els.appMenuBtn = document.getElementById('appMenuBtn');
   els.appMenu = document.getElementById('appMenu');
+  els.clayerOpenBtn = document.getElementById('clayerOpenBtn');
   els.stateSaveBtn = document.getElementById('stateSaveBtn');
   els.stateReverseBtn = document.getElementById('stateReverseBtn');
   els.stateDiscardBtn = document.getElementById('stateDiscardBtn');
@@ -2652,6 +2654,7 @@ function bindEvents() {
   // Now that these live in the menu, choosing one has to dismiss it before
   // its modal opens -- otherwise the menu is still sitting there behind it.
   els.saveProjectBtn.addEventListener('click', () => { closeStateMenu(); openSaveProjectModal(); });
+  els.clayerOpenBtn.addEventListener('click', () => { closeStateMenu(); openClayer(); });
   els.psaverExportBtn.addEventListener('click', () => { closeStateMenu(); openPSaverExport(); });
   els.psaverImportBtn.addEventListener('click', () => { closeStateMenu(); handlePSaverImport(); });
   els.psaverExportConfirmBtn.addEventListener('click', handlePSaverExport);
@@ -2733,6 +2736,7 @@ export function initUI() {
   initPxPin();
   initPierceTool();
   initPierceDepthCanvas();
+  initClayer();
   initInfoButtons();
   restorePierceOverlay();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });

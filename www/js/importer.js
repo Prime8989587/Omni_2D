@@ -15,15 +15,19 @@ export const MIN_IMAGE_SIZE = 8;
 const CASCADE_STEP = 8;
 const CASCADE_WRAP = 6;
 
-function isPng(file) {
+// Shared with CLayer (clayer.js), which decodes a user-picked PNG the same
+// way this file does but does NOT hand the result to partsStore -- it works
+// from the image on its own scratch canvas until the user explicitly saves
+// an extracted piece.
+export function isPng(file) {
   return file.type === 'image/png' || /\.png$/i.test(file.name);
 }
 
-function displayName(fileName) {
+export function displayName(fileName) {
   return fileName.replace(/\.[^.]+$/, '');
 }
 
-function loadImage(file) {
+export function loadImage(file) {
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
     const image = new Image();
@@ -38,7 +42,7 @@ function loadImage(file) {
 
 // The rasterizer samples texels straight from memory, so decode the PNG
 // into raw RGBA bytes once here rather than on every frame.
-function readPixels(image) {
+export function readPixels(image) {
   const scratch = document.createElement('canvas');
   scratch.width = image.naturalWidth;
   scratch.height = image.naturalHeight;
@@ -84,8 +88,10 @@ function initialPosition(image, cascadeIndex) {
 // would silently misplace the layer.
 
 // The tight box around every pixel with a non-zero alpha, or null when the
-// image is fully transparent.
-function contentBounds(pixels, width, height) {
+// image is fully transparent. Also used by CLayer to crop an extraction
+// down to whatever the filled boundary actually covers, rather than saving
+// a layer the size of the whole source image with transparency padding.
+export function contentBounds(pixels, width, height) {
   let minX = width;
   let minY = height;
   let maxX = -1;
@@ -107,7 +113,7 @@ function contentBounds(pixels, width, height) {
 }
 
 // Copies the bounding box out of the decoded image, row by row.
-function cropPixels(pixels, width, bounds) {
+export function cropPixels(pixels, width, bounds) {
   const out = new Uint8ClampedArray(bounds.width * bounds.height * 4);
   const rowBytes = bounds.width * 4;
   for (let row = 0; row < bounds.height; row++) {

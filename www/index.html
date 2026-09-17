@@ -27,6 +27,8 @@
         <p class="app-menu__group">PSaver — project files</p>
         <button id="psaverExportBtn" class="app-menu__item" type="button">PSaver: Export…</button>
         <button id="psaverImportBtn" class="app-menu__item" type="button">PSaver: Import…</button>
+        <p class="app-menu__group">CLayer — extract a layer by hand</p>
+        <button id="clayerOpenBtn" class="app-menu__item" type="button">CLayer: New extraction…</button>
         <p class="app-menu__group">Saved state</p>
         <button id="stateSaveBtn" class="app-menu__item" type="button">Save state</button>
         <button id="stateReverseBtn" class="app-menu__item" type="button">Reverse</button>
@@ -54,6 +56,14 @@
 
     <input id="fileInput" class="visually-hidden" type="file" accept="image/png,.png" multiple />
     <input id="psaverFileInput" class="visually-hidden" type="file" accept=".omni2d.json,.json,application/json" />
+    <!--
+      CLayer's OWN picker, deliberately separate from #fileInput above:
+      that one hands whatever is picked straight to partsStore, which is
+      exactly the step CLayer must not take until a boundary is drawn,
+      filled, and named. Same PNG-only accept, same single-purpose input,
+      different consequence.
+    -->
+    <input id="clayerFileInput" class="visually-hidden" type="file" accept="image/png,.png" />
 
     <footer class="controls">
       <div id="scenePanel" class="scene-panel" hidden>
@@ -622,6 +632,54 @@
         </label>
         <p class="px-pin__hint">Drag one finger to paint · two fingers pan · pinch to zoom</p>
       </footer>
+    </div>
+
+    <div id="clayerWindow" class="px-pin" hidden>
+      <header class="px-pin__bar">
+        <span class="px-pin__title">CLayer — <b id="clayerSourceName"></b></span>
+        <span id="clayerStatus" class="px-pin__status"></span>
+        <button id="clayerDoneBtn" class="btn btn--sm" type="button">Done</button>
+      </header>
+      <canvas id="clayerCanvas" class="px-pin__canvas"></canvas>
+      <footer class="px-pin__controls">
+        <div class="px-pin__row-label">
+          <span>Tool</span>
+          <button class="info-btn" type="button" data-info="clayer-tools" aria-haspopup="true" aria-expanded="false" aria-label="What do Boundary and Fill do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="segmented" role="group" aria-label="CLayer tool">
+          <button id="clayerToolBoundaryBtn" class="segmented__btn" type="button" aria-pressed="true">Boundary</button>
+          <button id="clayerToolFillBtn" class="segmented__btn" type="button" aria-pressed="false">Fill</button>
+        </div>
+        <div id="clayerBoundaryRow" class="segmented" role="group" aria-label="Boundary brush">
+          <button id="clayerDrawBtn" class="segmented__btn" type="button" aria-pressed="true">Draw</button>
+          <button id="clayerEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
+          <button id="clayerBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="clayerBrushMenu">1 × 1 ⌄</button>
+        </div>
+        <div id="clayerBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <p id="clayerFillHint" class="joint-hint" hidden>Tap inside a fully closed boundary loop to fill it. A gap anywhere in the line will be reported rather than filled.</p>
+        <div class="modal__actions">
+          <button id="clayerClearBtn" class="btn btn--sm btn--danger" type="button">Clear boundary</button>
+          <button id="clayerSaveBtn" class="btn btn--flourish" type="button" disabled>CLayer</button>
+        </div>
+        <p class="px-pin__hint">Drag one finger to draw or tap to fill · two fingers pan · pinch to zoom</p>
+      </footer>
+    </div>
+
+    <div id="clayerNameModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="clayerNameTitle">
+        <h2 id="clayerNameTitle" class="modal__title">Name this CLayer</h2>
+        <label for="clayerNameInput" class="field-label">Layer name</label>
+        <input id="clayerNameInput" class="text-input" type="text" placeholder="head" autocomplete="off" />
+        <p class="modal__text">
+          Saves the pixels inside the filled boundary as a new, independent
+          layer in this project's Scene Parts — transparent everywhere else,
+          no resampling — ready to drag, rig and bind like any other layer.
+        </p>
+        <div class="modal__actions">
+          <button id="clayerNameConfirmBtn" class="btn btn--flourish" type="button">Save</button>
+          <button id="clayerNameCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <div id="toast" class="toast" role="status" hidden></div>

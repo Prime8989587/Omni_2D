@@ -999,6 +999,16 @@ button, input, select {
   z-index: 50;
 }
 
+/* The naming prompt is opened FROM WITHIN an already-open .px-pin window
+   (z-index 55) -- no other modal in the app does that, they all open over
+   the plain canvas. Left at the shared z-index of 50, the CLayer window's
+   own canvas would sit above the backdrop and silently eat every tap
+   meant for Save/Cancel: found by the CLayer save flow hanging on a click
+   that Playwright reported as landing on the canvas underneath instead. */
+#clayerNameModal {
+  z-index: 65;
+}
+
 .modal {
   width: 100%;
   max-width: 360px;

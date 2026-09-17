@@ -3649,6 +3649,176 @@ and surface colours, and the border shape, moved.
 
 ---
 
+## CLayer: extracting a layer by hand instead of guessing at one
+
+A dedicated screen for pulling one piece out of an existing picture — a
+head, a strand of hair, a hand — as its own independent, riggable layer, by
+hand-drawing a boundary around it and filling it in. Reached from the app
+menu (the `≡` next to Undo/Redo): **CLayer: New extraction…**.
+
+### Why hand-drawn, not AI-segmented
+
+An automatic cutout is a guess, and a guess is the wrong tool for something
+that later gets stretched, pinned and bound. Whatever it gets slightly
+wrong — a stray fringe of background kept, a fingertip bitten off — becomes
+a permanent defect baked into a Part someone will animate. So CLayer is
+built the other way: the artist draws exactly where the line is, a
+well-understood flood fill decides exactly which pixels are inside it, and
+the extraction that follows is a plain crop-and-mask. Nothing in the path is
+probabilistic, and nothing needs to be — closed-loop geometry is a solved
+problem.
+
+### A dedicated window, not one more mode on the main canvas
+
+The source picture is not necessarily anything in the current project —
+**any PNG the user picks**, exactly the same file-picker pattern the app's
+own Import uses — so this cannot be a mode layered onto the main canvas,
+which only knows about Scene Parts. CLayer decodes its own image onto its
+own offscreen canvas and works from that, with its own `{zoom, pan}` camera
+(view-only, pinch-to-zoom and pan, never touching `view.js` — the same rule
+Px Pin and the Pierce painter's windows already follow, for the same
+reason: getting closer to trace a fiddly outline must never be confused
+with moving anything). The only thing that ever crosses back into the
+project is a finished extraction, added as a Part exactly the way an import
+is.
+
+**CLayer's own file input is deliberately not the app's `#fileInput`.**
+That one hands whatever is picked straight to `partsStore` — exactly the
+step CLayer must not take until a boundary is drawn, filled, and named.
+Same PNG-only accept attribute, same single-purpose `<input>`, different
+consequence.
+
+### The boundary brush
+
+A 1×1 to 10×10 px brush, the same size-menu pattern as Px Pin's and the
+Pierce painter's, draws a line directly on the imported picture in the
+app's pink accent. Draw and Erase sub-tools, continuous drag-painting with
+the same "sample every step of a fast drag, not just the endpoints" line
+interpolation those two windows already use, so a quick stroke still
+produces an unbroken line rather than a dotted one.
+
+The boundary is stored as a sparse set of pixel indices, like every other
+mask in the app (`pierceRegion`, `pins`, …), not a dense buffer — cheap to
+paint into and cheap to render at any zoom.
+
+### The fill, and what "closed" actually means for a raster line
+
+Tapping inside a loop with Fill active runs a flood fill from that pixel,
+**4-connected**, blocked by the boundary. Two requirements had to be met at
+once: Fill must refuse to work on a boundary that is not actually closed,
+and a stray tap outside every loop must fail clearly rather than filling
+the whole canvas. Both turn out to be the same test:
+
+> A boundary is closed, at the point you tapped, exactly when a flood fill
+> from that point cannot reach the edge of the decoded image.
+
+A gap anywhere in the loop lets the fill leak out to the border; a tap
+dropped in open space with nothing enclosing it leaks immediately for the
+same reason. Reaching the border is unambiguous and free — it needs no
+arbitrary size cutoff to catch a fill that "got away", because escaping the
+image entirely already means it did, and the search stops the moment it
+happens rather than continuing on to visit the rest of the canvas.
+
+```
+floodFillFrom(width, height, boundary, u, v):
+  if (u, v) is a boundary pixel  -> reject: tapped the line itself
+  BFS, 4-connected, from (u, v), never stepping onto a boundary pixel
+  if the BFS ever reaches u==0, v==0, u==width-1 or v==height-1
+      -> reject: the boundary isn't closed (or nothing encloses this point)
+  else -> the visited set IS the fill
+```
+
+**4-connected fill, deliberately, against an 8-connected line.** A boundary
+brush stroke is a run of touching pixels — the same line-interpolation that
+keeps a fast drag unbroken also guarantees consecutive boundary pixels are
+at least diagonally adjacent to each other. That already blocks a
+4-connected fill completely: two pixels that only touch corner-to-corner
+are never 4-adjacent to *each other*, so a 4-connected search cannot pass
+between them without first landing on one of them, which is forbidden.
+Letting the *fill* move diagonally would undo exactly that seal — an
+otherwise-solid diagonal line would spring a leak at every corner. Verified
+directly: a diamond boundary made entirely of corner-touching pixels
+(`tests/clayer.mjs`) seals a 4-connected fill perfectly.
+
+Three outcomes, three distinct messages — never a silent wrong fill:
+
+| Tapped on | Result |
+| --- | --- |
+| the boundary line itself | "tap inside the shape, not on the line" |
+| a point with a genuine gap in its enclosure, or open space with nothing around it | "the boundary isn't a closed loop yet — draw one unbroken line all the way around" |
+| a point genuinely enclosed | the fill succeeds, highlighted in green, and **CLayer** unlocks |
+
+**A fill goes stale the moment the line that produced it changes.** Editing
+the boundary after a successful fill — one more stroke, one erased notch —
+clears the stored fill and disables Save until Fill is run again, so a save
+can never extract pixels the *current* line does not actually agree with.
+
+### Save: crop the ORIGINAL pixels, nothing resampled
+
+The **CLayer** button (that exact label) builds a full-size buffer that
+copies the source's original bytes wherever the fill covers, and leaves
+everything else at `(0,0,0,0)` — a texel is either copied whole or left
+fully transparent, never blended, never smoothed. That buffer is then
+cropped to the tight bounding box of its own opaque pixels (the same
+`contentBounds`/`cropPixels` helpers Import already uses for
+position-preserving PNGs), so the saved layer is sized to the piece itself
+rather than padded out to the whole source image.
+
+The result is added to the current project with `partsStore.add(new
+Part(...))` — the identical call Import makes, position, scale and all —
+under a name the artist types in a prompt built on the same modal pattern
+PSaver's export dialog uses. **After saving, the boundary and fill both
+clear and the same source image stays loaded**, so a second, third, or
+tenth boundary can be drawn immediately: extract "head", then "hair", then
+"hand", all from one imported picture in one sitting, each its own
+independent Part.
+
+**One layering bug, worth naming because it was real, not a test
+artifact.** The naming prompt is opened *from within* an already-open
+CLayer window, and no other modal in the app does that — every other one
+opens over the plain canvas. `.modal-backdrop` sits at `z-index: 50`;
+Px Pin's, the Pierce painter's and CLayer's own full-screen windows sit at
+`z-index: 55`. Left alone, the prompt would render but its Save/Cancel
+buttons would sit **underneath** CLayer's own canvas, silently eating every
+tap meant for them — found by the verification script itself timing out on
+a click that Chromium correctly reported as landing on the canvas
+underneath. `#clayerNameModal` now gets its own `z-index: 65`.
+
+### Verified end to end
+
+`tests/clayer.mjs` (13 checks, plain Node, `node tests/clayer.mjs`) runs the
+flood fill and the crop/mask math directly against the shipped functions,
+against hand-built ASCII maps rather than a re-implementation of the
+algorithm: a genuinely closed ring encloses its interior correctly (and its
+own inner pocket separately); a one-pixel gap in an otherwise-sealed ring
+lets the fill escape and is reported, caught well before it could have
+covered a 61×61 field; a tap in open space with nothing around it fails the
+same way; a diagonal diamond of corner-touching pixels seals a 4-connected
+fill perfectly; and the extraction step copies pixels byte-for-byte,
+leaves untouched texels at exactly `(0,0,0,0)`, and crops to precisely the
+fill's own bounding box.
+
+A second pass drove the real window in a real browser end to end: a
+two-block fixture PNG (a flat red "head", a flat blue "body", both on a
+transparent field) imported through the actual app menu and a real
+`filechooser` event; a boundary dragged around the head with real pointer
+events; Fill tapped inside it; **CLayer** pressed and the result named
+"TestHead" through the real modal. The saved Part came back cropped to
+exactly **12×10** — the head block's own size, no margin from the drawn
+loop included — with **every one of its 120 pixels** either the source's
+exact `(220, 40, 40, 255)` or fully `(0, 0, 0, 0)`, nothing in between.
+A second boundary, around the body, was then drawn and saved **from the
+same session without re-importing**, cropped to its own independent
+**20×14**, landing as a second Part alongside the first. The two guard
+rails were driven directly: an open three-sided boundary produced the
+"must be closed" message and left Save disabled; a tap in open space
+produced the same message rather than filling the 1,728-pixel canvas.
+Finally, the extracted Part was confirmed to be a genuine `Part` instance
+that `mesh.generateMesh` builds a real mesh from exactly like any imported
+layer, and it appeared in the real Scene Parts list under the typed name
+with Bind, Rig and Animate all available — the same integration point
+Import itself lands on.
+
 ## A toast can silently eat a tap
 
 Found by accident, while re-walking a "painting does nothing" report step
