@@ -30,8 +30,17 @@ jobs:
           java-version: '21'
           cache: gradle
 
+      # Explicit `packages` so this doesn't default to installing `tools`
+      # alongside platform-tools. Google removed the legacy `tools` package
+      # from the SDK repository listing; the action's default package set
+      # still names it, so sdkmanager exits 1 before anything else in this
+      # workflow runs. platform-tools is all this job actually needs from
+      # here -- the platform and build-tools versions are installed
+      # explicitly in the next step.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install required SDK platform & build-tools
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
