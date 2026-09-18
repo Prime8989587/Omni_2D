@@ -695,6 +695,7 @@
         <h2 id="pcreateEntryTitle" class="modal__title">PCreate</h2>
         <p class="modal__text">Paint a new layer from scratch, or bring in an existing picture to work on.</p>
         <div class="modal__actions modal__actions--stack">
+          <button id="pcreateResumeBtn" class="btn btn--flourish" type="button" hidden>Resume saved work</button>
           <button id="pcreateBlankBtn" class="btn btn--flourish" type="button">Blank canvas…</button>
           <button id="pcreateImportBtn" class="btn" type="button">Import…</button>
           <button id="pcreateEntryCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
@@ -749,6 +750,7 @@
           <button id="pcreateShapeOutlineBtn" class="segmented__btn" type="button" aria-pressed="false">Outline</button>
         </div>
 
+        <p id="pcreateFillHint" class="joint-hint" hidden>Tap an area to flood it with the current color. Every connected pixel of the same color as the one you tap is filled — including empty background, which counts as a color of its own.</p>
         <p id="pcreatePickHint" class="joint-hint" hidden>Tap any pixel on the canvas to make its exact color the active drawing color.</p>
         <p id="pcreateBlendHint" class="joint-hint" hidden>Tap near the seam between two differently-colored neighbouring pixels. One new midpoint pixel is written there. If the two are the same color — or too close for a distinct midpoint to exist — nothing is changed and you'll be told why.</p>
         <p id="pcreateSelectHint" class="joint-hint" hidden>Draw one unbroken loop around the area you want. When you lift your finger, everything the loop encloses becomes the selection.</p>
@@ -758,6 +760,12 @@
           <button id="pcreateSelCopyBtn" class="btn btn--sm" type="button">Copy</button>
           <button id="pcreateSelDeleteBtn" class="btn btn--sm btn--danger" type="button">Delete</button>
           <button id="pcreateSelDeselectBtn" class="btn btn--sm" type="button">Deselect</button>
+        </div>
+
+        <div class="pcreate-action-row">
+          <button id="pcreateUndoBtn" class="btn btn--sm" type="button" disabled>↶ Undo</button>
+          <button id="pcreateRedoBtn" class="btn btn--sm" type="button" disabled>↷ Redo</button>
+          <button id="pcreateSaveWorkBtn" class="btn btn--sm" type="button">Save work</button>
         </div>
 
         <div class="px-pin__row-label">
@@ -789,6 +797,16 @@
         <div id="pcreateSwatchStrip" class="pcreate-swatch-strip"></div>
 
         <div class="px-pin__row-label">
+          <span>Auto Palette</span>
+          <button class="info-btn" type="button" data-info="pcreate-auto-palette" aria-haspopup="true" aria-expanded="false" aria-label="What is the Auto Palette?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="pcreate-palette-row">
+          <span id="pcreateAutoCount" class="pcreate-palette-name">Nothing on the canvas yet</span>
+          <button id="pcreateAutoRefreshBtn" class="btn btn--sm" type="button">Refresh</button>
+        </div>
+        <div id="pcreateAutoStrip" class="pcreate-swatch-strip"></div>
+
+        <div class="px-pin__row-label">
           <span>Shadow</span>
           <button class="info-btn" type="button" data-info="pcreate-shadow" aria-haspopup="true" aria-expanded="false" aria-label="How does the shadow generator work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
         </div>
@@ -803,6 +821,7 @@
           <button id="pcreateShadowAutoBtn" class="btn btn--sm" type="button">Auto</button>
           <button id="pcreateShadowApplyBtn" class="btn btn--flourish" type="button">Add Shadow</button>
         </div>
+        <button id="pcreateShadowToggleBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false" disabled>Shadow: none yet</button>
 
         <div class="px-pin__row-label">
           <span>Transform</span>

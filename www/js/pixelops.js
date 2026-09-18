@@ -25,6 +25,9 @@
 // produces exactly one, only when asked, and refuses when the result would
 // not be distinct from what is already there.
 
+// color.js is pure and imports nothing, so this stays a one-way dependency.
+import { rgbToHsv } from './color.js';
+
 // ---------------------------------------------------------------------------
 // Reading and writing single texels
 
@@ -452,6 +455,94 @@ export function blendAt(pixels, width, height, u, v, nu, nv) {
     return { ok: false, reason: 'no-distinct-midpoint', a, b, mid };
   }
   return { ok: true, color: mid, a, b };
+}
+
+// ---------------------------------------------------------------------------
+// Fill: contiguous same-colour flood
+//
+// The same 4-connected breadth-first walk CLayer's fill uses, with two
+// deliberate differences that come from being a paint tool rather than an
+// extraction tool.
+//
+// CLayer is blocked by a drawn BOUNDARY set and rejects any fill that
+// reaches the edge of the image, because there "escaped to the border"
+// means the traced loop had a gap in it. Here there is no loop and no gap:
+// what stops the flood is simply meeting a different colour, and a region
+// that genuinely runs to the edge of the canvas is an ordinary thing to
+// want filled. So the stop condition is a colour match and reaching the
+// border is not an error.
+//
+// TRANSPARENT IS A COLOUR HERE. An empty texel is (0,0,0,0) and matches
+// other empty texels, so tapping the background floods the connected empty
+// region exactly like any other same-coloured area -- which is what makes
+// Fill usable for laying in a background at all.
+export function floodFillColor(pixels, width, height, startU, startV) {
+  if (!inBounds(startU, startV, width, height)) return new Set();
+  const target = samplePixel(pixels, width, startU, startV);
+
+  const start = startV * width + startU;
+  const filled = new Set([start]);
+  const stack = [start];
+  while (stack.length) {
+    const index = stack.pop();
+    const u = index % width;
+    const v = (index - u) / width;
+    const neighbours = [[u - 1, v], [u + 1, v], [u, v - 1], [u, v + 1]];
+    for (const [nu, nv] of neighbours) {
+      if (!inBounds(nu, nv, width, height)) continue;
+      const n = nv * width + nu;
+      if (filled.has(n)) continue;
+      if (!sameColor(samplePixel(pixels, width, nu, nv), target)) continue;
+      filled.add(n);
+      stack.push(n);
+    }
+  }
+  return filled;
+}
+
+// ---------------------------------------------------------------------------
+// Auto Palette: what colours is this picture actually made of
+//
+// Every distinct opaque colour on the canvas, ordered around the colour
+// wheel -- red, orange, yellow, green, blue, purple and back toward red.
+// "Gradient order" has no other sensible reading for a set of arbitrary
+// colours: sorting by brightness alone would interleave unrelated hues, and
+// sorting by raw RGB puts pure red next to pure black. Hue order is what
+// makes a scanned palette read as a palette.
+//
+// Greys have no meaningful hue (their hue is whatever rounding noise says),
+// so they are grouped together at the end, ordered light to dark, rather
+// than scattered arbitrarily through the coloured ones.
+export function uniqueColorsByHue(pixels, width, height) {
+  const seen = new Map();
+  const total = width * height;
+  for (let index = 0; index < total; index++) {
+    const o = index * 4;
+    if (pixels[o + 3] === 0) continue; // an empty texel is not a colour
+    const key = (pixels[o] << 24) | (pixels[o + 1] << 16) | (pixels[o + 2] << 8) | pixels[o + 3];
+    const existing = seen.get(key);
+    if (existing) { existing.count++; continue; }
+    const { h, s, v } = rgbToHsv(pixels[o], pixels[o + 1], pixels[o + 2]);
+    seen.set(key, {
+      r: pixels[o], g: pixels[o + 1], b: pixels[o + 2], a: pixels[o + 3],
+      h, s, v, count: 1,
+    });
+  }
+
+  const GREY = 0.08; // below this saturation, "hue" is just rounding noise
+  const colours = [...seen.values()];
+  colours.sort((x, y) => {
+    const xGrey = x.s < GREY;
+    const yGrey = y.s < GREY;
+    if (xGrey !== yGrey) return xGrey ? 1 : -1; // greys last
+    if (xGrey) return y.v - x.v; // light to dark
+    if (x.h !== y.h) return x.h - y.h;
+    // Same hue: the darker, duller version reads as belonging under the
+    // brighter one rather than in an arbitrary order beside it.
+    if (x.s !== y.s) return y.s - x.s;
+    return y.v - x.v;
+  });
+  return colours;
 }
 
 // ---------------------------------------------------------------------------

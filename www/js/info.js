@@ -173,8 +173,14 @@ const TOPICS = {
       'selection.\n' +
       '• Pick Color -- tap any pixel to make its exact colour the active ' +
       'one.\n' +
+      '• Fill -- floods every connected pixel matching the one you tap. ' +
+      'Empty background counts as a colour, so you can fill it too.\n' +
       '• Blend -- writes one new midpoint pixel between two differently ' +
-      'coloured neighbours.',
+      'coloured neighbours.\n\n' +
+      'Undo and Redo step back and forward through everything you draw. ' +
+      'Save work keeps the canvas itself, mid-edit, so closing the app ' +
+      'does not lose it — that is separate from Save as Layer, which hands ' +
+      'a finished picture to the project.',
   },
   'pcreate-shadow': {
     title: 'Shadow',
@@ -188,7 +194,31 @@ const TOPICS = {
       'picture rather than being a generic grey. Use current color ' +
       'overrides it with whatever the picker is set to; Auto goes back.\n\n' +
       'With a selection active, only that selection casts a shadow.\n\n' +
-      'For shading by hand instead, use the Shade brush.',
+      'For shading by hand instead, use the Shade brush.\n\n' +
+      'The shadow is kept as its own layer rather than painted into the ' +
+      'artwork, which is what makes the next two things work.\n\n' +
+      'Pressing Add Shadow again after changing the artwork REPLACES the ' +
+      'old shadow rather than adding a second one on top. Pressing it with ' +
+      'nothing changed does nothing and says so — there would be no ' +
+      'difference to produce.\n\n' +
+      'Shadow: ON/OFF hides and shows the shadow you last generated so you ' +
+      'can compare with and without. It never recalculates anything — ' +
+      'switching it off and back on gives you the identical shadow back.',
+  },
+  'pcreate-auto-palette': {
+    title: 'Auto Palette',
+    body: 'Not a palette you build — a readout of the colours the current ' +
+      'artwork is actually made of, scanned straight off the canvas.\n\n' +
+      'Colours are ordered around the colour wheel: red, orange, yellow, ' +
+      'green, blue, purple and back toward red. Greys have no real hue, so ' +
+      'they are grouped at the end, light to dark.\n\n' +
+      'This is a different thing from the saved Palettes above. Those are ' +
+      'named, kept between sessions, and only change when you change them. ' +
+      'This one has no name, is never saved, and only reflects what is on ' +
+      'the canvas right now. Tapping a swatch in either picks that colour.\n\n' +
+      'It refreshes as you draw. On a very large canvas, scanning every ' +
+      'pixel after every stroke would be slow, so there it updates only ' +
+      'when you press Refresh.',
   },
   'pcreate-transform': {
     title: 'Rotate and Flip',

@@ -62,7 +62,13 @@ import {
   regionBounds, extractRegion, blitRegion,
   blendAt, samplePixel,
   shadowIndices, suggestShadowColor,
+  floodFillColor, uniqueColorsByHue,
 } from './pixelops.js';
+// The SAME undo/redo implementation the main canvas uses, as a second
+// instance rather than a second mechanism -- see history.js's own comment
+// on why a workspace that is not part of the project needs its own
+// timeline rather than a place on the project's.
+import { createHistory } from './history.js';
 
 const MAX_ZOOM = 64; // css px per canvas px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -88,6 +94,7 @@ const SHADOW_DIRECTIONS = [
 const TOOLS = [
   { key: 'brush', label: 'Brush' },
   { key: 'eraser', label: 'Eraser' },
+  { key: 'fill', label: 'Fill' },
   { key: 'shade', label: 'Shade' },
   { key: 'circle', label: 'Circle' },
   { key: 'triangle', label: 'Triangle' },
@@ -100,6 +107,23 @@ const TOOLS = [
 const BRUSH_TOOLS = new Set(['brush', 'eraser', 'shade']);
 const SHAPE_TOOLS = new Set(['circle', 'triangle', 'square']);
 const SHAPE_FUNCTIONS = { circle: circleShape, triangle: triangleShape, square: squareShape };
+
+// Above this many texels, the Auto Palette is only rebuilt when asked for
+// rather than after every action. Scanning 256x256 is a fraction of a
+// millisecond; scanning the 3072x3072 maximum is nine million texels and
+// would be felt on every single brush stroke.
+const AUTO_PALETTE_LIVE_LIMIT = 256 * 256;
+
+// How much memory PCreate's undo stack may hold. The project's history can
+// keep 60 entries cheaply because its pixel buffers are immutable and every
+// snapshot shares them; a paint canvas is mutated in place, so each entry
+// owns a full copy. At the 3072x3072 maximum that is 36 MB per step, and a
+// flat 60-entry limit would be over two gigabytes. The depth is therefore
+// derived from the canvas size instead: generous for the small canvases
+// pixel art actually uses, and still a usable few steps at the extreme.
+const UNDO_BYTE_BUDGET = 64 * 1024 * 1024;
+const UNDO_MAX_STEPS = 60;
+const UNDO_MIN_STEPS = 4;
 const GRID_DARK = '#000000';
 const GRID_LIGHT = '#262626';
 const GRID_EDGE = 'rgba(255, 255, 255, 0.28)';
@@ -149,11 +173,13 @@ function cacheElements() {
     'pcreateEditModeToggle', 'pcreateSaveLayerBtn',
     'pcreateToolStrip', 'pcreateBrushRow', 'pcreateBrushBtn', 'pcreateBrushMenu',
     'pcreateShapeRow', 'pcreateShapeFilledBtn', 'pcreateShapeOutlineBtn',
-    'pcreatePickHint', 'pcreateBlendHint', 'pcreateSelectHint',
+    'pcreateFillHint', 'pcreatePickHint', 'pcreateBlendHint', 'pcreateSelectHint',
     'pcreateSelectionRow', 'pcreateSelectionStatus', 'pcreateSelCopyBtn',
     'pcreateSelDeleteBtn', 'pcreateSelDeselectBtn',
     'pcreateShadowDirs', 'pcreateShadowOffset', 'pcreateShadowOffsetLabel',
     'pcreateShadowSwatch', 'pcreateShadowUseCurrentBtn', 'pcreateShadowAutoBtn', 'pcreateShadowApplyBtn',
+    'pcreateShadowToggleBtn', 'pcreateAutoStrip', 'pcreateAutoCount', 'pcreateAutoRefreshBtn',
+    'pcreateUndoBtn', 'pcreateRedoBtn', 'pcreateSaveWorkBtn', 'pcreateResumeBtn',
     'pcreateTransformTarget', 'pcreateRotateCcwBtn', 'pcreateRotateCwBtn',
     'pcreateFlipHBtn', 'pcreateFlipVBtn', 'pcreateAngleSlider', 'pcreateAngleLabel', 'pcreateRotateFreeBtn',
     'pcreatePaletteModal', 'pcreatePaletteEmpty', 'pcreatePaletteList', 'pcreateNewPaletteBtn', 'pcreatePaletteDoneBtn',
@@ -178,6 +204,7 @@ function showToast(message) {
 
 export function openPCreate() {
   els.pcreateEntryModal.hidden = false;
+  refreshResumeButton();
 }
 
 function closeEntryModal() {
@@ -355,6 +382,24 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
     shadowColor: null, // null means "recompute from the artwork on every apply"
     shadeToneSeeded: false,
     freeAngle: 0,
+
+    // THE GENERATED SHADOW IS ITS OWN LAYER, NOT PAINTED INTO THE ARTWORK.
+    //
+    // That one decision is what makes the rest of the shadow behaviour fall
+    // out for free. Regenerating replaces this set rather than adding to
+    // whatever is already on the canvas, so a second press can never shadow
+    // the first shadow and compound it. Hiding it is dropping it from the
+    // composite for a frame, not erasing anything, so it comes back exactly
+    // as it was. And the generator always reads session.pixels -- the
+    // artwork alone -- so the silhouette it offsets is never contaminated
+    // by a previous run's output.
+    shadow: null, // { indices: Set, color: [r,g,b,a] }
+    shadowVisible: true,
+    // Has any tool touched the artwork since the shadow was generated?
+    // Starts true so the first press has something to do.
+    artworkDirty: true,
+
+    autoPalette: [],
   };
 
   els.pcreateCanvasLabel.textContent = name;
@@ -367,6 +412,9 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
   renderColorControls();
   renderSwatchStrip();
   renderShadowControls();
+  pcreateHistory.reset();
+  renderUndoRedo();
+  rebuildAutoPalette();
   renderTools();
   render();
 }
@@ -374,6 +422,110 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
 function endSession() {
   els.pcreateWindow.hidden = true;
   session = null;
+}
+
+// ---------------------------------------------------------------------------
+// Undo / redo
+//
+// The snapshot pair history.js's History class works in terms of, for
+// PCreate's own state rather than the project's. Everything a drawing
+// action can change is in here: the artwork, the canvas dimensions (a
+// quarter turn swaps them), the generated shadow and whether it is showing,
+// the dirty flag that governs regeneration, and the selection.
+//
+// The pixel buffer is COPIED on the way in. The project can share its
+// buffers between snapshots because they are immutable once imported; these
+// are painted on in place, so a shared reference would leave every entry on
+// the stack pointing at the same, latest artwork -- an undo stack that
+// restores exactly what you already have.
+
+function snapshotSession() {
+  if (!session) return null;
+  return {
+    width: session.width,
+    height: session.height,
+    pixels: new Uint8ClampedArray(session.pixels),
+    shadow: session.shadow
+      ? { indices: [...session.shadow.indices], color: [...session.shadow.color] }
+      : null,
+    shadowVisible: session.shadowVisible,
+    artworkDirty: session.artworkDirty,
+    selection: session.selection ? [...session.selection] : null,
+  };
+}
+
+function restoreSession(snapshot) {
+  if (!session || !snapshot) return;
+  const sizeChanged = snapshot.width !== session.width || snapshot.height !== session.height;
+  session.width = snapshot.width;
+  session.height = snapshot.height;
+  session.pixels = new Uint8ClampedArray(snapshot.pixels);
+  session.shadow = snapshot.shadow
+    ? { indices: new Set(snapshot.shadow.indices), color: [...snapshot.shadow.color] }
+    : null;
+  session.shadowVisible = snapshot.shadowVisible;
+  session.artworkDirty = snapshot.artworkDirty;
+  session.selection = snapshot.selection ? new Set(snapshot.selection) : null;
+
+  if (sizeChanged) {
+    const canvas = document.createElement('canvas');
+    canvas.width = session.width;
+    canvas.height = session.height;
+    session.bitmap = canvas;
+    fitCamera();
+  }
+  syncBitmap();
+  refreshAutoPalette();
+  renderTools();
+  render();
+}
+
+const pcreateHistory = createHistory({
+  serialize: snapshotSession,
+  apply: restoreSession,
+  limit: () => {
+    if (!session) return UNDO_MAX_STEPS;
+    // TWO buffers per entry, not one: History keeps a `before` and an
+    // `after` for every step, and they are separate copies even where two
+    // neighbouring entries hold the same picture.
+    const bytesPerStep = session.width * session.height * 4 * 2;
+    if (bytesPerStep <= 0) return UNDO_MAX_STEPS;
+    const affordable = Math.floor(UNDO_BYTE_BUDGET / bytesPerStep);
+    return Math.max(UNDO_MIN_STEPS, Math.min(UNDO_MAX_STEPS, affordable));
+  },
+});
+
+// Every mutating tool goes through here, so there is exactly one place that
+// remembers to mark the artwork dirty for the shadow generator and to keep
+// the Auto Palette current. A tool that forgot either would be a silent bug
+// -- a shadow that refuses to regenerate, or a palette missing a colour.
+function runAction(label, mutate) {
+  if (!session) return;
+  pcreateHistory.run(label, () => {
+    mutate();
+    session.artworkDirty = true;
+  });
+  refreshAutoPalette();
+  renderUndoRedo();
+}
+
+function renderUndoRedo() {
+  els.pcreateUndoBtn.disabled = !pcreateHistory.canUndo;
+  els.pcreateRedoBtn.disabled = !pcreateHistory.canRedo;
+  els.pcreateUndoBtn.title = pcreateHistory.undoLabel ? `Undo ${pcreateHistory.undoLabel}` : 'Nothing to undo';
+  els.pcreateRedoBtn.title = pcreateHistory.redoLabel ? `Redo ${pcreateHistory.redoLabel}` : 'Nothing to redo';
+}
+
+function undoPCreate() {
+  const label = pcreateHistory.undo();
+  renderUndoRedo();
+  showToast(label ? `Undid ${label}.` : 'Nothing to undo.');
+}
+
+function redoPCreate() {
+  const label = pcreateHistory.redo();
+  renderUndoRedo();
+  showToast(label ? `Redid ${label}.` : 'Nothing to redo.');
 }
 
 function sizeCanvas() {
@@ -458,6 +610,14 @@ function render() {
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
 
   drawGrid(ctx);
+  // The shadow layer sits UNDER the artwork. It only ever occupies texels
+  // the artwork left empty, so there is nothing to blend -- but drawing it
+  // first still matters, because anything painted over a shadow texel
+  // afterwards should cover it rather than appear behind it.
+  if (session.shadow && session.shadowVisible) {
+    const [r, g, b, a] = session.shadow.color;
+    drawIndexSet(ctx, session.shadow.indices, `rgba(${r}, ${g}, ${b}, ${a / 255})`, null);
+  }
   ctx.drawImage(session.bitmap, cam.panX, cam.panY, width * cam.zoom, height * cam.zoom);
 
   // The per-texel grid, once cells are big enough to aim a single pixel at
@@ -521,6 +681,32 @@ function syncBitmap() {
   const imageData = ctx.createImageData(session.width, session.height);
   imageData.data.set(session.pixels);
   ctx.putImageData(imageData, 0, 0);
+}
+
+// The artwork with the shadow layer merged underneath it -- what the canvas
+// actually LOOKS like, as opposed to session.pixels, which is the artwork
+// alone. Anything leaving PCreate (Save as Layer, a saved session) takes
+// this; anything generating a shadow takes session.pixels, so the silhouette
+// it reads is never contaminated by a previous shadow.
+//
+// A hidden shadow is genuinely absent from the result: if the artist has
+// toggled it off, it is not part of the picture they are looking at, and
+// baking it into an exported layer anyway would be a surprise.
+function compositePixels() {
+  if (!session.shadow || !session.shadowVisible || session.shadow.indices.size === 0) {
+    return new Uint8ClampedArray(session.pixels);
+  }
+  const out = new Uint8ClampedArray(session.pixels);
+  const [r, g, b, a] = session.shadow.color;
+  for (const index of session.shadow.indices) {
+    const o = index * 4;
+    if (out[o + 3] !== 0) continue; // the artwork wins wherever they meet
+    out[o] = r;
+    out[o + 1] = g;
+    out[o + 2] = b;
+    out[o + 3] = a;
+  }
+  return out;
 }
 
 // Rebuild the canvas element and camera after an operation that changed the
@@ -626,6 +812,7 @@ function beginToolGesture(point) {
 
   if (BRUSH_TOOLS.has(session.tool)) { beginStroke(texel); return; }
   if (SHAPE_TOOLS.has(session.tool)) { session.shapeDrag = { from: texel, to: texel }; render(); return; }
+  if (session.tool === 'fill') { fillAt(texel); return; }
   if (session.tool === 'pick') { pickColorAt(texel); return; }
   if (session.tool === 'blend') { blendNear(point); return; }
 
@@ -680,6 +867,10 @@ function beginStroke(texel) {
     before: new Map(), // index -> the four bytes that were there first
     boundaryBefore: new Set(),
     changed: false,
+    // A drag across dozens of pointermove frames is ONE undo step. This is
+    // the same capture/commit pair the main canvas uses for dragging a
+    // layer, for exactly the same reason.
+    token: pcreateHistory.capture(session.tool === 'select' ? 'Select' : strokeLabel()),
   };
   applyStrokeAt([texel]);
   session.stroke.last = texel;
@@ -733,11 +924,25 @@ function strokeColor() {
   return [r, g, b, 255];
 }
 
+function strokeLabel() {
+  if (session.tool === 'eraser') return 'Erase';
+  if (session.tool === 'shade') return 'Shade';
+  return 'Brush';
+}
+
 function endStroke() {
   const stroke = session.stroke;
   session.stroke = null;
   if (!stroke) return;
   if (session.tool === 'select') commitLasso();
+  // Drawing a lasso changes the SELECTION, not the artwork, so it is an
+  // undo step but not a reason for the shadow to regenerate. Moving,
+  // deleting or transforming that selection afterwards is, and those go
+  // through runAction() like every other artwork edit.
+  if (stroke.changed && session.tool !== 'select') session.artworkDirty = true;
+  pcreateHistory.commitCapture(stroke.token, stroke.changed);
+  if (stroke.changed) refreshAutoPalette();
+  renderUndoRedo();
   render();
 }
 
@@ -766,8 +971,11 @@ function commitShape() {
     drag.from, drag.to, session.width, session.height, session.shapeFilled
   );
   if (indices.size === 0) { render(); return; }
-  paintIndices(session.pixels, indices, strokeColor());
-  syncBitmap();
+  const label = session.tool.charAt(0).toUpperCase() + session.tool.slice(1);
+  runAction(label, () => {
+    paintIndices(session.pixels, indices, strokeColor());
+    syncBitmap();
+  });
   render();
 }
 
@@ -872,6 +1080,9 @@ function findEnclosedArea(boundary) {
 // copy would leave behind.
 
 function beginSelectionMove(texel) {
+  // Captured before the lift below clears the source texels, so undo goes
+  // back to the selection sitting where it started.
+  const token = pcreateHistory.capture('Move selection');
   const bounds = regionBounds(session.selection, session.width);
   const region = extractRegion(session.pixels, session.width, session.selection, bounds);
   clearIndices(session.pixels, session.selection);
@@ -883,6 +1094,7 @@ function beginSelectionMove(texel) {
     dx: 0,
     dy: 0,
     original: new Set(session.selection),
+    token,
   };
   session.selection = null;
   renderPreviewOfDrag();
@@ -928,6 +1140,10 @@ function endSelectionMove() {
   );
   syncBitmap();
   session.selection = landed.size ? landed : null;
+  session.artworkDirty = true;
+  pcreateHistory.commitCapture(drag.token, drag.dx !== 0 || drag.dy !== 0);
+  refreshAutoPalette();
+  renderUndoRedo();
   renderTools();
   render();
 }
@@ -952,8 +1168,11 @@ function copySelection() {
   if (!session || !session.selection) return;
   const bounds = regionBounds(session.selection, session.width);
   const region = extractRegion(session.pixels, session.width, session.selection, bounds);
+  // Probed against a scratch copy first, so a copy that would land off the
+  // canvas is reported without leaving a half-done action on the stack.
+  const probe = new Uint8ClampedArray(session.pixels);
   const landed = blitRegion(
-    session.pixels, session.width, session.height,
+    probe, session.width, session.height,
     region, bounds.width, bounds.height,
     bounds.x + COPY_OFFSET, bounds.y + COPY_OFFSET
   );
@@ -961,7 +1180,10 @@ function copySelection() {
     showToast('The copy would land off the canvas — move the selection inward first.');
     return;
   }
-  syncBitmap();
+  runAction('Copy selection', () => {
+    session.pixels = probe;
+    syncBitmap();
+  });
   // The DUPLICATE becomes the selection, not the original, so it can be
   // dragged straight to where it is wanted without re-selecting anything.
   session.selection = landed;
@@ -972,10 +1194,13 @@ function copySelection() {
 
 function deleteSelection() {
   if (!session || !session.selection) return;
-  clearIndices(session.pixels, session.selection);
-  syncBitmap();
+  const count = session.selection.size;
+  runAction('Delete selection', () => {
+    clearIndices(session.pixels, session.selection);
+    syncBitmap();
+  });
   render();
-  showToast(`Cleared ${session.selection.size} px to transparent.`);
+  showToast(`Cleared ${count} px to transparent.`);
 }
 
 function deselect() {
@@ -1038,16 +1263,39 @@ function blendNear(point) {
     return;
   }
 
-  paintIndices(session.pixels, [texel.v * session.width + texel.u], result.color);
-  syncBitmap();
+  runAction('Blend', () => {
+    paintIndices(session.pixels, [texel.v * session.width + texel.u], result.color);
+    syncBitmap();
+  });
   render();
   showToast(`Blended to ${rgbToHex(result.color[0], result.color[1], result.color[2])}.`);
 }
 
 // ---- Shadow -------------------------------------------------------------
 
+// REGENERATING IS A REPLACEMENT, AND ONLY HAPPENS WHEN SOMETHING CHANGED
+//
+// Two rules, and the layered shadow makes both cheap. Pressing the button
+// again with nothing touched since the last run does nothing and says so:
+// re-running on an unchanged picture could only produce the identical
+// result, and if the previous shadow had been painted INTO the artwork it
+// would produce something much worse -- the silhouette would now include
+// the old shadow, so the new one would be cast by artwork-plus-shadow,
+// darker and further out every press. Because the shadow lives in its own
+// layer and the generator always reads session.pixels, that compounding
+// cannot happen even in principle; the dirty flag is what stops the
+// pointless work and tells the artist why.
+//
+// When something HAS changed, the new set simply replaces the old one. No
+// clean-up step, no stacking.
 function applyShadow() {
   if (!session) return;
+
+  if (session.shadow && !session.artworkDirty) {
+    showToast('No changes since the last shadow — nothing to regenerate.');
+    return;
+  }
+
   const direction = SHADOW_DIRECTIONS.find((d) => d.key === session.shadowDirection);
   const restrictTo = session.selection;
   const indices = shadowIndices(
@@ -1065,10 +1313,59 @@ function applyShadow() {
     || suggestShadowColor(session.pixels, session.width, session.height, restrictTo);
   if (!colour) { showToast('There is nothing on the canvas to take a shadow colour from.'); return; }
 
-  paintIndices(session.pixels, indices, colour);
-  syncBitmap();
+  const replaced = Boolean(session.shadow);
+  // Undoable like any other action, and deliberately NOT through
+  // runAction(): generating a shadow does not make the ARTWORK dirty, it is
+  // the thing that clears that flag.
+  pcreateHistory.run('Shadow', () => {
+    session.shadow = { indices, color: colour };
+    session.shadowVisible = true;
+    session.artworkDirty = false;
+  });
+  renderUndoRedo();
+  renderTools();
   render();
-  showToast(`Added a ${indices.size} px shadow.`);
+  showToast(replaced
+    ? `Shadow regenerated — ${indices.size} px, replacing the previous one.`
+    : `Added a ${indices.size} px shadow.`);
+}
+
+// Independent of regeneration on purpose: this hides and shows the shadow
+// that was last generated, so the artist can compare with and without, and
+// it never recomputes anything. Toggling off and back on returns exactly
+// the same shadow, down to the texel.
+function toggleShadowVisible() {
+  if (!session) return;
+  if (!session.shadow) {
+    showToast('No shadow has been generated yet.');
+    return;
+  }
+  session.shadowVisible = !session.shadowVisible;
+  renderTools();
+  render();
+  showToast(session.shadowVisible ? 'Shadow shown.' : 'Shadow hidden — its data is kept.');
+}
+
+// ---- Fill ---------------------------------------------------------------
+
+function fillAt(texel) {
+  if (!inCanvas(texel)) return;
+  const target = samplePixel(session.pixels, session.width, texel.u, texel.v);
+  const colour = strokeColor();
+  if (target[0] === colour[0] && target[1] === colour[1]
+    && target[2] === colour[2] && target[3] === colour[3]) {
+    showToast('That area is already this colour.');
+    return;
+  }
+  const region = floodFillColor(session.pixels, session.width, session.height, texel.u, texel.v);
+  runAction('Fill', () => {
+    paintIndices(session.pixels, region, colour);
+    syncBitmap();
+  });
+  render();
+  showToast(target[3] === 0
+    ? `Filled ${region.size} px of empty canvas.`
+    : `Filled ${region.size} px.`);
 }
 
 function renderShadowControls() {
@@ -1153,20 +1450,24 @@ function transformCanvas(transform) {
   render();
 }
 
-function applyTransform(transform) {
+function applyTransform(label, transform) {
   if (!session) return;
-  if (session.selection) transformSelection(transform);
-  else transformCanvas(transform);
+  runAction(label, () => {
+    if (session.selection) transformSelection(transform);
+    else transformCanvas(transform);
+  });
 }
 
 function rotateQuarter(turns) {
-  applyTransform((pixels, width, height) => rotate90(pixels, width, height, turns));
+  applyTransform(turns === 1 ? 'Rotate right' : 'Rotate left',
+    (pixels, width, height) => rotate90(pixels, width, height, turns));
 }
 
 function flip(axis) {
-  applyTransform((pixels, width, height) => ({
-    pixels: flipPixels(pixels, width, height, axis), width, height,
-  }));
+  applyTransform(axis === 'horizontal' ? 'Flip left/right' : 'Flip up/down',
+    (pixels, width, height) => ({
+      pixels: flipPixels(pixels, width, height, axis), width, height,
+    }));
 }
 
 // A free-angle rotation EXPANDS when it is turning a selection (the piece
@@ -1178,11 +1479,13 @@ function rotateByAngle() {
   if (!session) return;
   const degrees = session.freeAngle;
   if (degrees === 0) { showToast('Set an angle first.'); return; }
-  if (session.selection) {
-    transformSelection((pixels, width, height) => rotateFree(pixels, width, height, degrees, true));
-  } else {
-    transformCanvas((pixels, width, height) => rotateFree(pixels, width, height, degrees, false));
-  }
+  runAction(`Rotate ${degrees}°`, () => {
+    if (session.selection) {
+      transformSelection((pixels, width, height) => rotateFree(pixels, width, height, degrees, true));
+    } else {
+      transformCanvas((pixels, width, height) => rotateFree(pixels, width, height, degrees, false));
+    }
+  });
   showToast(`Rotated by ${degrees}°, re-snapped to the pixel grid.`);
 }
 
@@ -1255,6 +1558,7 @@ function renderTools() {
   els.pcreateShapeFilledBtn.setAttribute('aria-pressed', String(session.shapeFilled));
   els.pcreateShapeOutlineBtn.setAttribute('aria-pressed', String(!session.shapeFilled));
 
+  els.pcreateFillHint.hidden = session.tool !== 'fill';
   els.pcreatePickHint.hidden = session.tool !== 'pick';
   els.pcreateBlendHint.hidden = session.tool !== 'blend';
   els.pcreateSelectHint.hidden = session.tool !== 'select' || Boolean(session.selection);
@@ -1263,6 +1567,12 @@ function renderTools() {
   if (session.selection) {
     els.pcreateSelectionStatus.textContent = `${session.selection.size} px selected`;
   }
+
+  els.pcreateShadowToggleBtn.disabled = !session.shadow;
+  els.pcreateShadowToggleBtn.setAttribute('aria-pressed', String(Boolean(session.shadow) && session.shadowVisible));
+  els.pcreateShadowToggleBtn.textContent = !session.shadow
+    ? 'Shadow: none yet'
+    : (session.shadowVisible ? 'Shadow: ON' : 'Shadow: OFF');
 
   els.pcreateTransformTarget.textContent = session.selection
     ? 'Applies to the selection'
@@ -1529,6 +1839,150 @@ async function removeColorFromPalette(name, hex) {
   } catch (error) {
     console.warn(error);
     showToast(`Could not update the palette: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auto Palette
+//
+// Not a palette the artist curates -- a readout of what the picture is
+// actually made of right now, rebuilt from the canvas rather than stored.
+// It is deliberately a different thing from the saved Custom Palettes
+// above: those are named, persist in IndexedDB, and outlive every canvas;
+// this one has no name, is never written to storage, and is only ever as
+// current as the last refresh. Tapping a swatch in either picks that
+// colour, which is the one thing they have in common.
+
+function refreshAutoPalette() {
+  if (!session) return;
+  // Above the live limit this is only rebuilt when explicitly asked for, so
+  // a huge canvas does not pay a full scan on every brush stroke.
+  if (session.width * session.height > AUTO_PALETTE_LIVE_LIMIT) return;
+  rebuildAutoPalette();
+}
+
+function rebuildAutoPalette() {
+  if (!session) return;
+  session.autoPalette = uniqueColorsByHue(compositePixels(), session.width, session.height);
+  renderAutoPalette();
+}
+
+function renderAutoPalette() {
+  if (!session) return;
+  els.pcreateAutoStrip.replaceChildren();
+  els.pcreateAutoCount.textContent = session.autoPalette.length === 0
+    ? 'Nothing on the canvas yet'
+    : `${session.autoPalette.length} colour${session.autoPalette.length === 1 ? '' : 's'} in this artwork`;
+
+  const currentHexValue = currentHex();
+  for (const colour of session.autoPalette) {
+    const hex = rgbToHex(colour.r, colour.g, colour.b);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pcreate-swatch-strip__item';
+    button.style.background = hex;
+    button.setAttribute('aria-label', `Pick ${hex} (${colour.count} px)`);
+    button.title = `${hex} — ${colour.count} px`;
+    button.setAttribute('aria-pressed', String(hex.toLowerCase() === currentHexValue));
+    button.addEventListener('click', () => {
+      session.hsv = rgbToHsv(colour.r, colour.g, colour.b);
+      renderColorControls();
+    });
+    els.pcreateAutoStrip.appendChild(button);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Saving the work in progress
+//
+// Distinct from Save as Layer, which is an export: that hands a finished
+// picture to the project and leaves PCreate's own canvas where it was.
+// This keeps the canvas ITSELF -- mid-edit, shadow layer and all -- so
+// closing the app does not throw away an unfinished drawing.
+
+function sessionRecord() {
+  return {
+    kind: session.kind,
+    sourceName: session.sourceName,
+    width: session.width,
+    height: session.height,
+    pixels: new Uint8ClampedArray(session.pixels),
+    shadow: session.shadow
+      ? { indices: [...session.shadow.indices], color: [...session.shadow.color] }
+      : null,
+    shadowVisible: session.shadowVisible,
+    artworkDirty: session.artworkDirty,
+    loadedPaletteName: session.loadedPaletteName,
+    savedCount: session.savedCount,
+  };
+}
+
+async function savePCreateWork(quiet = false) {
+  if (!session) return;
+  try {
+    await storage.savePCreateSession(sessionRecord());
+    session.unsavedSince = false;
+    if (!quiet) showToast('PCreate work saved — it will be offered when you come back.');
+  } catch (error) {
+    console.warn(error);
+    if (!quiet) showToast(`Could not save: ${error.message}`);
+  }
+}
+
+async function resumeSavedWork() {
+  closeEntryModal();
+  let record;
+  try {
+    record = await storage.loadPCreateSession();
+  } catch (error) {
+    console.warn(error);
+    showToast('Could not read the saved work.');
+    return;
+  }
+  if (!record || !record.data) { showToast('There is no saved PCreate work.'); return; }
+
+  const data = record.data;
+  const pixels = new Uint8ClampedArray(data.pixels);
+  const canvas = document.createElement('canvas');
+  canvas.width = data.width;
+  canvas.height = data.height;
+  startSession({
+    kind: data.kind || 'blank',
+    name: data.sourceName || `${data.width}×${data.height}`,
+    width: data.width,
+    height: data.height,
+    pixels,
+    bitmap: canvas,
+  });
+  session.shadow = data.shadow
+    ? { indices: new Set(data.shadow.indices), color: [...data.shadow.color] }
+    : null;
+  session.shadowVisible = data.shadowVisible !== false;
+  session.artworkDirty = data.artworkDirty !== false;
+  session.loadedPaletteName = data.loadedPaletteName || null;
+  session.savedCount = data.savedCount || 0;
+  syncBitmap();
+  await refreshPaletteCache();
+  rebuildAutoPalette();
+  renderSwatchStrip();
+  renderTools();
+  render();
+  showToast('Resumed your saved PCreate work.');
+}
+
+// Whether there is anything to offer on the way in. Checked when the entry
+// modal opens so the Resume button only appears when it would do something.
+async function refreshResumeButton() {
+  let record = null;
+  try {
+    record = await storage.loadPCreateSession();
+  } catch { /* no-op: an unreadable slot is the same as an empty one here */ }
+  const available = Boolean(record && record.data);
+  els.pcreateResumeBtn.hidden = !available;
+  if (available) {
+    const when = new Date(record.savedAt);
+    els.pcreateResumeBtn.textContent =
+      `Resume saved work (${record.data.width}×${record.data.height}, ${when.toLocaleDateString()})`;
   }
 }
 
@@ -1803,7 +2257,7 @@ function saveAsLayer() {
   // the Part that lands in the project is always an independent snapshot
   // at the moment of saving, exactly like every other layer-creating
   // action in the app (duplicate(), CLayer's own extraction).
-  const pixels = new Uint8ClampedArray(session.pixels);
+  const pixels = compositePixels();
   const width = session.width;
   const height = session.height;
 
@@ -1866,8 +2320,32 @@ export function pcreateDebug() {
     shadowOffset: session.shadowOffset,
     shadowColorIsAuto: session.shadowColor === null,
     freeAngle: session.freeAngle,
+    shadowSize: session.shadow ? session.shadow.indices.size : null,
+    shadowVisible: session.shadowVisible,
+    artworkDirty: session.artworkDirty,
+    canUndo: pcreateHistory.canUndo,
+    canRedo: pcreateHistory.canRedo,
+    undoLabel: pcreateHistory.undoLabel,
+    redoLabel: pcreateHistory.redoLabel,
+    autoPalette: session.autoPalette.map((c) => rgbToHex(c.r, c.g, c.b)),
+    autoPaletteHues: session.autoPalette.map((c) => Math.round(c.h)),
   };
 }
+
+// The composited canvas -- artwork plus a visible shadow -- at one texel,
+// which is what the eye actually sees, as opposed to pcreatePixelAt()'s
+// artwork-only reading.
+export function pcreateCompositeAt(u, v) {
+  if (!session) return null;
+  const pixels = compositePixels();
+  const o = (v * session.width + u) * 4;
+  return [pixels[o], pixels[o + 1], pixels[o + 2], pixels[o + 3]];
+}
+
+export function pcreateUndo() { undoPCreate(); }
+export function pcreateRedo() { redoPCreate(); }
+export async function pcreateSaveWork() { return savePCreateWork(true); }
+export async function pcreateResume() { return resumeSavedWork(); }
 
 // How many texels on the canvas are non-transparent -- the cheapest honest
 // answer to "did that tool actually draw anything", without a test having
@@ -1986,6 +2464,22 @@ export function initPCreate() {
     renderShadowControls();
   });
   els.pcreateShadowApplyBtn.addEventListener('click', applyShadow);
+  els.pcreateShadowToggleBtn.addEventListener('click', toggleShadowVisible);
+  els.pcreateAutoRefreshBtn.addEventListener('click', () => {
+    if (!session) return;
+    rebuildAutoPalette();
+    showToast(`Auto Palette rebuilt — ${session.autoPalette.length} colours.`);
+  });
+  els.pcreateUndoBtn.addEventListener('click', undoPCreate);
+  els.pcreateRedoBtn.addEventListener('click', redoPCreate);
+  els.pcreateSaveWorkBtn.addEventListener('click', () => savePCreateWork());
+  els.pcreateResumeBtn.addEventListener('click', resumeSavedWork);
+
+  // The moment before a phone kills a backgrounded app -- the same hook
+  // autosave.js uses on the project, for the same reason.
+  document.addEventListener('visibilitychange', () => {
+    if (session && document.visibilityState === 'hidden') savePCreateWork(true);
+  });
 
   els.pcreateRotateCcwBtn.addEventListener('click', () => rotateQuarter(3));
   els.pcreateRotateCwBtn.addEventListener('click', () => rotateQuarter(1));

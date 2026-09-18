@@ -17,6 +17,7 @@ import {
   regionBounds, extractRegion, blitRegion, offsetIndices,
   blendAt, midpointColor, samplePixel, sameColor,
   silhouetteIndices, shadowIndices, suggestShadowColor,
+  floodFillColor, uniqueColorsByHue,
 } from '../www/js/pixelops.js';
 
 let checks = 0;
@@ -635,6 +636,140 @@ check('the suggested shadow colour is less saturated than the art it came from',
 check('an empty canvas suggests no shadow colour rather than a default grey', () => {
   const { pixels, width, height } = blank(4, 4);
   assert.equal(suggestShadowColor(pixels, width, height), null);
+});
+
+section('Fill: contiguous same-colour flood, transparent included');
+
+check('a fill spreads through the connected region of the tapped colour', () => {
+  const { pixels, width, height } = fixture([
+    'rrrggg',
+    'rrrggg',
+    'rrrggg',
+  ]);
+  const filled = floodFillColor(pixels, width, height, 1, 1);
+  assert.equal(filled.size, 9);
+  for (const index of filled) assert.ok(index % width < 3, 'the fill crossed into the green half');
+});
+
+check('a fill stops at a different colour rather than flowing past it', () => {
+  const { pixels, width, height } = fixture([
+    'rrkrr',
+    'rrkrr',
+  ]);
+  const filled = floodFillColor(pixels, width, height, 0, 0);
+  assert.equal(filled.size, 4, 'the black wall should have held');
+});
+
+check('a fill is 4-connected, so a diagonal-only link does not leak', () => {
+  const { pixels, width, height } = fixture([
+    'rrk',
+    'rkr',
+    'krr',
+  ]);
+  // The lower-right red triangle touches the upper-left one only at a
+  // corner, so a 4-connected fill must not reach it.
+  const filled = floodFillColor(pixels, width, height, 0, 0);
+  assert.equal(filled.size, 3);
+});
+
+check('EMPTY BACKGROUND IS FILLABLE -- transparent is a colour like any other', () => {
+  const { pixels, width, height } = fixture([
+    '..r..',
+    '..r..',
+  ]);
+  const filled = floodFillColor(pixels, width, height, 0, 0);
+  assert.equal(filled.size, 4, 'the connected empty region left of the line should fill');
+  for (const index of filled) assert.ok(index % width < 2);
+});
+
+check('a region running to the canvas edge fills normally -- reaching the border is not an error here', () => {
+  // The one place this deliberately differs from CLayer's fill, where
+  // escaping to the border means the traced loop had a gap in it.
+  const { pixels, width, height } = fixture(['....', '....']);
+  assert.equal(floodFillColor(pixels, width, height, 0, 0).size, 8);
+});
+
+check('a fill of a single isolated texel is just that texel', () => {
+  const { pixels, width, height } = fixture(['rgr']);
+  assert.equal(floodFillColor(pixels, width, height, 1, 0).size, 1);
+});
+
+check('a tap outside the canvas fills nothing rather than throwing', () => {
+  const { pixels, width, height } = fixture(['rr', 'rr']);
+  assert.equal(floodFillColor(pixels, width, height, 5, 5).size, 0);
+});
+
+check('the fill reports the region and writes nothing itself', () => {
+  const { pixels, width, height } = fixture(['rr', 'rr']);
+  const before = [...pixels];
+  floodFillColor(pixels, width, height, 0, 0);
+  assert.deepEqual([...pixels], before);
+});
+
+section('Auto Palette: the colours actually present, in colour-wheel order');
+
+check('every distinct colour is found exactly once, with its texel count', () => {
+  const { pixels, width, height } = fixture([
+    'rrgg',
+    'rrbb',
+  ]);
+  const colours = uniqueColorsByHue(pixels, width, height);
+  assert.equal(colours.length, 3);
+  const byHex = new Map(colours.map((c) => [`${c.r},${c.g},${c.b}`, c.count]));
+  assert.equal(byHex.get('220,40,40'), 4);
+  assert.equal(byHex.get('40,200,90'), 2);
+  assert.equal(byHex.get('40,90,220'), 2);
+});
+
+check('fully transparent texels are not colours and are left out', () => {
+  const { pixels, width, height } = fixture(['r.', '..']);
+  assert.equal(uniqueColorsByHue(pixels, width, height).length, 1);
+});
+
+check('colours come back in hue order: red, then green, then blue', () => {
+  // Deliberately fed in the wrong order.
+  const { pixels, width, height } = fixture(['bgr']);
+  const hues = uniqueColorsByHue(pixels, width, height).map((c) => Math.round(c.h));
+  assert.deepEqual(hues, [...hues].sort((a, b) => a - b), `got hues ${hues.join(', ')}`);
+  assert.ok(hues[0] < 60 && hues[1] > 90 && hues[1] < 180 && hues[2] > 200);
+});
+
+check('a full spectrum comes back in ascending hue all the way round the wheel', () => {
+  const width = 6;
+  const pixels = new Uint8ClampedArray(width * 4);
+  // Six hues, written into the buffer in a scrambled order.
+  const spectrum = [
+    [255, 0, 255], [255, 255, 0], [0, 0, 255], [255, 0, 0], [0, 255, 255], [0, 255, 0],
+  ];
+  spectrum.forEach((rgb, i) => pixels.set([...rgb, 255], i * 4));
+  const hues = uniqueColorsByHue(pixels, width, 1).map((c) => Math.round(c.h));
+  assert.deepEqual(hues, [0, 60, 120, 180, 240, 300]);
+});
+
+check('greys are grouped after the coloured entries, not scattered among them', () => {
+  const { pixels, width, height } = fixture(['wkr']);
+  const colours = uniqueColorsByHue(pixels, width, height);
+  // Red is a real hue; white and black are not.
+  assert.deepEqual([colours[0].r, colours[0].g, colours[0].b], [220, 40, 40]);
+  assert.ok(colours[1].s < 0.08 && colours[2].s < 0.08, 'the two greys should follow');
+});
+
+check('greys among themselves run light to dark', () => {
+  const { pixels, width, height } = fixture(['kw']);
+  const colours = uniqueColorsByHue(pixels, width, height);
+  assert.ok(colours[0].v > colours[1].v, 'white should come before black');
+});
+
+check('an empty canvas yields an empty palette rather than a default', () => {
+  const { pixels, width, height } = blank(4, 4);
+  assert.deepEqual(uniqueColorsByHue(pixels, width, height), []);
+});
+
+check('two texels of the same colour do not produce two entries', () => {
+  const { pixels, width, height } = fixture(['rr', 'rr']);
+  const colours = uniqueColorsByHue(pixels, width, height);
+  assert.equal(colours.length, 1);
+  assert.equal(colours[0].count, 4);
 });
 
 section('outlineOf, used by all three shapes, on its own');

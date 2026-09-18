@@ -25,13 +25,34 @@
 // which captures the state before, runs the mutation, captures after, and
 // pushes one entry. Nested calls collapse into the outer one, so an action
 // built from smaller helpers still lands on the stack as a single step.
+//
+// ONE CLASS, MORE THAN ONE TIMELINE
+//
+// The class takes its serialize/apply pair rather than importing one, so a
+// workspace that is deliberately NOT part of the project can have undo of
+// its own from this exact implementation instead of a second, subtly
+// different one written from scratch. PCreate is that workspace: its canvas
+// does not exist in the project until Save as Layer, so putting it on the
+// project's timeline would mean undoing a brush stroke also reverted a bone
+// edit, and every stroke snapshotting every Part and mesh in the scene.
+// Same code, same semantics, two independent timelines.
+//
+// `limit` may be a function for the same reason. The "snapshots are cheap"
+// argument above rests on pixel buffers being immutable and shared, which
+// is true of the project and NOT true of a paint canvas being mutated in
+// place -- there, every snapshot has to copy. A caller in that position
+// needs to set its depth from the size of what it is copying rather than
+// from a constant.
 
 import { serializeProject, applyProject } from './project.js';
 
 const HISTORY_LIMIT = 60;
 
 class History {
-  constructor() {
+  constructor({ serialize = serializeProject, apply = applyProject, limit = HISTORY_LIMIT } = {}) {
+    this._serialize = serialize;
+    this._applyState = apply;
+    this._limit = limit;
     this._undoStack = [];
     this._redoStack = [];
     this._listeners = new Set();
@@ -98,7 +119,7 @@ class History {
     }
 
     this._depth = 1;
-    this._pendingBefore = serializeProject();
+    this._pendingBefore = this._serialize();
     this._pendingLabel = label;
     let result;
     try {
@@ -119,12 +140,13 @@ class History {
     this._pendingBefore = null;
     this._pendingLabel = null;
     if (!before) return;
-    this._push(label, before, serializeProject());
+    this._push(label, before, this._serialize());
   }
 
   _push(label, before, after) {
     this._undoStack.push({ label, before, after });
-    if (this._undoStack.length > HISTORY_LIMIT) this._undoStack.shift();
+    const cap = Math.max(1, typeof this._limit === 'function' ? this._limit() : this._limit);
+    while (this._undoStack.length > cap) this._undoStack.shift();
     // Doing something new abandons the redo branch, as every editor does.
     this._redoStack = [];
     this._dirty = true;
@@ -137,12 +159,12 @@ class History {
   // ends. `changed` lets the caller drop a gesture that moved nothing.
   capture(label) {
     if (this._applying || this._depth > 0) return null;
-    return { label, before: serializeProject() };
+    return { label, before: this._serialize() };
   }
 
   commitCapture(token, changed = true) {
     if (!token || !changed || this._applying) return;
-    this._push(token.label, token.before, serializeProject());
+    this._push(token.label, token.before, this._serialize());
   }
 
   undo() {
@@ -168,7 +190,7 @@ class History {
   _apply(state) {
     this._applying = true;
     try {
-      applyProject(state);
+      this._applyState(state);
     } finally {
       this._applying = false;
     }
@@ -184,3 +206,9 @@ class History {
 }
 
 export const history = new History();
+
+// A second timeline, for a workspace that is not the project. See the
+// class comment above for why this is an instance rather than a rewrite.
+export function createHistory(options) {
+  return new History(options);
+}

@@ -4560,14 +4560,171 @@ and a drag across eleven pixels still paints exactly eleven. At 412×915 the
 canvas comes out 390×380 css px at 579% zoom; at the cramped 360×640 it is
 still 360×288 at 405%.
 
-### What this deliberately does not have
+### Shadow: a layer, not paint — which is what makes the rest possible
 
-**There is no undo inside PCreate.** The app's `history.js` covers the
-project, and a PCreate session is deliberately not part of the project
-until Save as Layer — so Rotate, Flip, Delete and the shadow generator
-currently commit with no way back short of re-drawing. That is the clearest
-remaining gap in the tool and the obvious next piece of work; it is called
-out here rather than quietly left for someone to discover.
+The generator used to paint straight into the artwork. It now keeps its
+output as **its own layer**, and that single change is what the regeneration
+and visibility rules fall out of:
+
+- **Pressing Add Shadow again REPLACES rather than stacks.** The new index
+  set simply takes the old one's place; there is no clean-up step. More
+  importantly the generator always reads `session.pixels`, the artwork
+  alone, so the silhouette it offsets can never include a previous run's
+  output. Had the shadow stayed painted into the artwork, a second press
+  would have cast a shadow from artwork-plus-shadow — darker and further
+  out every time. That compounding is now impossible in principle rather
+  than guarded against.
+- **Pressing it with nothing changed does nothing, and says so.** A
+  dirty flag is set by every tool that touches the artwork and cleared when
+  a shadow is generated. Re-running on an unchanged picture could only
+  produce the identical result, so the button reports "no changes since the
+  last shadow" instead of burning an undo step on a no-op.
+- **Shadow: ON/OFF hides and shows the last generated shadow** without
+  recomputing anything and without touching the dirty flag. Toggling off
+  and back on returns the identical shadow, texel for texel. It is
+  deliberately independent of regeneration: comparing with and against a
+  shadow is a different question from whether the shadow is current.
+
+The flag tracks edits **anywhere in the scene**, not just near the shadow,
+because a shape added in the far corner changes the silhouette too. It is
+set in one place — the wrapper every mutating tool goes through — so a tool
+cannot forget to mark it.
+
+Exporting takes the **composite** (artwork with a visible shadow merged
+under it); a shadow toggled off is genuinely absent from what leaves
+PCreate, since it is not part of the picture the artist is looking at.
+
+The manual **Shade** brush is untouched by all of this, as it should be:
+hand-painted shading is ordinary pixel art, not a regenerable computed
+layer.
+
+### Fill
+
+Contiguous 4-connected flood of every pixel matching the tapped one — the
+same walk CLayer's fill uses, with two differences that come from being a
+paint tool rather than an extraction tool. CLayer is blocked by a drawn
+boundary and treats reaching the image edge as proof the traced loop had a
+gap; here what stops the flood is meeting a different colour, and a region
+that genuinely runs to the canvas edge is an ordinary thing to want filled.
+
+**Transparent is a colour.** An empty texel is `(0,0,0,0)` and matches other
+empty texels, so tapping the background floods the connected empty region
+exactly like any other same-coloured area — which is what makes Fill usable
+for laying in a background at all.
+
+### Undo/redo: the same class, a second timeline
+
+The task asked for the main canvas's undo system rather than a new
+mechanism, and the interesting part is what "reusing it" has to mean here.
+`history.js` is a snapshot stack that serializes the **whole project**, and
+a PCreate canvas deliberately is not part of the project until Save as
+Layer. Literally putting PCreate on that timeline would mean undoing a
+brush stroke also reverted a bone edit, and every stroke snapshotting every
+Part and mesh in the scene.
+
+So `History` was generalized to take its `serialize`/`apply` pair as
+options instead of importing one. The project's `history` singleton is
+behaviourally identical for all of its existing callers; PCreate gets a
+second **instance of the same class**. One implementation, two independent
+timelines — which is reuse in the sense that matters, and not a second
+subtly-different undo written from scratch.
+
+One thing did have to change rather than carry over. `history.js`'s own
+comment explains that snapshots are cheap because pixel buffers are
+immutable after import, so every entry shares them. A paint canvas is
+mutated in place, so each entry must **copy** — and each entry holds a
+`before` and an `after`, so it is two copies. At the 3072×3072 maximum that
+is 72 MB per step, and a flat 60-entry limit would be over four gigabytes.
+`limit` therefore accepts a function, and PCreate derives its depth from the
+canvas size: the full 60 steps for the small canvases pixel art actually
+uses, and a usable handful at the extreme.
+
+Brush and lasso strokes use the same `capture`/`commitCapture` pair the main
+canvas uses for dragging a layer, so a drag across dozens of pointermove
+frames is one undo step rather than dozens.
+
+### Save work, which is not Save as Layer
+
+Two different things, deliberately named apart. **Save as Layer** is an
+export: it hands a finished picture to the project and leaves PCreate's
+canvas where it was. **Save work** keeps the canvas *itself* — mid-edit,
+shadow layer and all — in its own IndexedDB store, so closing the app does
+not throw away an unfinished drawing. Reopening PCreate offers a **Resume
+saved work** button when there is something to resume, showing its size and
+date. A `visibilitychange` save runs on backgrounding too, the same hook
+`autosave.js` uses on the project and for the same reason: that is the
+moment before a phone kills an app.
+
+It is one slot rather than a named library, because a PCreate canvas is not
+a document you keep a collection of — it is scratch work on its way to
+becoming a layer, and the thing worth protecting is "the one I was in the
+middle of".
+
+### Auto Palette
+
+A readout of what the picture is actually made of, scanned off the canvas
+rather than curated — every distinct opaque colour, with the texel count
+for each.
+
+**Ordered by hue**, which is the reading of "gradient order" this
+implements: red, orange, yellow, green, blue, purple and back toward red.
+The alternatives are worse for a set of arbitrary colours — sorting by
+brightness interleaves unrelated hues, and sorting by raw RGB puts pure red
+next to pure black. Greys have no meaningful hue (theirs is whatever
+rounding noise says), so they are grouped at the end, light to dark, rather
+than scattered through the coloured entries. Same-hue colours are ordered
+saturated-first, so a colour's own shadow tone reads as sitting under it.
+
+It is **a different thing from the saved Custom Palettes**, and the two are
+never merged: those are named, live in their own IndexedDB store, outlive
+every canvas and only change when the artist changes them; this one has no
+name, is never written to storage, and is only as current as the last
+refresh. Tapping a swatch in either picks that colour, which is all they
+have in common.
+
+It refreshes after every committed action on canvases up to 256×256, and on
+an explicit **Refresh** press above that. Scanning 65,536 texels is a
+fraction of a millisecond; scanning the 3072×3072 maximum is nine million
+and would be felt on every brush stroke.
+
+### Verified end to end
+
+`npm test` is 143 headless checks (`pixelops.mjs` grew to 78, covering the
+flood fill's colour matching, 4-connectivity, transparent-is-fillable, and
+fill-to-the-edge, plus hue ordering across a full spectrum, grey grouping
+and de-duplication). A further **41 checks drive the real window**:
+
+- **Fill on empty background** flooded all 1600 px of a blank 40×40 canvas.
+  **Fill on a coloured region** replaced exactly the 100 px block and
+  stopped at its edge, leaving the surrounding 1500 px untouched.
+- **The first Add Shadow** produced an 81 px shadow and cleared the dirty
+  flag, with the artwork buffer unchanged at 200 px — proof it is a layer,
+  not paint.
+- **Pressing it again with nothing changed** left the shadow at exactly
+  81 px and reported "No changes since the last shadow".
+- **The ON/OFF toggle** switched it off with its 81 px of data intact,
+  switched back on to the identical 81 px, and never touched the dirty flag.
+- **An edit far from the shadow** re-armed the flag; the next press
+  regenerated to 102 px and said "replacing the previous one". The decisive
+  check: a census of the whole composited canvas found **exactly one shadow
+  tone**, which is what rules out a shadow-of-a-shadow.
+- **Undo/redo** stepped the shadow regeneration back (102 → 81), then the
+  brush stroke (221 → 200 px), and redo restored both exactly. A new stroke
+  correctly abandoned the redo branch.
+- **Save work** then a fresh page in the same browser profile: PCreate
+  offered Resume, and the restored canvas came back 40×40 with all 239
+  painted pixels, its 102 px shadow layer intact, and the Auto Palette
+  rebuilt from the restored artwork.
+- **Auto Palette** returned its colours in ascending hue order, rendered one
+  swatch each, and excluded a colour that had been saved to a Custom
+  Palette but never painted — confirming the two lists are genuinely
+  different data.
+
+The phone-size pass grew to 45 checks, now also confirming Undo, Save work,
+the Auto Palette refresh and the Shadow ON/OFF toggle are reachable and
+tappable at 412×915, 390×844 and 360×640.
+
+### What this deliberately does not have
 
 **Drawing is not clipped to an active selection.** A selection governs
 Move/Copy/Delete/Rotate/Flip and restricts the shadow generator, but a

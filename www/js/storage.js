@@ -10,11 +10,11 @@
 // recovery slot the app writes to on its own, and named colour palettes.
 
 const DB_NAME = 'omni2d';
-// Bumped for the palettes store. onupgradeneeded below already guards
-// every store's creation with "if not already there", so this runs
-// harmlessly for a database that already has projects/recovery in it --
-// only the new store actually gets created.
-const DB_VERSION = 2;
+// Bumped for the palettes store, then again for PCreate's work-in-progress
+// slot. onupgradeneeded below already guards every store's creation with
+// "if not already there", so this runs harmlessly for a database that
+// already has the earlier stores in it -- only the new one gets created.
+const DB_VERSION = 3;
 const PROJECTS = 'projects';
 const RECOVERY = 'recovery';
 const RECOVERY_KEY = 'autosave';
@@ -31,6 +31,16 @@ const RESTORE_KEY = 'restore-point';
 // separate from the PROJECTS store a project's own save/load walks.
 const PALETTES = 'palettes';
 
+// PCreate's work in progress: one canvas the artist is part-way through,
+// saved deliberately so closing the app does not throw it away. A single
+// slot rather than named entries, because a PCreate canvas is not a
+// document you keep a library of -- it is scratch work on its way to
+// becoming a Scene Parts layer, and the thing worth protecting is "the one
+// I was in the middle of". Named, permanent results go into the project
+// through Save as Layer instead.
+const PCREATE = 'pcreate';
+const PCREATE_KEY = 'session';
+
 let dbPromise = null;
 
 function openDb() {
@@ -46,6 +56,7 @@ function openDb() {
       if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS, { keyPath: 'name' });
       if (!db.objectStoreNames.contains(RECOVERY)) db.createObjectStore(RECOVERY, { keyPath: 'key' });
       if (!db.objectStoreNames.contains(PALETTES)) db.createObjectStore(PALETTES, { keyPath: 'name' });
+      if (!db.objectStoreNames.contains(PCREATE)) db.createObjectStore(PCREATE, { keyPath: 'key' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('Could not open the project database'));
@@ -158,6 +169,32 @@ export function listPalettes() {
   return runTransaction(PALETTES, 'readonly', (store) => wrap(store.getAll())).then((records) =>
     (records || []).sort((a, b) => a.name.localeCompare(b.name))
   );
+}
+
+// ---- PCreate's work-in-progress slot -------------------------------------
+//
+// The pixel buffer goes in as a typed array and comes back as one: this is
+// exactly the case the file header's "IndexedDB rather than localStorage"
+// argument was about, since a 512x512 canvas is a megabyte that would need
+// a base64 round-trip to survive localStorage at all.
+
+export function savePCreateSession(data) {
+  const record = { key: PCREATE_KEY, savedAt: Date.now(), data };
+  return runTransaction(PCREATE, 'readwrite', (store) => {
+    store.put(record);
+    return record;
+  });
+}
+
+export function loadPCreateSession() {
+  return runTransaction(PCREATE, 'readonly', (store) => wrap(store.get(PCREATE_KEY)));
+}
+
+export function clearPCreateSession() {
+  return runTransaction(PCREATE, 'readwrite', (store) => {
+    store.delete(PCREATE_KEY);
+    return true;
+  });
 }
 
 export function saveRestorePoint(data, label = null) {
