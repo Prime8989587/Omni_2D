@@ -734,6 +734,68 @@
       <canvas id="pcreateCanvas" class="px-pin__canvas"></canvas>
       <footer class="px-pin__controls">
         <div class="px-pin__row-label">
+          <span>Tool</span>
+          <button class="info-btn" type="button" data-info="pcreate-tools" aria-haspopup="true" aria-expanded="false" aria-label="What does each tool do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div id="pcreateToolStrip" class="pcreate-tool-strip" role="group" aria-label="Drawing tool"></div>
+
+        <div id="pcreateBrushRow" class="segmented" role="group" aria-label="Brush size" hidden>
+          <button id="pcreateBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pcreateBrushMenu">1 × 1 ⌄</button>
+        </div>
+        <div id="pcreateBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+
+        <div id="pcreateShapeRow" class="segmented" role="group" aria-label="Shape style" hidden>
+          <button id="pcreateShapeFilledBtn" class="segmented__btn" type="button" aria-pressed="true">Filled</button>
+          <button id="pcreateShapeOutlineBtn" class="segmented__btn" type="button" aria-pressed="false">Outline</button>
+        </div>
+
+        <p id="pcreatePickHint" class="joint-hint" hidden>Tap any pixel on the canvas to make its exact color the active drawing color.</p>
+        <p id="pcreateBlendHint" class="joint-hint" hidden>Tap near the seam between two differently-colored neighbouring pixels. One new midpoint pixel is written there. If the two are the same color — or too close for a distinct midpoint to exist — nothing is changed and you'll be told why.</p>
+        <p id="pcreateSelectHint" class="joint-hint" hidden>Draw one unbroken loop around the area you want. When you lift your finger, everything the loop encloses becomes the selection.</p>
+
+        <div id="pcreateSelectionRow" class="pcreate-action-row" hidden>
+          <span id="pcreateSelectionStatus" class="pcreate-palette-name">No selection</span>
+          <button id="pcreateSelCopyBtn" class="btn btn--sm" type="button">Copy</button>
+          <button id="pcreateSelDeleteBtn" class="btn btn--sm btn--danger" type="button">Delete</button>
+          <button id="pcreateSelDeselectBtn" class="btn btn--sm" type="button">Deselect</button>
+        </div>
+
+        <div class="px-pin__row-label">
+          <span>Shadow</span>
+          <button class="info-btn" type="button" data-info="pcreate-shadow" aria-haspopup="true" aria-expanded="false" aria-label="How does the shadow generator work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div id="pcreateShadowDirs" class="pcreate-dir-grid" role="group" aria-label="Light direction"></div>
+        <label class="slider-field">
+          <span>Offset <b id="pcreateShadowOffsetLabel">2 px</b></span>
+          <input id="pcreateShadowOffset" class="slider" type="range" min="1" max="16" step="1" value="2" />
+        </label>
+        <div class="pcreate-action-row">
+          <span id="pcreateShadowSwatch" class="pcreate-swatch pcreate-swatch--inline"></span>
+          <button id="pcreateShadowUseCurrentBtn" class="btn btn--sm" type="button">Use current color</button>
+          <button id="pcreateShadowAutoBtn" class="btn btn--sm" type="button">Auto</button>
+          <button id="pcreateShadowApplyBtn" class="btn btn--flourish" type="button">Add Shadow</button>
+        </div>
+
+        <div class="px-pin__row-label">
+          <span>Transform</span>
+          <button class="info-btn" type="button" data-info="pcreate-transform" aria-haspopup="true" aria-expanded="false" aria-label="What do Rotate and Flip apply to?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div id="pcreateTransformTarget" class="pcreate-transform-target">Applies to the whole canvas</div>
+        <div class="pcreate-action-row">
+          <button id="pcreateRotateCcwBtn" class="btn btn--sm" type="button">⟲ 90°</button>
+          <button id="pcreateRotateCwBtn" class="btn btn--sm" type="button">⟳ 90°</button>
+          <button id="pcreateFlipHBtn" class="btn btn--sm" type="button">↔ Flip Left/Right</button>
+          <button id="pcreateFlipVBtn" class="btn btn--sm" type="button">↕ Flip Up/Down</button>
+        </div>
+        <label class="slider-field">
+          <span>Free angle <b id="pcreateAngleLabel">0°</b></span>
+          <input id="pcreateAngleSlider" class="slider" type="range" min="-180" max="180" step="1" value="0" />
+        </label>
+        <div class="pcreate-action-row">
+          <button id="pcreateRotateFreeBtn" class="btn btn--sm" type="button">Rotate by angle</button>
+        </div>
+
+        <div class="px-pin__row-label">
           <span>Color</span>
           <button class="info-btn" type="button" data-info="pcreate-color" aria-haspopup="true" aria-expanded="false" aria-label="How does the color picker work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
         </div>
@@ -770,7 +832,7 @@
         <div class="modal__actions">
           <button id="pcreateSaveLayerBtn" class="btn btn--flourish" type="button">Save as Layer</button>
         </div>
-        <p class="px-pin__hint">Drag one finger or pinch with two to pan and zoom — nothing here can be drawn on yet.</p>
+        <p class="px-pin__hint">One finger uses the current tool; two fingers pan and zoom.</p>
       </footer>
     </div>
 

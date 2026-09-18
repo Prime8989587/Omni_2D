@@ -4244,6 +4244,298 @@ the explicit verification list:
 All 27 checks passed. `npm test` (65 checks across `dent.mjs`, `clayer.mjs`
 and the new `color.mjs`) stayed green throughout.
 
+## PCreate's drawing tools: brush, shapes, shadow, select, transforms, blend
+
+The foundation chapter above built the window, the ways in, the colour and
+palette system and the save path, and deliberately shipped with no way to
+draw a single pixel. This is the toolkit that fills that gap: a pixel
+brush and eraser, a manual shading brush, three shapes in filled and
+outline form, an automatic drop-shadow generator, a freehand Select with
+move/copy/delete, Rotate and Flip, an eyedropper, and a discrete colour
+blend.
+
+### The arithmetic is not in the tool file
+
+Every operation that actually touches texels lives in `www/js/pixelops.js`
+as a pure, DOM-free function; `pcreate.js` only decides which operation a
+gesture means. The split is not tidiness for its own sake — a drawing tool
+is exactly the kind of code that looks right on screen while being subtly
+wrong. An outline one texel thick on three sides and two on the fourth, a
+quarter turn that drops the last column, a "blend" that invents a colour
+when there was nothing to blend: none of that is visible by eye on pixel
+art at 8× zoom, and all of it is trivially checkable against a hand-built
+array. `tests/pixelops.mjs` (62 checks) runs the shipped functions against
+ASCII fixtures small enough to work out by hand.
+
+Two real defects were caught that way before any of this reached a screen,
+both described below.
+
+### One finger uses the tool, two fingers move the view
+
+The foundation window had no tools, so one finger panned. It draws now, and
+panning moved to two fingers — the input model Px Pin, the Pierce painter
+and CLayer already share, so there is one way to work a canvas in this app
+rather than four slightly different ones. A second finger arriving
+mid-stroke means the user meant to pinch all along, so that stroke is
+rolled back rather than left as a stray mark; every stroke records the
+bytes it overwrote precisely so it can be.
+
+### The brush, and what "hard-edged" has to mean
+
+1×1 to 10×10, the same square stamp and the same size menu as CLayer's
+boundary brush and Px Pin's, biased down-and-right for even sizes because
+those two already are. A fast drag interpolates every texel between pointer
+events, so a quick stroke is unbroken rather than dotted.
+
+The property worth stating precisely is that nothing is ever softened. A
+stroke writes the chosen colour and only the chosen colour, and the
+verification checks this the direct way: after painting, a **census of every
+distinct colour on the canvas** must contain exactly one entry. An
+anti-aliased brush would show up immediately as a spray of near-miss shades
+around the stroke. Three brush sizes in three colours leave exactly three
+colours.
+
+The eraser is the same stamp clearing to a genuinely empty `(0,0,0,0)` —
+not white, not dimmed.
+
+### Three shapes, one definition
+
+Circle, Triangle and Square are all defined the same way: a predicate that
+answers "is this texel inside the shape", evaluated over the drag's
+bounding box. That single decision buys three properties at once:
+
+- every shape is hard-edged by construction, because a texel is inside or
+  it is not and there is no third answer;
+- **Outline is the filled set minus its own interior** — a texel is on the
+  outline when at least one of its four neighbours is not inside — so an
+  outline is exactly one texel thick on every side including a triangle's
+  diagonals, and is always a strict subset of the same drag filled; and
+- a shape dragged against the canvas edge keeps that side of its outline,
+  because anything past the edge counts as outside.
+
+**The triangle had a real defect, caught by the tests.** Sampling each row's
+top edge to decide its half-width gives the apex row a half-width of zero
+*and* the row below it a half-width under one texel — so both come out a
+single texel wide and the triangle grows a two-texel needle on top of
+itself. Numbering rows from one rather than zero gives the apex its single
+texel and the next row its first real widening. The test that pins this
+down does not assert "the apex is exactly one texel" (a short, wide
+triangle has a genuinely blunt top and should) but the actual invariant:
+the row below the apex is strictly wider than the apex.
+
+### Shadow: automatic, and by hand, as two separate things
+
+**The generator** takes a light direction from a literal 3×3 compass and an
+offset distance, shifts the artwork's silhouette by that vector, and then —
+the part that makes it read as a shadow rather than a smear — subtracts the
+artwork itself. A drop shadow that painted over its own caster would not be
+behind anything. With a selection active, only that selection casts.
+
+The colour defaults to **Auto**: the average of the opaque texels, pulled
+40% toward its own grey and darkened to 45%. A shadow computed from the
+picture's own colours belongs to that picture, where a generic grey does
+not. "Use current color" overrides it with whatever the picker holds; Auto
+goes back. An empty canvas suggests no colour at all rather than defaulting
+to something arbitrary.
+
+**The Shade brush** is a separate tool, not a modifier — because it is a
+separate intention. "Put this colour here" and "darken this area by hand"
+are different jobs, and Shade opens already set to a shading tone so the
+second one does not begin by painting the highlight colour into the
+shadows. It seeds that tone **once per session**, not on every visit: re-
+seeding each time would discard a tone the artist had deliberately adjusted
+the moment they stepped away to the brush and came back.
+
+### Select: CLayer's lasso, run from the outside in
+
+The boundary-drawing mechanic is CLayer's — a brush-drawn line as a sparse
+index set, closing a loop — but without CLayer's fill-and-extract step.
+Closing the loop *is* the gesture; everything enclosed becomes the
+selection on lift.
+
+That removes the seed tap CLayer relies on, so the interior has to be found
+without being pointed at. The implementation inverts the test: flood the
+**outside**, 4-connected, from every border texel, never stepping onto the
+boundary. Whatever the outside cannot reach is, by exactly CLayer's own
+definition of closed, enclosed.
+
+Doing it in complement rather than by trying seeds until one works matters
+for two reasons. It is a single pass over the canvas instead of one flood
+per candidate seed — an open lasso over a large area would otherwise re-run
+a failing fill once per texel in its bounding box, slow enough to freeze
+the window. And it finds **every** enclosed pocket at once, so a lasso drawn
+as a figure-eight selects both of its loops rather than whichever one a
+seed happened to land in.
+
+4-connected for the same reason CLayer is: a brush stroke's texels are at
+least diagonally adjacent, which already blocks a 4-connected flood, and
+letting the flood move diagonally would unpick that seal. An unclosed loop
+is reported in the same terms CLayer reports it, rather than selecting
+something arbitrary.
+
+The traced line is included in the selection — someone who draws around a
+shape means the shape *and* the line they drew around it, not the shape
+with a one-texel gap bitten out of its rim.
+
+**Move** lifts the region on the way down, previews it on the way up, and
+commits on release. Lifting first is what lets a selection be dragged
+across its own former position without the trailing copy of itself that a
+move-by-repeated-copy would leave. **Copy** duplicates in place at a small
+offset and leaves the *duplicate* selected, so it can be dragged straight
+to where it is wanted. **Delete** clears to transparent. Tapping outside the
+selection deselects, as does the explicit button.
+
+### Rotate and Flip: one rule about what they apply to
+
+**The selection if there is one, the whole canvas otherwise** — decided in a
+single pair of helpers rather than repeated per button, so Rotate and Flip
+can never disagree about what the user is pointing at. A line above the
+buttons always says which is currently true.
+
+90° turns are exact: nothing is resampled, and turning a non-square canvas
+swaps its width and height (which invalidates the bitmap, the zoom fit and
+the checkerboard tile together, so that path rebuilds all three).
+
+**Free-angle rotation is where pixel art usually gets ruined**, and the task
+called this out specifically. A bilinear or smoothed sample blends each
+output texel from up to four inputs and turns a two-colour sprite into a
+twenty-colour one. So the sampler is **nearest-neighbour, inverse-mapped**:
+every output texel takes the colour of the single nearest source texel, and
+the result is re-snapped to the pixel grid by construction with exactly the
+colours the input had and no others. Inverse-mapped rather than forward-
+mapped because forward mapping leaves holes wherever two source texels
+round onto one output texel.
+
+Two honest consequences, both documented in the info button rather than
+glossed:
+
+- **Odd angles are lossy at the lattice level.** At 45° some source texels
+  have no output texel that rounds to them, no matter how large the frame
+  is. That is inherent to sampling without interpolation — the trade is
+  crisp over complete — and it is exactly why the 90° buttons are wired to
+  the exact quarter-turn rather than to the sampler.
+- **The expanded frame had a real bug.** Sizing it to the source's diagonal
+  is the obvious guess and is one texel too *small* in the worst case: at
+  45° a square's corner texel sits further from the centre than any output
+  texel *centre* in a diagonal-sized frame can reach, so the corners got
+  clipped by the very expansion meant to keep them. It now uses the true
+  rotated bounding box per axis plus a texel of margin on each side, which
+  makes the guarantee both correct and easy to state: **an expanded result
+  never touches its own border.** That is what the test checks, rather than
+  a texel count that lattice aliasing makes meaningless.
+
+A selection rotates with the frame expanded (the piece can grow into the
+space around it) and is re-centred on its own centre so it turns in place;
+the whole canvas rotates without expanding, because the canvas *is* the
+space and there is nothing around it to grow into.
+
+### Flip is four names for two operations
+
+Mirroring is its own inverse. Reflecting a picture "upward" across its
+horizontal centre line and reflecting it "downward" across that same line
+produce byte-identical results, and likewise for left and right — there is
+no arithmetic that could make them differ, and a test asserts the
+involution directly.
+
+So "4-directional" does not imply anything beyond a horizontal/vertical
+pair, and shipping four buttons where two pairs are secretly identical
+would be a UI that lies about what it does. There are two buttons, each
+labelled with **both** of its names — `↔ Flip Left/Right` and `↕ Flip
+Up/Down` — so all four requested directions are present and nothing
+pretends to be a distinct operation that isn't.
+
+### Pick Color
+
+Tapping any texel makes its exact colour the active drawing colour, feeding
+the brush, the shapes and the shadow override alike. Tapping an empty texel
+reports that rather than silently setting a blank colour — picking up
+"nothing" and then painting with it is a confusing few seconds otherwise.
+
+### Blend Colors: one new pixel, or an honest refusal
+
+Strictly discrete: one new colour, computed once, written to one texel,
+never a smudge or a gradient across a stroke. The tap names a **seam**
+rather than a texel — the neighbour is chosen by which edge of the tapped
+texel the tap fell nearest to, because pointing at a boundary is what the
+gesture means.
+
+**The refusal is the interesting part.** Two neighbours that are already the
+same colour obviously have nothing between them. But so do two that differ
+by a single unit in one channel: the midpoint of 10 and 11 rounds to 11,
+which is not a new intermediate shade, it is one of the two originals
+wearing a different name. Writing it anyway would report success while
+changing either nothing or one texel into its neighbour.
+
+So the test is not "are these equal" but the stricter and more useful **"is
+the midpoint distinct from both of them"** — which rejects the identical
+case and the indistinguishable case with one rule, and never invents a
+colour to have something to show for the tap. Each refusal names its actual
+reason.
+
+Alpha is averaged like any other channel rather than special-cased:
+blending an opaque texel against an empty one is a legitimate request, and
+the honest midpoint of "solid" and "nothing" is "half there".
+
+### Verified end to end
+
+`npm test` is now 127 checks across four files (`dent.mjs` 25, `clayer.mjs`
+13, `color.mjs` 27, `pixelops.mjs` 62). On top of that, **55 checks drive
+the real window in a real browser** through the real tool buttons and real
+pointer events, reading the canvas's own pixels back afterwards:
+
+- **Brush.** A 1px drag across nine texels paints exactly nine; the texel
+  directly below the stroke is untouched; the colour census holds exactly
+  one entry. A single 4×4 stamp adds exactly 16 texels and a 10×10 adds
+  exactly 100. Three sizes in three colours leave exactly three colours.
+- **Eraser.** Clears exactly the block it covers, back to `(0,0,0,0)`.
+- **Shapes.** Square, Circle and Triangle each drawn filled and then
+  outline-only by a real drag; both draw, and the outline is strictly
+  smaller than the fill each time (92/36, 80/28, 60/28 px).
+- **Shadow.** A solid block casts one down-right at 3px offset: 87 new
+  texels, the artwork itself byte-identical afterwards (the shadow went
+  behind it), the shadow texel darker than the art, and **exactly one new
+  colour** — a flat tone, not a gradient.
+- **Manual shading.** Shade reports as its own tool, pre-loads a darker
+  tone (`#e0e0e0 → #575757`), and paints by hand.
+- **Select.** An unclosed loop selects nothing and says so; a closed loop
+  selects its 81 enclosed texels and reveals the selection actions.
+- **Move.** Dragging the selection leaves the opaque count unchanged
+  (343 → 343) — no trail, no loss — and the pixels are at the new position.
+- **Rotate / Flip on the selection.** Both preserve it; the transform-target
+  line reads "Applies to the selection" while one is active and "the whole
+  canvas" after deselecting, and whole-canvas flips and quarter turns each
+  preserve every pixel.
+- **Free angle.** A 33° rotation invents **no new colours** — the direct
+  check that it re-snapped rather than blurred.
+- **Copy / Delete.** Copy grows the canvas content and leaves the duplicate
+  selected; Delete removes exactly the selected count (399 − 81 = 318).
+- **Pick Color.** Samples `#123456` exactly, and the brush then paints with
+  precisely that; picking an empty texel reports instead.
+- **Blend.** Red beside blue yields exactly `rgba(128,0,128,255)` in one
+  texel, with the neighbour untouched and nothing leaking outward. Two
+  identical texels leave the canvas byte-identical with "already the same
+  colour". Two shades one unit apart likewise, with "too close together —
+  no distinct colour exists between them".
+- **The camera is still non-destructive.** Two fingers still pinch-zoom now
+  that one finger draws, and zooming paints nothing.
+- **The save path still works.** The painted canvas lands in the project as
+  a real 48×48 Scene Parts layer under its typed name.
+
+### What this deliberately does not have
+
+**There is no undo inside PCreate.** The app's `history.js` covers the
+project, and a PCreate session is deliberately not part of the project
+until Save as Layer — so Rotate, Flip, Delete and the shadow generator
+currently commit with no way back short of re-drawing. That is the clearest
+remaining gap in the tool and the obvious next piece of work; it is called
+out here rather than quietly left for someone to discover.
+
+**Drawing is not clipped to an active selection.** A selection governs
+Move/Copy/Delete/Rotate/Flip and restricts the shadow generator, but a
+brush stroke while one is active paints anywhere. Clipping was not asked
+for, and guessing at it would have been a behaviour change nobody
+requested.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

@@ -1,15 +1,21 @@
 // PCreate: a dedicated window for painting a layer from scratch.
 //
-// THIS FILE IS THE FOUNDATION ONLY
+// WHAT LIVES HERE
 //
-// No drawing tools live here yet -- no brush, no shapes, no Shadow, no
-// Select, no Rotate/Flip, no Pick Color, no Blend Colors. Those are a
-// separate, later task. What this builds is everything they will need
-// under them: the window itself, two ways in (a blank canvas or an
-// imported picture), the full colour-picking and palette system, and a
-// proven path for the canvas to become a real Scene Parts layer. A
-// drawing tool added later has a camera, a colour, a palette and a save
-// button already working; it only has to decide what a stroke writes.
+// The window, two ways in (a blank canvas or an imported picture), the
+// colour-picking and palette system, the full drawing toolkit -- brush,
+// eraser, manual shading, three shapes, freehand Select with move/copy/
+// delete, Rotate, Flip, Pick Color and Blend Colors -- and the path that
+// turns the finished canvas into a real Scene Parts layer.
+//
+// THE ARITHMETIC IS NOT IN THIS FILE
+//
+// Every operation that actually touches texels lives in pixelops.js as a
+// pure function, verified headlessly in tests/pixelops.mjs. This file's job
+// is to decide WHICH operation a gesture means, hand it the buffer, and
+// redraw -- never to do the pixel maths itself. That split is what lets a
+// shape's outline or a rotation's exactness be checked against a hand-built
+// fixture instead of squinted at on screen.
 //
 // A DEDICATED SCREEN, NOT A SCENE TOOL
 //
@@ -24,6 +30,13 @@
 // Same rule as Px Pin, the Pierce painter and CLayer: this window owns its
 // own {zoom, pan}, touches nothing in view.js, and cannot move, scale or
 // rotate anything by being zoomed or panned.
+//
+// ONE FINGER USES THE TOOL, TWO FINGERS MOVE THE VIEW -- the same input
+// model Px Pin, the Pierce painter and CLayer already settled on, so there
+// is one way to work a canvas in this app rather than four slightly
+// different ones. A second finger arriving mid-stroke means the user meant
+// to pinch all along, so that stroke is rolled back rather than left as a
+// stray mark.
 //
 // THE CHECKERBOARD IS THE MAIN CANVAS'S OWN CHECKERBOARD
 //
@@ -42,8 +55,51 @@ import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName } from './importer.js';
 import * as storage from './storage.js';
 import { hsvToRgb, rgbToHsv, rgbToHex, hexToRgb } from './color.js';
+import {
+  squareIndices, lineTexels, paintIndices, clearIndices,
+  squareShape, circleShape, triangleShape,
+  rotate90, flipPixels, rotateFree,
+  regionBounds, extractRegion, blitRegion,
+  blendAt, samplePixel,
+  shadowIndices, suggestShadowColor,
+} from './pixelops.js';
 
 const MAX_ZOOM = 64; // css px per canvas px -- far past single-pixel work
+const MAX_BRUSH = 10; // the biggest square a single touch-point covers
+const GRID_MIN_CELL_PX = 12; // draw the pixel grid once cells are this big
+const SELECTION_TINT = 'rgba(58, 219, 126, 0.28)';
+const SELECTION_EDGE = '#3ADB6E';
+const BOUNDARY_COLOR = 'rgba(255, 46, 147, 0.85)';
+const SHAPE_PREVIEW = 'rgba(255, 255, 255, 0.45)';
+const COPY_OFFSET = 4; // where a duplicate lands, so it is visibly its own thing
+
+// The eight compass directions a drop shadow can fall in, as unit steps.
+const SHADOW_DIRECTIONS = [
+  { key: 'nw', dx: -1, dy: -1, label: '↖' },
+  { key: 'n', dx: 0, dy: -1, label: '↑' },
+  { key: 'ne', dx: 1, dy: -1, label: '↗' },
+  { key: 'w', dx: -1, dy: 0, label: '←' },
+  { key: 'e', dx: 1, dy: 0, label: '→' },
+  { key: 'sw', dx: -1, dy: 1, label: '↙' },
+  { key: 's', dx: 0, dy: 1, label: '↓' },
+  { key: 'se', dx: 1, dy: 1, label: '↘' },
+];
+
+const TOOLS = [
+  { key: 'brush', label: 'Brush' },
+  { key: 'eraser', label: 'Eraser' },
+  { key: 'shade', label: 'Shade' },
+  { key: 'circle', label: 'Circle' },
+  { key: 'triangle', label: 'Triangle' },
+  { key: 'square', label: 'Square' },
+  { key: 'select', label: 'Select' },
+  { key: 'pick', label: 'Pick Color' },
+  { key: 'blend', label: 'Blend' },
+];
+
+const BRUSH_TOOLS = new Set(['brush', 'eraser', 'shade']);
+const SHAPE_TOOLS = new Set(['circle', 'triangle', 'square']);
+const SHAPE_FUNCTIONS = { circle: circleShape, triangle: triangleShape, square: squareShape };
 const GRID_DARK = '#000000';
 const GRID_LIGHT = '#262626';
 const GRID_EDGE = 'rgba(255, 255, 255, 0.28)';
@@ -91,6 +147,15 @@ function cacheElements() {
     'pcreateWheelCanvas', 'pcreateSwatch', 'pcreateValueSlider', 'pcreateValueLabel', 'pcreateHexInput',
     'pcreateLoadedPaletteName', 'pcreateSaveColorBtn', 'pcreatePalettesBtn', 'pcreateSwatchStrip',
     'pcreateEditModeToggle', 'pcreateSaveLayerBtn',
+    'pcreateToolStrip', 'pcreateBrushRow', 'pcreateBrushBtn', 'pcreateBrushMenu',
+    'pcreateShapeRow', 'pcreateShapeFilledBtn', 'pcreateShapeOutlineBtn',
+    'pcreatePickHint', 'pcreateBlendHint', 'pcreateSelectHint',
+    'pcreateSelectionRow', 'pcreateSelectionStatus', 'pcreateSelCopyBtn',
+    'pcreateSelDeleteBtn', 'pcreateSelDeselectBtn',
+    'pcreateShadowDirs', 'pcreateShadowOffset', 'pcreateShadowOffsetLabel',
+    'pcreateShadowSwatch', 'pcreateShadowUseCurrentBtn', 'pcreateShadowAutoBtn', 'pcreateShadowApplyBtn',
+    'pcreateTransformTarget', 'pcreateRotateCcwBtn', 'pcreateRotateCwBtn',
+    'pcreateFlipHBtn', 'pcreateFlipVBtn', 'pcreateAngleSlider', 'pcreateAngleLabel', 'pcreateRotateFreeBtn',
     'pcreatePaletteModal', 'pcreatePaletteEmpty', 'pcreatePaletteList', 'pcreateNewPaletteBtn', 'pcreatePaletteDoneBtn',
     'pcreateNameModal', 'pcreateNameTitle', 'pcreateNameInput', 'pcreateNameConfirmBtn', 'pcreateNameCancelBtn',
     'pcreateLayerNameModal', 'pcreateLayerNameInput', 'pcreateLayerNameConfirmBtn', 'pcreateLayerNameCancelBtn',
@@ -275,6 +340,21 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
     hsv: { h: 0, s: 0, v: 1 }, // starts at white, same as an unset picker anywhere else
     loadedPaletteName: null,
     savedCount: 0,
+
+    tool: 'brush',
+    brush: 1,
+    brushMenuOpen: false,
+    shapeFilled: true,
+    stroke: null, // an in-progress brush stroke
+    shapeDrag: null, // an in-progress shape drag: { from, to }
+    boundary: new Set(), // Select's in-progress lasso line
+    selection: null, // the committed selection, as a Set of texel indices
+    selectionDrag: null, // an in-progress Move of that selection
+    shadowDirection: 'se',
+    shadowOffset: 2,
+    shadowColor: null, // null means "recompute from the artwork on every apply"
+    shadeToneSeeded: false,
+    freeAngle: 0,
   };
 
   els.pcreateCanvasLabel.textContent = name;
@@ -286,6 +366,8 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
   drawWheel(); // builds wheelBitmap on first use -- must run before renderColorControls() paints onto it
   renderColorControls();
   renderSwatchStrip();
+  renderShadowControls();
+  renderTools();
   render();
 }
 
@@ -378,32 +460,119 @@ function render() {
   drawGrid(ctx);
   ctx.drawImage(session.bitmap, cam.panX, cam.panY, width * cam.zoom, height * cam.zoom);
 
+  // The per-texel grid, once cells are big enough to aim a single pixel at
+  // -- the same threshold CLayer and the Pierce painter already use.
+  if (cam.zoom >= GRID_MIN_CELL_PX) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let u = 0; u <= width; u++) {
+      const x = u * cam.zoom + cam.panX;
+      ctx.moveTo(x, cam.panY);
+      ctx.lineTo(x, height * cam.zoom + cam.panY);
+    }
+    for (let v = 0; v <= height; v++) {
+      const y = v * cam.zoom + cam.panY;
+      ctx.moveTo(cam.panX, y);
+      ctx.lineTo(width * cam.zoom + cam.panX, y);
+    }
+    ctx.stroke();
+  }
+
+  if (session.selection) drawIndexSet(ctx, session.selection, SELECTION_TINT, SELECTION_EDGE);
+  if (session.boundary.size) drawIndexSet(ctx, session.boundary, BOUNDARY_COLOR, null);
+  if (session.shapeDrag) {
+    const preview = SHAPE_FUNCTIONS[session.tool](
+      session.shapeDrag.from, session.shapeDrag.to, width, height, session.shapeFilled
+    );
+    drawIndexSet(ctx, preview, SHAPE_PREVIEW, null);
+  }
+
+  const selectionNote = session.selection ? ` · ${session.selection.size} px selected` : '';
   els.pcreateStatus.textContent =
-    `${width}×${height} · ${Math.round(cam.zoom * 100)}%`;
+    `${width}×${height} · ${Math.round(cam.zoom * 100)}%${selectionNote}`;
+}
+
+function drawIndexSet(ctx, indices, fill, edge) {
+  const { cam, width } = session;
+  const size = cam.zoom;
+  ctx.fillStyle = fill;
+  for (const index of indices) {
+    const u = index % width;
+    const v = (index - u) / width;
+    const x = u * size + cam.panX;
+    const y = v * size + cam.panY;
+    if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
+    ctx.fillRect(x, y, size, size);
+    if (edge && size >= 6) {
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = Math.min(2, Math.max(1, size / 10));
+      ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    }
+  }
+}
+
+// The one place the working buffer and the on-screen bitmap are brought
+// back into agreement. Every tool writes to session.pixels and then calls
+// this; nothing paints onto the bitmap directly, so the two can never
+// disagree about what has actually been drawn.
+function syncBitmap() {
+  const ctx = session.bitmap.getContext('2d');
+  const imageData = ctx.createImageData(session.width, session.height);
+  imageData.data.set(session.pixels);
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// Rebuild the canvas element and camera after an operation that changed the
+// buffer's DIMENSIONS -- only a quarter turn of a non-square canvas does
+// that, but it invalidates the bitmap, the zoom fit and the checkerboard
+// tile all at once.
+function adoptBuffer(pixels, width, height) {
+  session.pixels = pixels;
+  session.width = width;
+  session.height = height;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  session.bitmap = canvas;
+  syncBitmap();
+  fitCamera();
 }
 
 // ---------------------------------------------------------------------------
-// Camera input: one finger pans, two fingers pinch-zoom -- there is no
-// drawing tool yet to reserve the single finger for, so both gestures are
-// camera-only, the same as the main canvas's own Home-mode behaviour
-// before anything is selected.
+// Input: one finger uses the tool, two fingers move the view
 
 function canvasPoint(event) {
   const rect = els.pcreateCanvas.getBoundingClientRect();
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
+function texelAt(point) {
+  const { cam } = session;
+  return {
+    u: Math.floor((point.x - cam.panX) / cam.zoom),
+    v: Math.floor((point.y - cam.panY) / cam.zoom),
+  };
+}
+
+function inCanvas(texel) {
+  return texel.u >= 0 && texel.v >= 0 && texel.u < session.width && texel.v < session.height;
+}
+
 function onPointerDown(event) {
   if (!session) return;
   event.preventDefault();
   try { els.pcreateCanvas.setPointerCapture(event.pointerId); } catch { /* no-op: no live pointer in tests */ }
-  session.pointers.set(event.pointerId, canvasPoint(event));
+  const point = canvasPoint(event);
+  session.pointers.set(event.pointerId, point);
 
   if (session.pointers.size === 1) {
     session.pinch = null;
-    session.pan = { last: canvasPoint(event) };
+    beginToolGesture(point);
   } else if (session.pointers.size === 2) {
-    session.pan = null;
+    // The second finger means the camera, so whatever the first one had
+    // started is rolled back rather than committed as a stray mark.
+    abandonGesture();
     const [a, b] = [...session.pointers.values()];
     session.pinch = {
       distance: Math.hypot(b.x - a.x, b.y - a.y),
@@ -435,21 +604,671 @@ function onPointerMove(event) {
     return;
   }
 
-  if (session.pointers.size === 1 && session.pan) {
-    const dx = point.x - session.pan.last.x;
-    const dy = point.y - session.pan.last.y;
-    session.cam.panX += dx;
-    session.cam.panY += dy;
-    session.pan.last = point;
-    render();
-  }
+  if (session.pointers.size === 1) extendToolGesture(point);
 }
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
   session.pointers.delete(event.pointerId);
   if (session.pointers.size < 2) session.pinch = null;
-  if (session.pointers.size === 0) session.pan = null;
+  if (session.pointers.size === 0) endToolGesture();
+}
+
+// ---- Gesture routing ----------------------------------------------------
+//
+// Three shapes of gesture, and every tool is one of them: a continuous
+// stroke (brush, eraser, shade, and Select's lasso), a drag between two
+// corners (the three shapes, and moving a selection), or a single tap
+// (Pick Color, Blend, and deselecting).
+
+function beginToolGesture(point) {
+  const texel = texelAt(point);
+
+  if (BRUSH_TOOLS.has(session.tool)) { beginStroke(texel); return; }
+  if (SHAPE_TOOLS.has(session.tool)) { session.shapeDrag = { from: texel, to: texel }; render(); return; }
+  if (session.tool === 'pick') { pickColorAt(texel); return; }
+  if (session.tool === 'blend') { blendNear(point); return; }
+
+  if (session.tool === 'select') {
+    // A press INSIDE an existing selection starts moving it; anywhere else
+    // drops that selection and starts drawing a new lasso. Tapping outside
+    // is how a selection is dismissed without hunting for a button, which
+    // is the behaviour the tool was asked for.
+    if (session.selection && inCanvas(texel) && session.selection.has(texel.v * session.width + texel.u)) {
+      beginSelectionMove(texel);
+      return;
+    }
+    if (session.selection) {
+      session.selection = null;
+      renderTools();
+    }
+    beginStroke(texel);
+  }
+}
+
+function extendToolGesture(point) {
+  const texel = texelAt(point);
+  if (session.stroke) { extendStroke(texel); return; }
+  if (session.shapeDrag) { session.shapeDrag.to = texel; render(); return; }
+  if (session.selectionDrag) { extendSelectionMove(texel); return; }
+}
+
+function endToolGesture() {
+  if (session.stroke) { endStroke(); return; }
+  if (session.shapeDrag) { commitShape(); return; }
+  if (session.selectionDrag) { endSelectionMove(); return; }
+}
+
+function abandonGesture() {
+  if (session.stroke) rollBackStroke();
+  session.shapeDrag = null;
+  if (session.selectionDrag) rollBackSelectionMove();
+  render();
+}
+
+// ---- Strokes: brush, eraser, manual shading, and Select's lasso ---------
+//
+// All four are the same gesture over the same interpolated run of texels;
+// only what a texel becomes differs. Every stroke records what it
+// overwrote, so a second finger arriving mid-stroke can put it back
+// exactly -- the same rollback Px Pin, the Pierce painter and CLayer all
+// already do.
+
+function beginStroke(texel) {
+  session.stroke = {
+    last: null,
+    before: new Map(), // index -> the four bytes that were there first
+    boundaryBefore: new Set(),
+    changed: false,
+  };
+  applyStrokeAt([texel]);
+  session.stroke.last = texel;
+  render();
+}
+
+function extendStroke(texel) {
+  const last = session.stroke.last;
+  if (last && texel.u === last.u && texel.v === last.v) return;
+  applyStrokeAt(last ? lineTexels(last, texel) : [texel]);
+  session.stroke.last = texel;
+  render();
+}
+
+function applyStrokeAt(texels) {
+  const { stroke } = session;
+  for (const { u, v } of texels) {
+    const indices = squareIndices(u, v, session.brush, session.width, session.height);
+    if (session.tool === 'select') {
+      // The lasso writes to its own overlay set, never to the artwork.
+      for (const index of indices) {
+        if (session.boundary.has(index)) continue;
+        session.boundary.add(index);
+        stroke.boundaryBefore.add(index);
+        stroke.changed = true;
+      }
+      continue;
+    }
+    for (const index of indices) {
+      if (!stroke.before.has(index)) {
+        const o = index * 4;
+        stroke.before.set(index, [
+          session.pixels[o], session.pixels[o + 1], session.pixels[o + 2], session.pixels[o + 3],
+        ]);
+      }
+    }
+    if (session.tool === 'eraser') clearIndices(session.pixels, indices);
+    else paintIndices(session.pixels, indices, strokeColor());
+    stroke.changed = true;
+  }
+  if (session.tool !== 'select') syncBitmap();
+}
+
+// Brush and Shade both paint the current colour. They are still separate
+// tools rather than one tool with a modifier, because they are separate
+// INTENTIONS -- "put this colour here" and "darken this area by hand" --
+// and Shade defaults its colour to the shading tone rather than the
+// drawing tone the moment it is picked. See selectTool().
+function strokeColor() {
+  const { r, g, b } = currentRgb();
+  return [r, g, b, 255];
+}
+
+function endStroke() {
+  const stroke = session.stroke;
+  session.stroke = null;
+  if (!stroke) return;
+  if (session.tool === 'select') commitLasso();
+  render();
+}
+
+function rollBackStroke() {
+  const stroke = session.stroke;
+  session.stroke = null;
+  if (!stroke) return;
+  for (const [index, bytes] of stroke.before) {
+    const o = index * 4;
+    session.pixels[o] = bytes[0];
+    session.pixels[o + 1] = bytes[1];
+    session.pixels[o + 2] = bytes[2];
+    session.pixels[o + 3] = bytes[3];
+  }
+  for (const index of stroke.boundaryBefore) session.boundary.delete(index);
+  if (stroke.before.size) syncBitmap();
+}
+
+// ---- Shapes -------------------------------------------------------------
+
+function commitShape() {
+  const drag = session.shapeDrag;
+  session.shapeDrag = null;
+  if (!drag) return;
+  const indices = SHAPE_FUNCTIONS[session.tool](
+    drag.from, drag.to, session.width, session.height, session.shapeFilled
+  );
+  if (indices.size === 0) { render(); return; }
+  paintIndices(session.pixels, indices, strokeColor());
+  syncBitmap();
+  render();
+}
+
+// ---- Select: CLayer's lasso, without CLayer's fill-and-extract step ------
+//
+// CLayer asks the user to draw a boundary and THEN tap inside it to fill,
+// because there the fill is the thing being extracted and it matters
+// exactly which enclosed area was meant. Here the loop IS the selection, so
+// the extra tap would be ceremony: closing the loop is the whole gesture.
+//
+// That means the interior has to be found without being pointed at. The
+// bounding box's own centre is tried first because a lasso is usually drawn
+// around something roughly convex, and any other interior texel is tried
+// after -- a crescent or an L-shape can easily have its centre sitting
+// outside itself. If every candidate leaks to the edge of the canvas, the
+// loop genuinely is not closed, which is the same verdict CLayer reaches
+// by the same test.
+function commitLasso() {
+  const boundary = session.boundary;
+  if (boundary.size === 0) return;
+
+  const interior = findEnclosedArea(boundary);
+  session.boundary = new Set();
+
+  if (!interior) {
+    showToast(
+      'That loop isn’t closed — the selection escaped to the edge of the canvas. ' +
+      'Draw one unbroken line all the way around the area.'
+    );
+    renderTools();
+    return;
+  }
+
+  // The traced line belongs to what was circled: a user who draws around a
+  // shape means the shape AND the line they drew around it, not the shape
+  // with a one-texel gap bitten out of its rim.
+  for (const index of boundary) interior.add(index);
+  session.selection = interior;
+  renderTools();
+  showToast(`${interior.size} px selected.`);
+}
+
+// THE SAME CLOSEDNESS TEST AS CLAYER'S, RUN FROM THE OUTSIDE IN
+//
+// CLayer asks "can a fill started HERE reach the edge of the image?" and
+// calls the boundary closed when it cannot. That needs a seed, which is why
+// CLayer has the user tap one. Select has no tap to spend, so it runs the
+// identical test in complement: flood the OUTSIDE, 4-connected, starting
+// from every border texel and never stepping onto the boundary. Whatever
+// the outside cannot reach is, by exactly CLayer's definition, enclosed.
+//
+// Two things fall out of doing it this way rather than by trying seeds
+// until one works. It is a single pass over the canvas instead of one flood
+// per candidate seed -- an open lasso over a large area would otherwise
+// re-run a failing fill for every texel in its bounding box, which is slow
+// enough to freeze the window. And it finds EVERY enclosed pocket at once,
+// so a lasso drawn as a figure-eight selects both of its loops rather than
+// whichever one a seed happened to land in.
+//
+// 4-connected for the same reason CLayer is: a brush stroke's texels are at
+// least diagonally adjacent, which already blocks a 4-connected flood, and
+// letting the flood move diagonally would unpick that seal.
+function findEnclosedArea(boundary) {
+  const { width, height } = session;
+  const outside = new Set();
+  const stack = [];
+
+  const consider = (u, v) => {
+    if (u < 0 || v < 0 || u >= width || v >= height) return;
+    const index = v * width + u;
+    if (outside.has(index) || boundary.has(index)) return;
+    outside.add(index);
+    stack.push(index);
+  };
+
+  for (let u = 0; u < width; u++) { consider(u, 0); consider(u, height - 1); }
+  for (let v = 0; v < height; v++) { consider(0, v); consider(width - 1, v); }
+
+  while (stack.length) {
+    const index = stack.pop();
+    const u = index % width;
+    const v = (index - u) / width;
+    consider(u - 1, v);
+    consider(u + 1, v);
+    consider(u, v - 1);
+    consider(u, v + 1);
+  }
+
+  const interior = new Set();
+  const total = width * height;
+  for (let index = 0; index < total; index++) {
+    if (!outside.has(index) && !boundary.has(index)) interior.add(index);
+  }
+  return interior.size ? interior : null;
+}
+
+// ---- Moving a selection -------------------------------------------------
+//
+// Lifted on the way down, previewed as it moves, committed on the way up.
+// Lifting first is what lets a selection be dragged ACROSS its own former
+// position without the trailing copy of itself that a move-by-repeated-
+// copy would leave behind.
+
+function beginSelectionMove(texel) {
+  const bounds = regionBounds(session.selection, session.width);
+  const region = extractRegion(session.pixels, session.width, session.selection, bounds);
+  clearIndices(session.pixels, session.selection);
+  syncBitmap();
+  session.selectionDrag = {
+    origin: texel,
+    bounds,
+    region,
+    dx: 0,
+    dy: 0,
+    original: new Set(session.selection),
+  };
+  session.selection = null;
+  renderPreviewOfDrag();
+}
+
+function extendSelectionMove(texel) {
+  const drag = session.selectionDrag;
+  drag.dx = texel.u - drag.origin.u;
+  drag.dy = texel.v - drag.origin.v;
+  renderPreviewOfDrag();
+}
+
+// The lifted region is drawn straight onto the screen each frame rather
+// than into the buffer, so a drag in progress costs nothing to undo and
+// leaves no trace if it is abandoned.
+function renderPreviewOfDrag() {
+  render();
+  const drag = session.selectionDrag;
+  if (!drag) return;
+  const ctx = els.pcreateCanvas.getContext('2d');
+  const { cam } = session;
+  const size = cam.zoom;
+  for (let v = 0; v < drag.bounds.height; v++) {
+    for (let u = 0; u < drag.bounds.width; u++) {
+      const o = (v * drag.bounds.width + u) * 4;
+      if (drag.region[o + 3] === 0) continue;
+      const tu = drag.bounds.x + u + drag.dx;
+      const tv = drag.bounds.y + v + drag.dy;
+      ctx.fillStyle = `rgba(${drag.region[o]}, ${drag.region[o + 1]}, ${drag.region[o + 2]}, ${drag.region[o + 3] / 255})`;
+      ctx.fillRect(tu * size + cam.panX, tv * size + cam.panY, size, size);
+    }
+  }
+}
+
+function endSelectionMove() {
+  const drag = session.selectionDrag;
+  session.selectionDrag = null;
+  if (!drag) return;
+  const landed = blitRegion(
+    session.pixels, session.width, session.height,
+    drag.region, drag.bounds.width, drag.bounds.height,
+    drag.bounds.x + drag.dx, drag.bounds.y + drag.dy
+  );
+  syncBitmap();
+  session.selection = landed.size ? landed : null;
+  renderTools();
+  render();
+}
+
+function rollBackSelectionMove() {
+  const drag = session.selectionDrag;
+  session.selectionDrag = null;
+  if (!drag) return;
+  blitRegion(
+    session.pixels, session.width, session.height,
+    drag.region, drag.bounds.width, drag.bounds.height,
+    drag.bounds.x, drag.bounds.y
+  );
+  syncBitmap();
+  session.selection = drag.original;
+  renderTools();
+}
+
+// ---- Selection actions --------------------------------------------------
+
+function copySelection() {
+  if (!session || !session.selection) return;
+  const bounds = regionBounds(session.selection, session.width);
+  const region = extractRegion(session.pixels, session.width, session.selection, bounds);
+  const landed = blitRegion(
+    session.pixels, session.width, session.height,
+    region, bounds.width, bounds.height,
+    bounds.x + COPY_OFFSET, bounds.y + COPY_OFFSET
+  );
+  if (landed.size === 0) {
+    showToast('The copy would land off the canvas — move the selection inward first.');
+    return;
+  }
+  syncBitmap();
+  // The DUPLICATE becomes the selection, not the original, so it can be
+  // dragged straight to where it is wanted without re-selecting anything.
+  session.selection = landed;
+  renderTools();
+  render();
+  showToast('Copied — drag the duplicate to place it.');
+}
+
+function deleteSelection() {
+  if (!session || !session.selection) return;
+  clearIndices(session.pixels, session.selection);
+  syncBitmap();
+  render();
+  showToast(`Cleared ${session.selection.size} px to transparent.`);
+}
+
+function deselect() {
+  if (!session) return;
+  session.selection = null;
+  session.boundary = new Set();
+  renderTools();
+  render();
+}
+
+// ---- Pick Color ---------------------------------------------------------
+
+function pickColorAt(texel) {
+  if (!inCanvas(texel)) return;
+  const [r, g, b, a] = samplePixel(session.pixels, session.width, texel.u, texel.v);
+  if (a === 0) {
+    showToast('That pixel is empty — there is no colour there to pick up.');
+    return;
+  }
+  session.hsv = rgbToHsv(r, g, b);
+  renderColorControls();
+  showToast(`Picked ${rgbToHex(r, g, b)}.`);
+}
+
+// ---- Blend Colors -------------------------------------------------------
+//
+// The tap is not "which texel" but "which SEAM": the user is pointing at
+// the join between two neighbours, so the neighbour is chosen by which edge
+// of the tapped texel the tap actually fell nearest to. Tapping the left
+// third of a texel means the seam with the texel on its left.
+function blendNear(point) {
+  const texel = texelAt(point);
+  if (!inCanvas(texel)) return;
+
+  const { cam } = session;
+  const fracU = (point.x - cam.panX) / cam.zoom - texel.u;
+  const fracV = (point.y - cam.panY) / cam.zoom - texel.v;
+  // Distance to each of the four edges; the nearest one names the neighbour.
+  const toLeft = fracU;
+  const toRight = 1 - fracU;
+  const toTop = fracV;
+  const toBottom = 1 - fracV;
+  const nearest = Math.min(toLeft, toRight, toTop, toBottom);
+  let nu = texel.u;
+  let nv = texel.v;
+  if (nearest === toLeft) nu -= 1;
+  else if (nearest === toRight) nu += 1;
+  else if (nearest === toTop) nv -= 1;
+  else nv += 1;
+
+  const result = blendAt(session.pixels, session.width, session.height, texel.u, texel.v, nu, nv);
+  if (!result.ok) {
+    if (result.reason === 'out-of-bounds') {
+      showToast('There is no pixel on the other side of that edge to blend with.');
+    } else if (result.reason === 'identical') {
+      showToast('Those two pixels are already the same colour — there is nothing to blend.');
+    } else {
+      showToast('Those two shades are too close together — no distinct colour exists between them.');
+    }
+    return;
+  }
+
+  paintIndices(session.pixels, [texel.v * session.width + texel.u], result.color);
+  syncBitmap();
+  render();
+  showToast(`Blended to ${rgbToHex(result.color[0], result.color[1], result.color[2])}.`);
+}
+
+// ---- Shadow -------------------------------------------------------------
+
+function applyShadow() {
+  if (!session) return;
+  const direction = SHADOW_DIRECTIONS.find((d) => d.key === session.shadowDirection);
+  const restrictTo = session.selection;
+  const indices = shadowIndices(
+    session.pixels, session.width, session.height,
+    direction.dx * session.shadowOffset, direction.dy * session.shadowOffset,
+    restrictTo
+  );
+  if (indices.size === 0) {
+    showToast(restrictTo
+      ? 'Nothing in the selection casts a shadow that lands on empty canvas.'
+      : 'There is nothing on the canvas to cast a shadow yet.');
+    return;
+  }
+  const colour = session.shadowColor
+    || suggestShadowColor(session.pixels, session.width, session.height, restrictTo);
+  if (!colour) { showToast('There is nothing on the canvas to take a shadow colour from.'); return; }
+
+  paintIndices(session.pixels, indices, colour);
+  syncBitmap();
+  render();
+  showToast(`Added a ${indices.size} px shadow.`);
+}
+
+function renderShadowControls() {
+  els.pcreateShadowDirs.replaceChildren();
+  for (const row of [0, 1, 2]) {
+    for (const col of [0, 1, 2]) {
+      if (row === 1 && col === 1) {
+        const centre = document.createElement('span');
+        centre.className = 'pcreate-dir pcreate-dir--centre';
+        centre.setAttribute('aria-hidden', 'true');
+        els.pcreateShadowDirs.appendChild(centre);
+        continue;
+      }
+      const dx = col - 1;
+      const dy = row - 1;
+      const direction = SHADOW_DIRECTIONS.find((d) => d.dx === dx && d.dy === dy);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pcreate-dir';
+      button.textContent = direction.label;
+      button.setAttribute('aria-label', `Shadow falls ${direction.key.toUpperCase()}`);
+      button.setAttribute('aria-pressed', String(session && session.shadowDirection === direction.key));
+      button.addEventListener('click', () => {
+        if (!session) return;
+        session.shadowDirection = direction.key;
+        renderShadowControls();
+      });
+      els.pcreateShadowDirs.appendChild(button);
+    }
+  }
+
+  if (!session) return;
+  els.pcreateShadowOffset.value = String(session.shadowOffset);
+  els.pcreateShadowOffsetLabel.textContent = `${session.shadowOffset} px`;
+  const preview = session.shadowColor
+    || suggestShadowColor(session.pixels, session.width, session.height, session.selection);
+  els.pcreateShadowSwatch.style.background = preview
+    ? `rgb(${preview[0]}, ${preview[1]}, ${preview[2]})`
+    : 'transparent';
+  els.pcreateShadowSwatch.title = session.shadowColor
+    ? 'A shadow colour you chose'
+    : 'Automatic: a darker, less saturated relative of what is on the canvas';
+}
+
+// ---- Rotate and Flip ----------------------------------------------------
+//
+// One rule decides what every transform applies to: THE SELECTION IF THERE
+// IS ONE, THE WHOLE CANVAS OTHERWISE. Keeping that in a single pair of
+// helpers rather than repeating it in each button means Rotate and Flip can
+// never disagree with each other about what the user is pointing at.
+
+function transformSelection(transform) {
+  const bounds = regionBounds(session.selection, session.width);
+  const region = extractRegion(session.pixels, session.width, session.selection, bounds);
+  const result = transform(region, bounds.width, bounds.height);
+  clearIndices(session.pixels, session.selection);
+
+  // Re-centred on the selection's own centre, so a rotated piece turns in
+  // place instead of drifting toward the origin as its bounding box changes
+  // shape underneath it.
+  const centreX = bounds.x + bounds.width / 2;
+  const centreY = bounds.y + bounds.height / 2;
+  const landed = blitRegion(
+    session.pixels, session.width, session.height,
+    result.pixels, result.width, result.height,
+    Math.round(centreX - result.width / 2), Math.round(centreY - result.height / 2)
+  );
+  syncBitmap();
+  session.selection = landed.size ? landed : null;
+  renderTools();
+  render();
+}
+
+function transformCanvas(transform) {
+  const result = transform(session.pixels, session.width, session.height);
+  if (result.width !== session.width || result.height !== session.height) {
+    adoptBuffer(result.pixels, result.width, result.height);
+  } else {
+    session.pixels = result.pixels;
+    syncBitmap();
+  }
+  render();
+}
+
+function applyTransform(transform) {
+  if (!session) return;
+  if (session.selection) transformSelection(transform);
+  else transformCanvas(transform);
+}
+
+function rotateQuarter(turns) {
+  applyTransform((pixels, width, height) => rotate90(pixels, width, height, turns));
+}
+
+function flip(axis) {
+  applyTransform((pixels, width, height) => ({
+    pixels: flipPixels(pixels, width, height, axis), width, height,
+  }));
+}
+
+// A free-angle rotation EXPANDS when it is turning a selection (the piece
+// can grow into the space around it) and does NOT when it is turning the
+// whole canvas (there is no space around that to grow into -- the canvas
+// is the space). Both sample nearest-neighbour, so the result is re-snapped
+// to the pixel grid rather than left blurred at an angle.
+function rotateByAngle() {
+  if (!session) return;
+  const degrees = session.freeAngle;
+  if (degrees === 0) { showToast('Set an angle first.'); return; }
+  if (session.selection) {
+    transformSelection((pixels, width, height) => rotateFree(pixels, width, height, degrees, true));
+  } else {
+    transformCanvas((pixels, width, height) => rotateFree(pixels, width, height, degrees, false));
+  }
+  showToast(`Rotated by ${degrees}°, re-snapped to the pixel grid.`);
+}
+
+// ---- Tool selection and the contextual rows -----------------------------
+
+function selectTool(key) {
+  if (!session) return;
+  session.tool = key;
+  session.brushMenuOpen = false;
+  // Leaving Select with a lasso half-drawn should not leave that line
+  // hanging over the artwork for the next tool to paint around.
+  session.boundary = new Set();
+  // Shade opens on a shading tone rather than whatever was last drawn with,
+  // so "paint some shading by hand" does not start by painting the
+  // highlight colour into the shadows.
+  //
+  // ONCE PER SESSION, not on every visit to the tool. Re-seeding each time
+  // would throw away a tone the artist had deliberately adjusted the moment
+  // they stepped away to the brush and came back, which is exactly the kind
+  // of helpfulness that becomes an irritation by the third time.
+  if (key === 'shade' && !session.shadeToneSeeded) {
+    const suggestion = suggestShadowColor(session.pixels, session.width, session.height, session.selection);
+    if (suggestion) {
+      session.hsv = rgbToHsv(suggestion[0], suggestion[1], suggestion[2]);
+      session.shadeToneSeeded = true;
+      renderColorControls();
+    }
+  }
+  renderTools();
+  render();
+}
+
+function renderTools() {
+  if (!session) return;
+
+  els.pcreateToolStrip.replaceChildren();
+  for (const tool of TOOLS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pcreate-tool';
+    button.textContent = tool.label;
+    button.dataset.tool = tool.key;
+    button.setAttribute('aria-pressed', String(session.tool === tool.key));
+    button.addEventListener('click', () => selectTool(tool.key));
+    els.pcreateToolStrip.appendChild(button);
+  }
+
+  const isBrush = BRUSH_TOOLS.has(session.tool) || session.tool === 'select';
+  els.pcreateBrushRow.hidden = !isBrush;
+  els.pcreateBrushMenu.hidden = !isBrush || !session.brushMenuOpen;
+  els.pcreateBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
+  els.pcreateBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
+
+  els.pcreateBrushMenu.replaceChildren();
+  for (let size = 1; size <= MAX_BRUSH; size++) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'px-pin__brush';
+    button.textContent = `${size}×${size}`;
+    button.setAttribute('aria-pressed', String(session.brush === size));
+    button.addEventListener('click', () => {
+      session.brush = size;
+      session.brushMenuOpen = false;
+      renderTools();
+    });
+    els.pcreateBrushMenu.appendChild(button);
+  }
+
+  els.pcreateShapeRow.hidden = !SHAPE_TOOLS.has(session.tool);
+  els.pcreateShapeFilledBtn.setAttribute('aria-pressed', String(session.shapeFilled));
+  els.pcreateShapeOutlineBtn.setAttribute('aria-pressed', String(!session.shapeFilled));
+
+  els.pcreatePickHint.hidden = session.tool !== 'pick';
+  els.pcreateBlendHint.hidden = session.tool !== 'blend';
+  els.pcreateSelectHint.hidden = session.tool !== 'select' || Boolean(session.selection);
+
+  els.pcreateSelectionRow.hidden = !session.selection;
+  if (session.selection) {
+    els.pcreateSelectionStatus.textContent = `${session.selection.size} px selected`;
+  }
+
+  els.pcreateTransformTarget.textContent = session.selection
+    ? 'Applies to the selection'
+    : 'Applies to the whole canvas';
+  els.pcreateAngleLabel.textContent = `${session.freeAngle}°`;
+  renderShadowControls();
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,7 +1857,44 @@ export function pcreateDebug() {
     loadedPaletteName: session.loadedPaletteName,
     savedCount: session.savedCount,
     editInPlace,
+    tool: session.tool,
+    brush: session.brush,
+    shapeFilled: session.shapeFilled,
+    selectionSize: session.selection ? session.selection.size : null,
+    boundarySize: session.boundary.size,
+    shadowDirection: session.shadowDirection,
+    shadowOffset: session.shadowOffset,
+    shadowColorIsAuto: session.shadowColor === null,
+    freeAngle: session.freeAngle,
   };
+}
+
+// How many texels on the canvas are non-transparent -- the cheapest honest
+// answer to "did that tool actually draw anything", without a test having
+// to guess at colours from a screenshot.
+export function pcreateOpaqueCount() {
+  if (!session) return null;
+  let count = 0;
+  for (let i = 3; i < session.pixels.length; i += 4) {
+    if (session.pixels[i] !== 0) count++;
+  }
+  return count;
+}
+
+// Every distinct colour currently on the canvas, as hex, with how many
+// texels each covers. Proving a brush stroke is HARD-EDGED means proving
+// exactly one new colour appeared and nothing was softened into existence
+// around it, which a colour census answers directly.
+export function pcreateColorCensus() {
+  if (!session) return null;
+  const counts = new Map();
+  for (let i = 0; i < session.pixels.length; i += 4) {
+    const a = session.pixels[i + 3];
+    if (a === 0) continue;
+    const key = `${rgbToHex(session.pixels[i], session.pixels[i + 1], session.pixels[i + 2])}@${a}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count);
 }
 
 export async function pcreateListPalettes() {
@@ -1096,6 +1952,51 @@ export function initPCreate() {
   els.pcreateDeleteCancelBtn.addEventListener('click', closeDeleteModal);
 
   els.pcreateEditModeToggle.addEventListener('click', () => setEditMode(!editInPlace));
+
+  els.pcreateBrushBtn.addEventListener('click', () => {
+    if (!session) return;
+    session.brushMenuOpen = !session.brushMenuOpen;
+    renderTools();
+  });
+  els.pcreateShapeFilledBtn.addEventListener('click', () => {
+    if (session) { session.shapeFilled = true; renderTools(); }
+  });
+  els.pcreateShapeOutlineBtn.addEventListener('click', () => {
+    if (session) { session.shapeFilled = false; renderTools(); }
+  });
+
+  els.pcreateSelCopyBtn.addEventListener('click', copySelection);
+  els.pcreateSelDeleteBtn.addEventListener('click', deleteSelection);
+  els.pcreateSelDeselectBtn.addEventListener('click', deselect);
+
+  els.pcreateShadowOffset.addEventListener('input', () => {
+    if (!session) return;
+    session.shadowOffset = Number(els.pcreateShadowOffset.value);
+    renderShadowControls();
+  });
+  els.pcreateShadowUseCurrentBtn.addEventListener('click', () => {
+    if (!session) return;
+    const { r, g, b } = currentRgb();
+    session.shadowColor = [r, g, b, 255];
+    renderShadowControls();
+  });
+  els.pcreateShadowAutoBtn.addEventListener('click', () => {
+    if (!session) return;
+    session.shadowColor = null; // back to "recompute from the artwork"
+    renderShadowControls();
+  });
+  els.pcreateShadowApplyBtn.addEventListener('click', applyShadow);
+
+  els.pcreateRotateCcwBtn.addEventListener('click', () => rotateQuarter(3));
+  els.pcreateRotateCwBtn.addEventListener('click', () => rotateQuarter(1));
+  els.pcreateFlipHBtn.addEventListener('click', () => flip('horizontal'));
+  els.pcreateFlipVBtn.addEventListener('click', () => flip('vertical'));
+  els.pcreateAngleSlider.addEventListener('input', () => {
+    if (!session) return;
+    session.freeAngle = Number(els.pcreateAngleSlider.value);
+    els.pcreateAngleLabel.textContent = `${session.freeAngle}°`;
+  });
+  els.pcreateRotateFreeBtn.addEventListener('click', rotateByAngle);
 
   els.pcreateSaveLayerBtn.addEventListener('click', openLayerNameModal);
   els.pcreateLayerNameConfirmBtn.addEventListener('click', saveAsLayer);

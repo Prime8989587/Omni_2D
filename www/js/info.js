@@ -156,6 +156,56 @@ const TOPICS = {
       'working, persisted, and asking the right question by the time it ' +
       'does.',
   },
+  'pcreate-tools': {
+    title: 'The drawing tools',
+    body: 'One finger uses the current tool; two fingers always pan and ' +
+      'zoom, so getting a closer look never draws anything.\n\n' +
+      '• Brush -- paints the current colour in hard, single-colour pixels, ' +
+      '1×1 up to 10×10. Nothing is ever smoothed or faded at the edges.\n' +
+      '• Eraser -- the same brush, clearing pixels back to fully ' +
+      'transparent rather than painting over them.\n' +
+      '• Shade -- the same brush again, but it opens already set to a ' +
+      'darker, less saturated version of what is on the canvas, for ' +
+      'putting shadows in by hand instead of generating them.\n' +
+      '• Circle / Triangle / Square -- drag to set the size, then choose ' +
+      'Filled or Outline. An outline is always exactly one pixel thick.\n' +
+      '• Select -- draw a closed loop; everything inside it becomes the ' +
+      'selection.\n' +
+      '• Pick Color -- tap any pixel to make its exact colour the active ' +
+      'one.\n' +
+      '• Blend -- writes one new midpoint pixel between two differently ' +
+      'coloured neighbours.',
+  },
+  'pcreate-shadow': {
+    title: 'Shadow',
+    body: 'Pick the direction the light comes FROM on the compass, set how ' +
+      'far the shadow falls, and Add Shadow drops a hard-edged copy of the ' +
+      'silhouette behind the artwork.\n\n' +
+      'It only ever paints on empty pixels -- a shadow never covers the ' +
+      'art casting it.\n\n' +
+      'The colour starts on Auto: a darker, less saturated relative of the ' +
+      'colours already on the canvas, so the shadow belongs to the same ' +
+      'picture rather than being a generic grey. Use current color ' +
+      'overrides it with whatever the picker is set to; Auto goes back.\n\n' +
+      'With a selection active, only that selection casts a shadow.\n\n' +
+      'For shading by hand instead, use the Shade brush.',
+  },
+  'pcreate-transform': {
+    title: 'Rotate and Flip',
+    body: 'Both apply to the SELECTION if there is one, and to the whole ' +
+      'canvas if there is not. The line above the buttons always says ' +
+      'which.\n\n' +
+      '90° turns are exact -- nothing is resampled, and turning a ' +
+      'non-square canvas swaps its width and height.\n\n' +
+      'Free angle rotates by any amount and re-snaps the result to the ' +
+      'pixel grid, so it stays crisp instead of going blurry. Odd angles ' +
+      'cannot land every original pixel on a new one, so some detail ' +
+      'shifts -- that is the cost of keeping hard edges, and it is why the ' +
+      '90° buttons are separate.\n\n' +
+      'Flip has two operations, not four: mirroring up and mirroring down ' +
+      'across the same centre line give an identical result, as do left ' +
+      'and right. Each button is labelled with both of its names.',
+  },
   'joint-type': {
     title: 'Follows parent',
     body: '• Rigid -- turns with its parent instantly, like a normal ' +

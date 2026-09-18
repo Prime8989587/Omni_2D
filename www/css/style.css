@@ -897,6 +897,15 @@ button, input, select {
   height: 36px;
 }
 
+/* .pcreate-swatch on its own carries only the border and clip -- a swatch
+   sitting in a row of buttons has to be told its own size, or it collapses
+   to nothing and the colour it is reporting is invisible. */
+.pcreate-swatch--inline {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 32px;
+}
+
 .pcreate-palette-row {
   display: flex;
   align-items: center;
@@ -961,6 +970,84 @@ button, input, select {
   font-size: var(--text-label);
   color: rgba(255, 255, 255, 0.55);
   padding: 4px;
+}
+
+/* ---------- PCreate drawing tools ----------
+   Nine tools is more than a segmented control can hold on a phone without
+   each one becoming an unreadable sliver, so the strip wraps instead and
+   each tool keeps a tappable minimum. Everything below it is contextual --
+   only the rows the current tool actually uses are shown, the same way
+   CLayer reveals its boundary row only for the boundary tool. */
+
+.pcreate-tool-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pcreate-tool {
+  -webkit-tap-highlight-color: transparent;
+  flex: 1 0 auto;
+  min-width: 70px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.pcreate-tool[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.pcreate-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The light-direction picker: a literal 3x3 compass with the centre left
+   empty, because "which way is the light coming from" is a direction in
+   space and reads instantly as one when it is laid out like one. */
+.pcreate-dir-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 36px);
+  grid-template-rows: repeat(3, 36px);
+  gap: 4px;
+  justify-content: center;
+}
+
+.pcreate-dir {
+  -webkit-tap-highlight-color: transparent;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.pcreate-dir[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.pcreate-dir--centre {
+  border-style: dashed;
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pcreate-transform-target {
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.55);
 }
 
 /* ---------- Pierce depth indicator ----------
