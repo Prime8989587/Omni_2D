@@ -3784,6 +3784,84 @@ tap meant for them — found by the verification script itself timing out on
 a click that Chromium correctly reported as landing on the canvas
 underneath. `#clayerNameModal` now gets its own `z-index: 65`.
 
+### The source shows what's left, not what used to be there
+
+The window's own copy of the source pixels is separate from the decoded
+File from the moment it's read — drawing a boundary or running a fill only
+ever writes to index sets alongside it, never to the pixels themselves. A
+**successful save** is the one thing that does write to it: the texels the
+fill just took are set to fully transparent, and the on-screen bitmap is
+rebuilt from the same buffer, so the source shown in the window keeps
+matching what is actually still there to extract, for the rest of the
+session.
+
+Without this, a session pulling several pieces out of one picture had no
+way to tell — by looking — which parts were already spoken for. Drawing a
+second boundary that drifted back over ground the first one already took
+looked exactly like drawing it over untouched artwork, right up until the
+save produced a smaller crop than expected. Now the gap is on screen the
+whole time a later boundary is being drawn around it.
+
+**This can only ever make a later extraction smaller, never wrong.** A
+second boundary that happens to cross into an already-erased hole simply
+finds nothing opaque there for `contentBounds()` to keep — the exact same
+result as if that patch of the source had always been blank. Nothing
+special has to detect the overlap; the ordinary crop math already handles
+it, because by the time it runs, the hole really is empty.
+
+**The original File is never touched.** It was decoded once, in
+`onSourcePicked`, into `session.pixels` — a plain `Uint8ClampedArray` this
+window owns — and its `objectUrl` was revoked immediately after. There is
+no path from a save back to that file; erasing part of the working copy
+can't reach it.
+
+### The canvas resizes for an empty project, and never for anything else
+
+Importing has always had one rule for a same-size PNG (position-preserving:
+crop to content, place at the padding's own offset) and another for
+everything else (centred, cascaded). CLayer's save now adds exactly one
+more rule ahead of that: **if the project is completely empty, the canvas
+is set to match the extraction's ORIGINAL SOURCE image first** — not the
+cropped piece's own smaller bounding box — so the piece can then be placed
+by the *existing* same-size rule, landing at the exact offset it held in
+that source rather than wherever a cascade happens to centre it.
+
+```
+wasEmpty = partsStore.isEmpty          // read FRESH, every single save
+if (wasEmpty) sceneStore.setSize(session.width, session.height)
+
+matchesSource = sceneStore.width === session.width
+             && sceneStore.height === session.height
+placement = matchesSource
+  ? { x: bounds.x, y: bounds.y }       // position-preserving
+  : nextPlacement(bounds.width, bounds.height)   // cascade fallback, unchanged
+```
+
+A project that already has even one layer is never resized and never
+warned about — its size is presumed intentional, and CLayer has no opinion
+about it worth interrupting the artist for. That project's extraction
+either happens to land on a canvas the same size as the CLayer source (in
+which case it gets the same position-preserving placement, for the same
+reason an ordinary same-size Import would) or it doesn't, and falls back to
+the ordinary cascade — exactly the same two-way split Import already makes,
+just reached from a crop instead of a whole padded PNG.
+
+**"Freshly, every single save" is not a hedge — it's load-bearing.** One
+CLayer session can extract "head", then "hair", then "hand" without
+re-importing, and the *first* of those can land in an empty project while
+the *second* cannot, because the first one just populated it. Caching
+`partsStore.isEmpty` once when the window opened would resize the canvas
+out from under a project that already has a layer in it the moment a
+second extraction was saved in the same sitting — exactly the disruptive
+resize Case B exists to rule out. Reading it inline, at the top of
+`saveExtraction()`, on every call, is what keeps the two cases from
+blurring into each other over a multi-piece session.
+
+Both the resize and the new Part are folded into the **same**
+`history.run(...)` call, so undoing one CLayer save reverts the canvas size
+along with it, as one step — `history.run` already collapses nested calls
+into a single entry, so this needed no special handling of its own.
+
 ### Verified end to end
 
 `tests/clayer.mjs` (13 checks, plain Node, `node tests/clayer.mjs`) runs the
@@ -3818,6 +3896,46 @@ that `mesh.generateMesh` builds a real mesh from exactly like any imported
 layer, and it appeared in the real Scene Parts list under the typed name
 with Bind, Rig and Animate all available — the same integration point
 Import itself lands on.
+
+**The two upgrades above got their own pass, four scenarios, 23 checks, all
+in a real browser against the real window:**
+
+- **The live gap.** A two-block source; before any save, `(9,8)` — deep in
+  the head block — reads its real colour, `rgba(220,40,40,255)`. Saved.
+  `(9,8)` now reads `rgba(0,0,0,0)`, while `(28,16)` — deep in the still-
+  untouched body block — still reads its own real colour. A second boundary
+  is then drawn around the body **with the first gap already on screen**,
+  and `(9,8)` is checked again mid-stroke: still `alpha=0`. Filled, saved;
+  both gaps now read `alpha=0` together, confirming the first one didn't
+  quietly heal itself once a second extraction happened elsewhere.
+- **Case A.** A genuinely empty project (`0` parts, confirmed before
+  touching CLayer at all) meets a deliberately oversized, non-square
+  **300×180** source with one small block in it. After the save: the
+  canvas reads exactly **300×180** — not the 512×512 default, not the
+  block's own 24×18 — and the saved Part is cropped to **24×18** but
+  positioned at **exactly `(100,60)`**, the block's real offset in that
+  source, not centred or cascaded.
+- **Case B, with a genuine size mismatch.** A project seeded with one
+  unrelated layer through the app's **own ordinary Import button**, left on
+  the default **512×512** canvas. A CLayer extraction from an unrelated
+  **300×180** source is saved into it. Canvas afterward: still exactly
+  **512×512** — confirmed unchanged, not merely unresized-by-coincidence,
+  since the source's own size was deliberately different from it. The
+  toast read only `Saved "Extra" — 16×12 px. …`, checked against a pattern
+  for any mention of "mismatch", "different size", "canvas size" or
+  "resiz" — none present. The new layer landed as a **second** Part
+  alongside the existing one, cropped correctly, and placed via the
+  ordinary cascade rather than at its source offset `(40,20)` — confirmed
+  by asserting its position was **not** `(40,20)` — because the sizes
+  genuinely didn't match.
+- **Freshness, inside one session.** A single CLayer session against a
+  fresh empty project: the first save resizes the canvas to the source's
+  60×40, exactly as Case A predicts. The second save, of a different piece
+  from the *same still-open* source, is then checked against the *same*
+  canvas reading — still 60×40, meaning nothing tried to resize it again
+  now that the project holds one layer — which is the one behaviour that
+  cannot be produced by checking `partsStore.isEmpty` once when the window
+  opens rather than inline on every save.
 
 ## A toast can silently eat a tap
 

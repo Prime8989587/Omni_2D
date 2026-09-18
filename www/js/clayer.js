@@ -138,7 +138,15 @@ function startSession({ name, width, height, pixels, bitmap }) {
     sourceName: name,
     width,
     height,
-    pixels, // the ORIGINAL decoded bytes -- never mutated, only read
+    // The WORKING copy. Untouched by drawing a boundary or running a fill
+    // -- both of those only ever write to index sets alongside it -- but a
+    // SUCCESSFUL SAVE does erase the pixels it just took, to fully
+    // transparent, so the source shown in this window keeps reflecting
+    // what is actually still there to extract. See
+    // eraseExtractedFromWorkingCopy(). The decoded File itself is never
+    // touched: it was read once in onSourcePicked and nothing here ever
+    // reaches back into it.
+    pixels,
     bitmap,
     cam: { zoom: 1, panX: 0, panY: 0 },
     tool: 'boundary', // 'boundary' | 'fill'
@@ -472,14 +480,18 @@ function attemptFill(point) {
 }
 
 // ---------------------------------------------------------------------------
-// Save: crop the fill out of the ORIGINAL pixels and add it as a Part
+// Save: crop the fill out of the WORKING pixels and add it as a Part
 //
-// The masked buffer is built from session.pixels, which is never touched
-// by drawing a boundary or running a fill -- both of those only ever write
-// to index sets alongside it. So what gets copied out here is exactly what
-// the source PNG decoded to, pixel for pixel, with nothing resampled and
-// nothing smoothed: a texel is either copied whole or left fully
-// transparent, and there is no third option.
+// The masked buffer is built from session.pixels as it stands AT THIS
+// MOMENT. Drawing a boundary or running a fill never touches it -- both of
+// those only ever write to index sets alongside it -- so on a session's
+// first save this is exactly what the source PNG decoded to, pixel for
+// pixel, with nothing resampled and nothing smoothed: a texel is either
+// copied whole or left fully transparent, and there is no third option. A
+// successful save then erases the texels it just took (see
+// eraseExtractedFromWorkingCopy, called after this one lands), so a LATER
+// save in the same session reads a working copy with that hole already in
+// it -- correctly, since those pixels are already spoken for.
 
 export function buildExtractedPixels(pixels, width, height, fillMask) {
   const masked = new Uint8ClampedArray(width * height * 4);
@@ -491,6 +503,34 @@ export function buildExtractedPixels(pixels, width, height, fillMask) {
     masked[o + 3] = pixels[o + 3];
   }
   return masked;
+}
+
+// THE SOURCE SHOWS WHAT'S LEFT, NOT WHAT USED TO BE THERE
+//
+// Once a fill is actually saved, those pixels are spoken for. Leaving them
+// looking untouched in the working copy would let a second boundary be
+// drawn right back over ground already given away -- exactly the
+// accidental overlap this is meant to make impossible to miss. So the
+// texels the save just took are cleared to fully transparent here, and the
+// on-screen bitmap is rebuilt from the same buffer buildExtractedPixels()
+// read from, so the two can never disagree about what is left.
+//
+// This can only ever make a LATER extraction smaller, never wrong: a
+// second boundary that happens to cross into an already-erased hole simply
+// finds nothing opaque there for contentBounds() to keep, the same as if
+// that patch of the source had always been blank.
+function eraseExtractedFromWorkingCopy(fillMask) {
+  for (const index of fillMask) {
+    const o = index * 4;
+    session.pixels[o] = 0;
+    session.pixels[o + 1] = 0;
+    session.pixels[o + 2] = 0;
+    session.pixels[o + 3] = 0;
+  }
+  const ctx = session.bitmap.getContext('2d');
+  const imageData = ctx.createImageData(session.width, session.height);
+  imageData.data.set(session.pixels);
+  ctx.putImageData(imageData, 0, 0);
 }
 
 function nextPlacement(width, height) {
@@ -528,13 +568,42 @@ function saveExtraction() {
     return;
   }
   const cropped = cropPixels(masked, session.width, bounds);
-  const placement = nextPlacement(bounds.width, bounds.height);
   const typed = els.clayerNameInput.value.trim();
   const name = typed || els.clayerNameInput.placeholder || session.sourceName;
   closeNamePrompt();
 
+  // CHECKED FRESH ON EVERY SAVE, NOT ONCE PER CLAYER SESSION
+  //
+  // One session can extract "head", then "hair", then "hand" without ever
+  // re-importing. The FIRST of those can land in an empty project; the
+  // second cannot, because the first just populated it -- so this has to
+  // be read again right here, not cached from when the window opened.
+  const wasEmpty = partsStore.isEmpty;
+
   let created = null;
   history.run('CLayer: extract layer', () => {
+    // An empty project has no canvas size worth respecting yet, so it is
+    // set to match this extraction's ORIGINAL SOURCE image -- not the
+    // cropped piece's own smaller bounding box -- so the piece lands at
+    // the exact position it held in that source and the grid-snapping /
+    // position-preserving machinery both work against a canvas that
+    // actually matches it. A project that already has layers keeps
+    // whatever size it has, unconditionally: that size is presumed
+    // intentional, and nothing here may disturb it -- not by resizing it,
+    // and not even by asking.
+    if (wasEmpty) sceneStore.setSize(session.width, session.height);
+
+    // The same rule Import already applies to a same-size PNG: once the
+    // canvas matches this extraction's source dimensions exactly -- true
+    // by construction just above whenever the project was empty, or true
+    // by plain coincidence otherwise -- the crop is placed at the offset
+    // it actually held in that source. Any other canvas size falls back
+    // to the ordinary cascade-centred placement, unchanged.
+    const matchesSource = sceneStore.width === session.width && sceneStore.height === session.height;
+    const placement = matchesSource
+      ? { x: bounds.x, y: bounds.y, kind: 'auto' }
+      : { ...nextPlacement(bounds.width, bounds.height), kind: 'manual' };
+
     created = partsStore.add(new Part({
       name,
       image: null,
@@ -545,12 +614,13 @@ function saveExtraction() {
       x: placement.x,
       y: placement.y,
       scale: 1,
-      placement: 'manual',
+      placement: placement.kind,
     }));
     partsStore.select(created.id);
   });
 
   session.savedCount += 1;
+  eraseExtractedFromWorkingCopy(session.fillMask);
   // A finished piece is spoken for; the next one starts from a blank
   // boundary on the SAME source image rather than one drawn half over it.
   session.boundary.clear();
@@ -621,6 +691,16 @@ function onPointerUp(event) {
   session.pointers.delete(event.pointerId);
   if (session.pointers.size < 2) session.pinch = null;
   if (session.pointers.size === 0 && session.tool === 'boundary') endBoundaryStroke();
+}
+
+// The CURRENT working copy's own colour at one texel, for tests -- proving
+// a saved extraction's source pixels actually went transparent (and stayed
+// that way for the rest of the session) without needing to screenshot the
+// canvas and guess at colours from pixel art.
+export function clayerSourcePixelAt(u, v) {
+  if (!session) return null;
+  const index = (v * session.width + u) * 4;
+  return [session.pixels[index], session.pixels[index + 1], session.pixels[index + 2], session.pixels[index + 3]];
 }
 
 // Read-only window into the private session, for tests: the same reason
