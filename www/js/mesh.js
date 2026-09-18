@@ -505,17 +505,21 @@ export function pinInfluence(mesh, part) {
   // sampling smears a handful of texels across dozens of cells, and the
   // boundary reads as jagged pixels detaching from their neighbours.
   //
-  // Spreading the same total shear over several cells divides the stretch
-  // by the same factor, which brings even the 137-degree case back under
-  // what one cell handled at 30. The cost is the one the note below already
-  // names -- a slightly wider neighbourhood comes along with each pin --
-  // and it is bounded: never more than a quarter of the layer's smaller
-  // side, so a pin on a small layer cannot quietly hold all of it.
-  const PIN_BAND_CELLS = 3;
-  const radius = Math.min(
-    Math.max(1, Math.max(cellW, cellH) * PIN_BAND_CELLS),
-    Math.max(1, Math.min(width, height) / 4)
-  );
+  // Widening the band was tried and REVERTED, and the reason is worth
+  // keeping: spreading the shear over three cells does divide the stretch
+  // by three, but how much of the layer that holds depends entirely on the
+  // SHAPE of the pin. For a fat band it is a few percent. For a thin stripe
+  // -- a line traced along a silhouette edge, which is how pins actually
+  // get painted -- the stripe already touches a staircase of cells all the
+  // way across the layer, and widening its band took the held fraction from
+  // 30% to 73% of a 128x128 layer's vertices. That does not reduce shear,
+  // it relocates it: most of the layer goes rigid and everything still free
+  // shears against a much bigger held mass.
+  //
+  // So the band stays at one cell, which is what the mesh can actually
+  // express, and the real lever for a layer that needs finer pin control
+  // stays the one the note below names: raise Mesh density in Bind mode.
+  const radius = Math.max(1, Math.max(cellW, cellH));
 
   // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
   // what its vertices can express, and the vertices are cell corners -- so
