@@ -5350,6 +5350,56 @@ get wrong and invisible when you do: with it removed, a double tap adds
 first tap left. Both assertions were confirmed to fail against a build with
 that step disabled, rather than merely passing against the one that has it.
 
+## A tall modal was unreachable below the fold
+
+Reported directly from a phone: the Pierce painter's Enter/Dent/End points
+dialog is long enough (an explanation, three number fields, a 300px canvas
+diagram, a hint, Confirm and Cancel) that on a real phone it ran taller than
+the screen — and there was no way to scroll down to it. The Confirm button
+simply could not be reached.
+
+The cause was `.modal-backdrop` centring `.modal` with flex
+`align-items: center` while `.modal` itself had no `max-height` and the
+default `overflow-y: visible`. A flex container has no good answer for an
+item taller than itself under `align-items: center`: it overflows the item
+equally off *both* edges rather than pinning it to one, and with
+`overflow-y: visible` none of that overflow was scrollable — the top ran
+off above the viewport, the bottom (Confirm and Cancel included) ran off
+below it, and neither was reachable by any gesture. Confirmed by measuring
+it directly: a 1052px-tall modal in a 732px viewport, `top: -162px`,
+`overflowY: 'visible'`, and a wheel scroll leaving `scrollTop` at `0`.
+
+The fix is the same one `.info-popover` already used for an identical
+problem (documented in its own comment: "a long explanation measured
+1000px tall on an 844px-tall phone viewport and swallowed everything below
+it") — cap the box's own height to what the backdrop's padding leaves
+available, and scroll *inside* it:
+
+```css
+.modal {
+  max-height: calc(100vh - 48px); /* the backdrop's 24px padding, top + bottom */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+```
+
+Capping the height keeps `.modal` within the flex container's bounds, so
+it is never asked to overflow-and-centre in the first place — the
+centring bug and the missing scrollbar were really one problem, not two.
+
+This is shared by all 24 of the app's `.modal-backdrop` dialogs, not just
+Pierce's, so it was verified against every one of them directly (bypassing
+whatever click-flow normally reaches each): at a small 360×600 phone
+viewport, every modal's box fits the viewport and, wherever its content is
+taller than the box, `overflow-y: auto` makes the rest reachable. The
+corner flower flourishes (`.modal::after`/`::before`) sit at a positive
+inset — 4px in from each edge — so they were never at risk of being clipped
+by the new `overflow-y`; only content genuinely outside the box could be.
+
+Also: `tests/contour.mjs` and `tests/settings.mjs`, added in the Settings
+chapter above, had never been wired into `npm test` — fixed alongside this,
+so the full headless suite (`npm test`) now runs all six files.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

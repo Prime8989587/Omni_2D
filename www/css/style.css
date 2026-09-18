@@ -1401,6 +1401,20 @@ button, input, select {
 .modal {
   width: 100%;
   max-width: 360px;
+  /* However tall a modal's content runs -- a long explanation, a diagram,
+     several input rows, all at once -- the box itself never exceeds the
+     screen. .modal-backdrop centres it with flex align-items: center,
+     which has no answer for an overflowing item: the browser overflows it
+     equally off BOTH edges, and because overflow-y here used to be the
+     default `visible`, none of it was reachable by scrolling either --
+     the bottom of a tall modal (its Done button included) was simply gone.
+     Capping the height to what the backdrop's own padding leaves available
+     and scrolling internally, the same fix .info-popover already uses
+     below, keeps the modal within the flex container's bounds so it is
+     never asked to overflow-and-centre in the first place. */
+  max-height: calc(100vh - 48px); /* 48px = the backdrop's 24px padding, top + bottom */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--color-surface);
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip-lg);
