@@ -761,6 +761,34 @@
         </div>
 
         <div class="px-pin__row-label">
+          <span>Color</span>
+          <button class="info-btn" type="button" data-info="pcreate-color" aria-haspopup="true" aria-expanded="false" aria-label="How does the color picker work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="pcreate-color-row">
+          <canvas id="pcreateWheelCanvas" class="pcreate-wheel" width="200" height="200"></canvas>
+          <div class="pcreate-color-controls">
+            <div id="pcreateSwatch" class="pcreate-swatch pcreate-swatch--preview"></div>
+            <label class="slider-field">
+              <span>Value <b id="pcreateValueLabel">100%</b></span>
+              <input id="pcreateValueSlider" class="slider" type="range" min="0" max="100" step="1" value="100" />
+            </label>
+            <label class="field-label" for="pcreateHexInput">Hex</label>
+            <input id="pcreateHexInput" class="text-input text-input--inline" type="text" maxlength="7" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="px-pin__row-label">
+          <span>Palette</span>
+          <button class="info-btn" type="button" data-info="pcreate-palette" aria-haspopup="true" aria-expanded="false" aria-label="How do saved palettes work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="pcreate-palette-row">
+          <span id="pcreateLoadedPaletteName" class="pcreate-palette-name">No palette loaded</span>
+          <button id="pcreateSaveColorBtn" class="btn btn--sm" type="button">Save to Palette</button>
+          <button id="pcreatePalettesBtn" class="btn btn--sm" type="button">Palettes…</button>
+        </div>
+        <div id="pcreateSwatchStrip" class="pcreate-swatch-strip"></div>
+
+        <div class="px-pin__row-label">
           <span>Shadow</span>
           <button class="info-btn" type="button" data-info="pcreate-shadow" aria-haspopup="true" aria-expanded="false" aria-label="How does the shadow generator work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
         </div>
@@ -794,34 +822,6 @@
         <div class="pcreate-action-row">
           <button id="pcreateRotateFreeBtn" class="btn btn--sm" type="button">Rotate by angle</button>
         </div>
-
-        <div class="px-pin__row-label">
-          <span>Color</span>
-          <button class="info-btn" type="button" data-info="pcreate-color" aria-haspopup="true" aria-expanded="false" aria-label="How does the color picker work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
-        </div>
-        <div class="pcreate-color-row">
-          <canvas id="pcreateWheelCanvas" class="pcreate-wheel" width="200" height="200"></canvas>
-          <div class="pcreate-color-controls">
-            <div id="pcreateSwatch" class="pcreate-swatch pcreate-swatch--preview"></div>
-            <label class="slider-field">
-              <span>Value <b id="pcreateValueLabel">100%</b></span>
-              <input id="pcreateValueSlider" class="slider" type="range" min="0" max="100" step="1" value="100" />
-            </label>
-            <label class="field-label" for="pcreateHexInput">Hex</label>
-            <input id="pcreateHexInput" class="text-input text-input--inline" type="text" maxlength="7" autocomplete="off" spellcheck="false" />
-          </div>
-        </div>
-
-        <div class="px-pin__row-label">
-          <span>Palette</span>
-          <button class="info-btn" type="button" data-info="pcreate-palette" aria-haspopup="true" aria-expanded="false" aria-label="How do saved palettes work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
-        </div>
-        <div class="pcreate-palette-row">
-          <span id="pcreateLoadedPaletteName" class="pcreate-palette-name">No palette loaded</span>
-          <button id="pcreateSaveColorBtn" class="btn btn--sm" type="button">Save to Palette</button>
-          <button id="pcreatePalettesBtn" class="btn btn--sm" type="button">Palettes…</button>
-        </div>
-        <div id="pcreateSwatchStrip" class="pcreate-swatch-strip"></div>
 
         <div class="px-pin__row-label">
           <span>Editing an imported image</span>

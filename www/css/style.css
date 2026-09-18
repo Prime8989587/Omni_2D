@@ -972,6 +972,35 @@ button, input, select {
   padding: 4px;
 }
 
+/* ---------- PCreate window layout ----------
+   Every other .px-pin window (Px Pin, the Pierce painter, CLayer) has a
+   footer a few rows tall, so the shared rule -- canvas flex: 1 1 auto with
+   min-height: 0, footer whatever height it wants -- works fine for them.
+
+   PCreate's footer is not a few rows tall. Nine tools, contextual options,
+   a shadow compass, two sliders, a colour wheel, a palette strip and the
+   save button add up to well over a phone screen on their own, and against
+   an unconstrained footer that shared rule collapses the canvas to nothing
+   (a 0% zoom readout and no drawing surface at all) AND clips everything
+   past the fold, putting the colour wheel and Save as Layer out of reach
+   entirely.
+
+   So, scoped to this window only rather than disturbing three windows that
+   are already correct: the canvas keeps a guaranteed share of the screen
+   and the footer takes what is left and SCROLLS. */
+
+#pcreateWindow .px-pin__canvas {
+  flex: 1 1 auto;
+  min-height: 45vh;
+}
+
+#pcreateWindow .px-pin__controls {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain; /* don't scroll the app underneath at the ends */
+}
+
 /* ---------- PCreate drawing tools ----------
    Nine tools is more than a segmented control can hold on a phone without
    each one becoming an unreadable sliver, so the strip wraps instead and

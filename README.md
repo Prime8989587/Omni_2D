@@ -4521,6 +4521,45 @@ pointer events, reading the canvas's own pixels back afterwards:
 - **The save path still works.** The painted canvas lands in the project as
   a real 48×48 Scene Parts layer under its typed name.
 
+### The footer ate the canvas, and desktop-sized testing missed it
+
+Shipped broken, found on a real phone: **there was no canvas.** The window
+opened with the tool strip directly under the title bar, a `0%` zoom
+readout, and nothing to draw on.
+
+Every other `.px-pin` window has a footer a few rows tall, so the shared
+rule — canvas `flex: 1 1 auto` with `min-height: 0`, footer whatever height
+it wants — works fine for them. PCreate's footer is not a few rows tall.
+Nine tools, contextual options, a shadow compass, two sliders, a colour
+wheel, a palette strip and the save button come to well over a phone screen
+on their own, and against an unconstrained footer that `min-height: 0` did
+exactly what it says: let the canvas shrink to zero.
+
+The second half was worse and less obvious. With no scrolling on the
+footer, everything past the fold was simply **clipped and unreachable** —
+the colour wheel, the palette, and Save as Layer could not be tapped at
+all. The window was not merely cramped, it was unusable.
+
+The fix is scoped to this window rather than disturbing three that are
+already correct: the canvas keeps `min-height: 45vh`, and the footer takes
+what is left with `overflow-y: auto`. The footer was also reordered so the
+constantly-used rows (Tool, Color, Palette) come before the occasional ones
+(Shadow, Transform, Edit mode, Save), which matters a great deal once the
+footer is something you scroll.
+
+**Why the existing tests did not catch it.** The drawing-tools verification
+ran at a 900×1400 viewport, where there was still room for both. A desktop
+window is not a phone, and the whole point of this app is that it runs on
+one. There is now a separate pass (`browser_phone.mjs`, 33 checks) that
+runs PCreate at **412×915, 390×844 and 360×640** and asserts, at each: the
+canvas has a real drawing area, the zoom fit is not 0%, the canvas sits
+fully inside the screen, a footer taller than its space is scrollable
+rather than clipped, each of the colour wheel / palette / Add Shadow /
+transform buttons / Save as Layer can actually be scrolled to and tapped,
+and a drag across eleven pixels still paints exactly eleven. At 412×915 the
+canvas comes out 390×380 css px at 579% zoom; at the cramped 360×640 it is
+still 360×288 at 405%.
+
 ### What this deliberately does not have
 
 **There is no undo inside PCreate.** The app's `history.js` covers the
