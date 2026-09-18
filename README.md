@@ -3981,6 +3981,269 @@ Depth and Width set on the two sliders — and dragging the piercer in reaches
 around the tip exactly where the wedge is cut, and the painted rim bunching
 outward around it.
 
+## PCreate: a dedicated window for painting a layer from scratch
+
+A second new-window tool, reached from the same app menu as CLayer (**PCreate:
+New…**). Where CLayer *extracts* a piece from an existing picture by tracing
+around it, PCreate is where a layer gets **made** — starting from a blank
+canvas or an imported PNG, with a full colour-picking and palette system.
+This chapter covers only the foundation shipped so far: the window itself,
+getting artwork into it, colour, palettes, and a proven save path. No brush,
+shapes, or any other drawing tool exists yet — those are deliberately a
+separate, later piece of work, built on top of what's described here.
+
+### Why another dedicated window, not a mode on the main canvas
+
+Same reasoning as CLayer, restated because it applies just as directly here:
+PCreate's canvas is not necessarily anything in the current project — a
+blank canvas at any size the artist types, or any PNG picked fresh — so it
+cannot be a mode layered onto `view.js`'s shared camera, which only ever
+looks at Scene Parts. PCreate owns its own `{zoom, panX, panY}` camera,
+entirely private to its session object, non-destructive by construction:
+there is no code path from moving that camera to touching a pixel. The same
+rule Px Pin, the Pierce painter, and CLayer already follow.
+
+**The checkerboard grid is ported, not shared.** `canvas.js`'s
+`checkerPattern()`/`drawGrid()` read the main scene's shared camera; PCreate
+needs the identical always-visible, zoom-scaled pattern but against its own
+private one. Rather than refactor `canvas.js` to export internals two more
+call sites would need to thread a camera through, PCreate carries its own
+copy of the algorithm — a 2×2-cell tile rebuilt only when zoom changes,
+floored to one device pixel once a cell would fall below screen resolution
+(the same moiré-aliasing fix `canvas.js` already needed). Every other
+per-window tool in this app (Px Pin, Pierce, CLayer) already duplicates
+rather than shares its rendering pipeline for the same reason: keeping each
+tool's window fully self-contained has repeatedly turned out cheaper than
+threading one more camera through code that was never written to take one.
+
+### Getting in: blank canvas or Import
+
+**Blank canvas** reuses the exact width/height input pattern the main
+project's own canvas-size dialog uses, including the **Mirror** toggle for a
+square canvas (type the width, the height field copies it live). It's typed
+into PCreate's own `pcreateWidthInput`/`pcreateHeightInput` fields and never
+touches `sceneStore` — creating a blank canvas here has no effect whatsoever
+on the current project's own canvas size until something is explicitly saved
+back into it. The result is a plain `Uint8ClampedArray(width * height * 4)`,
+every byte zero: fully transparent, not merely "empty-looking."
+
+**Import** reuses the same decode-only pattern CLayer's own picker uses —
+and, same as CLayer, this is deliberately **not** the app's shared
+`#fileInput`, which would hand the pick straight to `partsStore`. PCreate has
+its own `pcreateFileInput`, decodes the PNG once through the same
+`loadImage`/`readPixels` helpers Import and CLayer both already use, and
+revokes the `objectUrl` immediately. From that moment there is no live
+object anywhere else in the app whose data this could ever be said to be
+editing "in place" — worth stating plainly, because it's the entire reason
+the next setting is currently inert (see below).
+
+Both paths land in the same `startSession({kind, width, height, pixels,
+bitmap})`, which sizes the canvas, fits the camera to the window, and draws
+everything for the first time.
+
+### The destructive-vs-copy setting — and why it defaults to the SAFER option
+
+A toggle in PCreate's own footer ("Edit the original directly" / "Always
+edit a copy"), persisted via the same small-boolean `localStorage` pattern
+already used for Pierce's overlay and tip-seen flags
+(`omni2d.pcreate.editInPlace`).
+
+**It defaults to OFF — always edit a copy — the safer option, and stays
+that way unless the artist explicitly turns it on.** The reasoning: nothing
+about entering PCreate is ever reversible for free. A blank canvas has
+nothing to protect, but an imported picture is decoded once into PCreate's
+own buffer with no path back to the original file — if a future drawing
+tool painted destructively over that buffer by default, there would be
+*no* undo path back to the picture the artist actually imported, only
+whatever `history.js` happened to still have queued. Defaulting to "always
+copy" costs nothing when there's nothing yet to protect (this task ships no
+drawing tools) and prevents exactly that irreversible mistake once there is
+something to protect. Flipping it to "edit in place" is a deliberate,
+visible opt-in, not an accident waiting to happen.
+
+**Built now, honestly inert today.** In *this* task, neither entry path can
+actually alias a live Part's pixels: a blank canvas starts from nothing, and
+Import always decodes a fresh, independent buffer (see above) — so there is
+currently no code path where the setting's value changes anything that
+happens on screen. It's built, persisted, and wired anyway because the task
+asked for it explicitly, and because it exists for a near-future capability
+this foundation is meant to support: editing an *existing* Scene Parts layer
+directly inside PCreate, where "the original" would mean something real for
+the first time. `info.js`'s explanation for it says exactly this, rather
+than overclaiming a behaviour that doesn't exist yet.
+
+### The colour wheel, the Value slider, and the hex field — three views of one colour
+
+A standard HSV wheel: hue around the angle, saturation by distance from
+centre, drawn once as a 200×200 `ImageData` bitmap (`hsvToRgb` per pixel,
+always at full Value so the wheel itself stays legible) and cached — it
+never has to be rebuilt after the first paint. A separate Value slider
+darkens or lightens whatever the wheel picked, and a hex field accepts
+direct typed input. All three write into the same `session.hsv = {h, s, v}`,
+and a single function, `renderColorControls()`, is the one place all three
+are kept in sync — called after any of them changes, so the other two are
+never left showing a stale value.
+
+**One deliberate exception:** the hex field is skipped by that sync whenever
+it currently has focus, so live-typing `#a0a0a0` doesn't get overwritten
+mid-keystroke by its own incomplete value being parsed and reformatted.
+`hexToRgb()` itself follows the same principle at the parsing level —
+`#f`, `#fa`, `#fa05` and similar partial strings all return `null` rather
+than guessing, so a field being typed into never flashes through wrong
+intermediate colours.
+
+The colour math (`www/js/color.js`) is pure — no DOM, no canvas — specifically
+so it could be verified directly rather than only by eye: `tests/color.mjs`
+(27 checks) confirms `hsvToRgb`/`rgbToHsv` round-trip within 1 unit per
+channel at nine named reference colours, across every 5° of hue at full
+saturation/value, and across a saturation/value grid at an odd, unaligned
+hue; that hue wraps correctly at the 360°/0° seam including negative input;
+and that hex parsing accepts `#rgb`/`#rrggbb` in any case with or without
+the leading `#`, rejects every incomplete string, and round-trips exactly
+for all nine reference colours.
+
+### Palettes: named, multiple, global, persistent
+
+**Save to Palette** writes the current colour (as a hex string) into
+whichever palette is currently loaded. Palettes are user-named through the
+same text-input naming pattern used throughout the app (CLayer's save
+prompt, PSaver's export dialog), support any number of distinct named
+palettes, and a management view (**Palettes…**) lists them the same way the
+Open Project list already does — `.project-list`/`.project-row` reused
+as-is — each with **Load**, a small pencil icon-button to **rename**, and a
+small trash icon-button to **delete**, gated behind the app's existing
+delete-confirmation pattern (a modal naming the palette and its colour
+count, Delete/Cancel).
+
+**Individual colours can be added or removed without touching the whole
+palette.** The loaded palette renders as a swatch strip; each swatch carries
+its own small `×` button that removes just that one colour, both on screen
+and in storage — added after an initial pass where the removal function
+existed but nothing in the UI actually called it, caught and fixed before
+this shipped.
+
+**Global, not project-scoped, and durable across sessions —** the same
+distinction the app already draws for named projects vs. the palette data
+now sitting alongside them. `storage.js` gained a new IndexedDB object
+store, `palettes` (bumping `DB_VERSION` to 2; the existing "create only if
+not already there" guards in `onupgradeneeded` make this safe for a database
+that already has projects and recovery data in it), keyed by palette name,
+with the same CRUD shape as the existing `PROJECTS` store — `savePalette`,
+`loadPalette`, `deletePalette`, `listPalettes`. This is a genuinely separate
+store from any project's own data: closing a project, discarding it, or
+never having created one at all has no bearing on whether a palette built in
+PCreate is still there next time.
+
+**Renaming a palette has no atomic op in IndexedDB, so it's done as a write
+then a delete** — the new name is saved first, and only once that succeeds
+does the old name get removed. A crash between the two leaves the data
+sitting under one name or the other, never lost outright.
+
+### Save as Layer: the real save path, ready for the next task's tools
+
+Even with no drawing tools yet, PCreate needed a *proven*, working way to
+turn its canvas into a real Scene Parts layer — so the following task's
+brush and shape tools have something solid to build onto rather than
+inventing their own save path later. **Save as Layer** reuses, rather than
+reinvents, the exact placement rule the CLayer upgrade already proved out:
+
+```
+wasEmpty = partsStore.isEmpty          // read FRESH, every single save
+if (wasEmpty) sceneStore.setSize(width, height)
+
+matchesCanvas = sceneStore.width === width && sceneStore.height === height
+placement = matchesCanvas ? { x: 0, y: 0 } : nextPlacement()   // cascade fallback
+```
+
+**One deliberate difference from CLayer:** no cropping. CLayer crops to the
+tight bounding box of whatever the fill produced, because its source is
+often much larger than the piece being pulled out of it. PCreate's canvas,
+by contrast, typically *is* the artwork's whole intended size from the
+moment it was created or imported — there is no larger source to crop away
+from, so the full canvas is saved exactly as it stands.
+
+Both the resize and the new `Part` are folded into a single `history.run(...)`
+call, so undoing a PCreate save reverts a canvas resize along with it, as one
+step — the same behaviour CLayer's save already has, for the same reason.
+
+### Two bugs, found by the verification pass itself
+
+**The wheel tried to paint itself before it existed.** `startSession()`
+called `renderColorControls()` — which repaints the colour wheel's selection
+marker via `paintWheel()` — before ever calling `drawWheel()`, the function
+that actually builds the cached 200×200 wheel bitmap on first use. The very
+first time PCreate opened in a session, `paintWheel()`'s own
+`ctx.drawImage(wheelBitmap, 0, 0)` ran against `wheelBitmap === null` and
+threw. Fixed by reordering `startSession()` so `drawWheel()` runs first;
+every call after that first one is free, since the bitmap is cached at
+module scope for the rest of the session. Caught immediately by the browser
+verification script's `pageerror` listener rather than by anything visible
+on screen — Chromium doesn't stop rendering a frame just because one
+`drawImage` call inside it threw, so this would have shipped silently
+broken (a wheel with no live selection marker on first open) without a
+listener specifically watching for uncaught exceptions.
+
+**A modal opened from within PCreate's own window was unclickable —** the
+identical bug class CLayer's own naming modal already hit once. `pcreateLayerNameModal`,
+`pcreatePaletteModal`, `pcreateNameModal` and `pcreateDeleteModal` are all
+opened *from within* the already-open PCreate window, not over the plain
+canvas like `pcreateEntryModal`/`pcreateSizeModal` are — so `.modal-backdrop`'s
+`z-index: 50` left their buttons sitting underneath the window's own
+`z-index: 55`, silently eating every tap meant for them. Fixed the same way
+CLayer's was: those four now get their own `z-index: 65`, matching
+`#clayerNameModal`'s existing rule.
+
+### Verified end to end
+
+`tests/color.mjs` (27 checks) verifies the colour math in isolation, as
+described above. A full Playwright run against the real window in a real
+browser (27 checks) then drove every numbered requirement and every item on
+the explicit verification list:
+
+- **Blank canvas entry**, custom **37×37** dimensions, Mirror toggled on
+  first and confirmed to copy the typed width into the height field live
+  before the canvas was even created; the resulting canvas opened at exactly
+  37×37, every pixel confirmed fully transparent (`alpha=0`).
+- **Non-destructive camera**, on that same blank canvas: a two-finger pinch
+  zoomed (`15.71 → 47.14`) and a one-finger drag panned (`panX -422.1 →
+  -382.1`) — and a pixel sampled before and after both gestures came back
+  byte-for-byte identical (`rgba(0,0,0,0)` both times), with the canvas's own
+  reported dimensions unchanged at 37×37.
+- **Import entry**: a real two-colour PNG fixture, attached through the real
+  app menu and a real `filechooser` event. PCreate opened on it at its real
+  30×20 size with its real, unaltered pixels (`rgba(10,200,90,255)`)
+  present.
+- **Save as Layer into an empty project**: the main canvas resized from its
+  default to exactly **30×20** to match, and the new layer landed under its
+  typed name ("Imported Piece"), full canvas size, at the origin — the same
+  same-size placement rule CLayer proved.
+- **Two distinct, user-named palettes**, several colours each: "Skin Tones"
+  built from three colours picked three different ways — a wheel tap, a
+  wheel tap followed by a Value-slider drag, and a typed hex value — and
+  confirmed to hold exactly those 3 colours including the hex-typed one
+  verbatim; a separate "Sky" palette built from two typed hex colours and
+  confirmed to be genuinely independent (its own 2 colours, not merged with
+  the first).
+- **Rename and per-colour removal**: "Sky" renamed to "Sky Blues" through
+  the real rename control, confirmed in storage to have replaced the old
+  name outright while keeping both its colours; one colour removed from
+  "Skin Tones" via its swatch's own `×` button, confirmed to drop the strip
+  from 3 swatches to 2 and to be written through to storage, not just the
+  visible strip.
+- **Persistence across a genuine reload**: a fresh page loaded in the same
+  browser context (the same thing closing and reopening the app means for a
+  real profile, since IndexedDB and `localStorage` belong to the profile,
+  not the page) — both palettes present with their exact post-edit colour
+  counts intact, and the destructive-vs-copy toggle (flipped on earlier in
+  the run, specifically to prove it persists too) still reading its flipped
+  value.
+- **The destructive-vs-copy setting's default** was checked directly on a
+  freshly opened session, before anything touched it: `editInPlace === false`
+  — confirming the safer "always copy" default described above.
+
+All 27 checks passed. `npm test` (65 checks across `dent.mjs`, `clayer.mjs`
+and the new `color.mjs`) stayed green throughout.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

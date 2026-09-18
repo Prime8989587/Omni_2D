@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "sync": "cap sync android",
-    "test": "node tests/dent.mjs && node tests/clayer.mjs"
+    "test": "node tests/dent.mjs && node tests/clayer.mjs && node tests/color.mjs"
   },
   "repository": {
     "type": "git",

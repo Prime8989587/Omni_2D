@@ -864,6 +864,105 @@ button, input, select {
   margin-bottom: 8px;
 }
 
+/* ---------- PCreate: colour wheel and palette strip ---------- */
+
+.pcreate-color-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.pcreate-wheel {
+  border-radius: 50%;
+  touch-action: none;
+  flex: 0 0 auto;
+}
+
+.pcreate-color-controls {
+  flex: 1 1 160px;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pcreate-swatch {
+  border: 2px solid var(--color-accent);
+  clip-path: var(--pixel-clip);
+}
+
+.pcreate-swatch--preview {
+  width: 100%;
+  height: 36px;
+}
+
+.pcreate-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pcreate-palette-name {
+  flex: 1 1 auto;
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.55);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcreate-swatch-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px;
+}
+
+.pcreate-swatch-strip__entry {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.pcreate-swatch-strip__item {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  clip-path: var(--pixel-clip);
+  padding: 0;
+  cursor: pointer;
+}
+
+.pcreate-swatch-strip__item[aria-pressed="true"] {
+  border-color: var(--color-accent);
+}
+
+.pcreate-swatch-strip__remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
+  padding: 0;
+  border: 1px solid var(--color-accent);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pcreate-swatch-strip__empty {
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.55);
+  padding: 4px;
+}
+
 /* ---------- Pierce depth indicator ----------
    A scale bar from 0 to the deepest depth either point is set to, with
    the Enter and End marks on it and the contact band between them filled.
@@ -1006,6 +1105,16 @@ button, input, select {
    meant for Save/Cancel: found by the CLayer save flow hanging on a click
    that Playwright reported as landing on the canvas underneath instead. */
 #clayerNameModal {
+  z-index: 65;
+}
+
+/* Same reason: these four are all opened FROM WITHIN the already-open
+   PCreate window (z-index 55), which #pcreateEntryModal and
+   #pcreateSizeModal -- opened BEFORE that window exists -- never need. */
+#pcreateLayerNameModal,
+#pcreatePaletteModal,
+#pcreateNameModal,
+#pcreateDeleteModal {
   z-index: 65;
 }
 

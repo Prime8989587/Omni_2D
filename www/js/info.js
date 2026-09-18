@@ -119,6 +119,43 @@ const TOPICS = {
       'extracts exactly those pixels from the original picture -- nothing ' +
       'resampled, nothing outside the fill kept.',
   },
+  'pcreate-color': {
+    title: 'Colour picker',
+    body: 'The wheel picks a hue and how saturated it is -- drag anywhere ' +
+      'on it, the centre is white, the rim is the fully saturated colour ' +
+      'at that angle.\n\n' +
+      'The wheel itself is always shown at full brightness; the separate ' +
+      '**Value** slider is what actually darkens or lightens the colour ' +
+      'you end up with, all the way to black at 0%.\n\n' +
+      'The hex field is the same colour a third way -- type a value there ' +
+      'and the wheel and slider both jump to match it, exactly as typing ' +
+      'a swatch does.',
+  },
+  'pcreate-palette': {
+    title: 'Palettes',
+    body: 'A palette is a named list of saved colours, kept on this ' +
+      'device across every project and every PCreate session -- not part ' +
+      'of any one piece of artwork.\n\n' +
+      '**Save to Palette** adds the colour currently picked to whichever ' +
+      'palette is loaded. **Palettes…** opens the full list: load a ' +
+      'different one, create a new one, rename or delete any of them.\n\n' +
+      'Tap a saved swatch to pick that colour again; the small × on a ' +
+      'swatch removes it from the palette permanently.',
+  },
+  'pcreate-edit-mode': {
+    title: 'Editing an imported image',
+    body: 'Off (the default) -- PCreate always works on its own copy of ' +
+      'whatever you brought in, never anything else’s data.\n\n' +
+      'On -- a future PCreate feature that opens an existing layer for ' +
+      'touch-ups will edit that layer’s own pixels directly instead of ' +
+      'a copy, the moment you make a change, with no separate save step.\n\n' +
+      'Nothing in PCreate today can actually alias another layer’s data ' +
+      'either way -- an imported picture is always freshly decoded, and a ' +
+      'blank canvas starts empty -- so this has no visible effect until ' +
+      'that feature exists. It is here now so the setting is already ' +
+      'working, persisted, and asking the right question by the time it ' +
+      'does.',
+  },
   'joint-type': {
     title: 'Follows parent',
     body: '• Rigid -- turns with its parent instantly, like a normal ' +

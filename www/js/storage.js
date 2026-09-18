@@ -6,11 +6,15 @@
 // large layer can exhaust. IndexedDB stores the typed arrays directly via
 // structured clone and its quota is orders of magnitude larger.
 //
-// Two stores: named projects the user saves deliberately, and a single
-// recovery slot the app writes to on its own.
+// Three stores: named projects the user saves deliberately, a single
+// recovery slot the app writes to on its own, and named colour palettes.
 
 const DB_NAME = 'omni2d';
-const DB_VERSION = 1;
+// Bumped for the palettes store. onupgradeneeded below already guards
+// every store's creation with "if not already there", so this runs
+// harmlessly for a database that already has projects/recovery in it --
+// only the new store actually gets created.
+const DB_VERSION = 2;
 const PROJECTS = 'projects';
 const RECOVERY = 'recovery';
 const RECOVERY_KEY = 'autosave';
@@ -18,6 +22,14 @@ const RECOVERY_KEY = 'autosave';
 // beside the auto-save rather than among the named projects: it is not a
 // project you open, it is an undo rope for the current one.
 const RESTORE_KEY = 'restore-point';
+
+// PCreate's saved colour palettes. APP-LEVEL, not project-level -- a
+// palette is a picking convenience the artist builds up once and expects
+// to have available across every piece of PCreate work afterward, the same
+// way the OS-level colour swatches in a paint program outlive any one
+// document. So this is its own store, keyed by palette name, entirely
+// separate from the PROJECTS store a project's own save/load walks.
+const PALETTES = 'palettes';
 
 let dbPromise = null;
 
@@ -33,6 +45,7 @@ function openDb() {
       const db = request.result;
       if (!db.objectStoreNames.contains(PROJECTS)) db.createObjectStore(PROJECTS, { keyPath: 'name' });
       if (!db.objectStoreNames.contains(RECOVERY)) db.createObjectStore(RECOVERY, { keyPath: 'key' });
+      if (!db.objectStoreNames.contains(PALETTES)) db.createObjectStore(PALETTES, { keyPath: 'name' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('Could not open the project database'));
@@ -110,6 +123,41 @@ export function clearRecovery() {
     store.delete(RECOVERY_KEY);
     return true;
   });
+}
+
+// ---------------------------------------------------------------------------
+// PCreate palettes
+//
+// Same shape as the PROJECTS functions above -- a palette is exactly as
+// durable as a saved project, put away and read back the same way, just in
+// its own store so listing palettes never has to filter a project list.
+
+export function savePalette(name, colors) {
+  const record = { name, savedAt: Date.now(), colors };
+  return runTransaction(PALETTES, 'readwrite', (store) => {
+    store.put(record);
+    return record;
+  });
+}
+
+export function loadPalette(name) {
+  return runTransaction(PALETTES, 'readonly', (store) => wrap(store.get(name)));
+}
+
+export function deletePalette(name) {
+  return runTransaction(PALETTES, 'readwrite', (store) => {
+    store.delete(name);
+    return true;
+  });
+}
+
+// Every saved palette in full -- unlike listProjects, which withholds each
+// project's heavy pixel data, a palette is only ever a short list of colour
+// numbers, so there is nothing expensive to leave out.
+export function listPalettes() {
+  return runTransaction(PALETTES, 'readonly', (store) => wrap(store.getAll())).then((records) =>
+    (records || []).sort((a, b) => a.name.localeCompare(b.name))
+  );
 }
 
 export function saveRestorePoint(data, label = null) {

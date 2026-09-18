@@ -29,6 +29,8 @@
         <button id="psaverImportBtn" class="app-menu__item" type="button">PSaver: Import…</button>
         <p class="app-menu__group">CLayer — extract a layer by hand</p>
         <button id="clayerOpenBtn" class="app-menu__item" type="button">CLayer: New extraction…</button>
+        <p class="app-menu__group">PCreate — paint a layer from scratch</p>
+        <button id="pcreateOpenBtn" class="app-menu__item" type="button">PCreate: New…</button>
         <p class="app-menu__group">Saved state</p>
         <button id="stateSaveBtn" class="app-menu__item" type="button">Save state</button>
         <button id="stateReverseBtn" class="app-menu__item" type="button">Reverse</button>
@@ -64,6 +66,10 @@
       different consequence.
     -->
     <input id="clayerFileInput" class="visually-hidden" type="file" accept="image/png,.png" />
+    <!-- PCreate's own picker, for the same reason CLayer's is separate
+         from #fileInput: picking a file here must not hand it straight to
+         partsStore -- PCreate works on it in its own window first. -->
+    <input id="pcreateFileInput" class="visually-hidden" type="file" accept="image/png,.png" />
 
     <footer class="controls">
       <div id="scenePanel" class="scene-panel" hidden>
@@ -678,6 +684,143 @@
         <div class="modal__actions">
           <button id="clayerNameConfirmBtn" class="btn btn--flourish" type="button">Save</button>
           <button id="clayerNameCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== PCreate ==================== -->
+
+    <div id="pcreateEntryModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateEntryTitle">
+        <h2 id="pcreateEntryTitle" class="modal__title">PCreate</h2>
+        <p class="modal__text">Paint a new layer from scratch, or bring in an existing picture to work on.</p>
+        <div class="modal__actions modal__actions--stack">
+          <button id="pcreateBlankBtn" class="btn btn--flourish" type="button">Blank canvas…</button>
+          <button id="pcreateImportBtn" class="btn" type="button">Import…</button>
+          <button id="pcreateEntryCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pcreateSizeModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateSizeTitle">
+        <h2 id="pcreateSizeTitle" class="modal__title">New canvas</h2>
+        <p class="modal__text">In pixels — every grid cell is one pixel. Each side can be 8 to 3072.</p>
+        <div id="pcreateSizePresets" class="preset-grid"></div>
+        <div class="bind-row">
+          <label class="slider-field">
+            <span>Width</span>
+            <input id="pcreateWidthInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
+          </label>
+          <label class="slider-field">
+            <span>Height</span>
+            <input id="pcreateHeightInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
+          </label>
+        </div>
+        <button id="pcreateMirrorToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">⇄ Mirror: Off</button>
+        <div class="modal__actions">
+          <button id="pcreateSizeCreateBtn" class="btn btn--flourish" type="button">Create</button>
+          <button id="pcreateSizeCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pcreateWindow" class="px-pin" hidden>
+      <header class="px-pin__bar">
+        <span class="px-pin__title">PCreate — <b id="pcreateCanvasLabel"></b></span>
+        <span id="pcreateStatus" class="px-pin__status"></span>
+        <button id="pcreateDoneBtn" class="btn btn--sm" type="button">Done</button>
+      </header>
+      <canvas id="pcreateCanvas" class="px-pin__canvas"></canvas>
+      <footer class="px-pin__controls">
+        <div class="px-pin__row-label">
+          <span>Color</span>
+          <button class="info-btn" type="button" data-info="pcreate-color" aria-haspopup="true" aria-expanded="false" aria-label="How does the color picker work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="pcreate-color-row">
+          <canvas id="pcreateWheelCanvas" class="pcreate-wheel" width="200" height="200"></canvas>
+          <div class="pcreate-color-controls">
+            <div id="pcreateSwatch" class="pcreate-swatch pcreate-swatch--preview"></div>
+            <label class="slider-field">
+              <span>Value <b id="pcreateValueLabel">100%</b></span>
+              <input id="pcreateValueSlider" class="slider" type="range" min="0" max="100" step="1" value="100" />
+            </label>
+            <label class="field-label" for="pcreateHexInput">Hex</label>
+            <input id="pcreateHexInput" class="text-input text-input--inline" type="text" maxlength="7" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="px-pin__row-label">
+          <span>Palette</span>
+          <button class="info-btn" type="button" data-info="pcreate-palette" aria-haspopup="true" aria-expanded="false" aria-label="How do saved palettes work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="pcreate-palette-row">
+          <span id="pcreateLoadedPaletteName" class="pcreate-palette-name">No palette loaded</span>
+          <button id="pcreateSaveColorBtn" class="btn btn--sm" type="button">Save to Palette</button>
+          <button id="pcreatePalettesBtn" class="btn btn--sm" type="button">Palettes…</button>
+        </div>
+        <div id="pcreateSwatchStrip" class="pcreate-swatch-strip"></div>
+
+        <div class="px-pin__row-label">
+          <span>Editing an imported image</span>
+          <button class="info-btn" type="button" data-info="pcreate-edit-mode" aria-haspopup="true" aria-expanded="false" aria-label="What does this setting do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <button id="pcreateEditModeToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Always edit a copy</button>
+
+        <div class="modal__actions">
+          <button id="pcreateSaveLayerBtn" class="btn btn--flourish" type="button">Save as Layer</button>
+        </div>
+        <p class="px-pin__hint">Drag one finger or pinch with two to pan and zoom — nothing here can be drawn on yet.</p>
+      </footer>
+    </div>
+
+    <div id="pcreatePaletteModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreatePaletteTitle">
+        <h2 id="pcreatePaletteTitle" class="modal__title">Palettes</h2>
+        <p id="pcreatePaletteEmpty" class="modal__text" hidden>No saved palettes yet.</p>
+        <ul id="pcreatePaletteList" class="project-list"></ul>
+        <div class="modal__actions">
+          <button id="pcreateNewPaletteBtn" class="btn btn--flourish" type="button">+ New Palette…</button>
+          <button id="pcreatePaletteDoneBtn" class="btn btn--cancel" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pcreateNameModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateNameTitle">
+        <h2 id="pcreateNameTitle" class="modal__title">Name this palette</h2>
+        <label for="pcreateNameInput" class="field-label">Name</label>
+        <input id="pcreateNameInput" class="text-input" type="text" placeholder="Skin tones" autocomplete="off" />
+        <div class="modal__actions">
+          <button id="pcreateNameConfirmBtn" class="btn btn--flourish" type="button">Save</button>
+          <button id="pcreateNameCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pcreateLayerNameModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateLayerNameTitle">
+        <h2 id="pcreateLayerNameTitle" class="modal__title">Save as Layer</h2>
+        <label for="pcreateLayerNameInput" class="field-label">Layer name</label>
+        <input id="pcreateLayerNameInput" class="text-input" type="text" placeholder="New layer" autocomplete="off" />
+        <p class="modal__text">
+          Adds the current PCreate canvas to this project's Scene Parts —
+          ready to drag, rig and bind like any other layer.
+        </p>
+        <div class="modal__actions">
+          <button id="pcreateLayerNameConfirmBtn" class="btn btn--flourish" type="button">Save</button>
+          <button id="pcreateLayerNameCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pcreateDeleteModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateDeleteTitle">
+        <h2 id="pcreateDeleteTitle" class="modal__title">Delete this palette?</h2>
+        <p id="pcreateDeleteMessage" class="modal__text"></p>
+        <div class="modal__actions">
+          <button id="pcreateDeleteConfirmBtn" class="btn btn--danger" type="button">Delete</button>
+          <button id="pcreateDeleteCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
         </div>
       </div>
     </div>
