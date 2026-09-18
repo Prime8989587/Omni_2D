@@ -4995,6 +4995,145 @@ Every earlier suite still passes through the new Home gate: 143 headless,
 27 foundation, 56 tools, 41 four-feature, 49 layer-system and 45
 phone-layout checks.
 
+## Six loose ends from the Home screen launch, and two real bugs found while closing them
+
+The Home screen shipped a top-level PCreate destination, but two seams from
+the old "PCreate lives inside Rig mode" world were left showing, and the
+16px pixel-multiple rule from the visual-identity pass hadn't reached
+everything it was meant to. Six fixes, tracked together because the first
+four are all "the Home redesign didn't fully replace what came before it":
+
+- **PCreate dropped from Rig mode's kebab menu.** It used to be reachable
+  two ways — Home's own button, and `#pcreateOpenBtn` inside `#appMenu` —
+  a leftover from before PCreate had a Home entry at all. The menu item and
+  its handler are gone; PCreate is reachable exactly one way now.
+- **A "◀ Back to Menu" button**, first in a new "Navigation" group at the
+  top of `#appMenu`, and a matching house-glyph icon button
+  (`#pcreateBackToMenuBtn`, `&#8962;`) in PCreate's own header bar. Both
+  call the same `returnHome()`. There was no way back to Home at all before
+  this — once past it, the only navigation was deeper in.
+- **The wordmark's two loops now share one fixed-size icon**, `.wordmark-oo`
+  at a flat `16px × 16px`, used identically by the topbar's `#logo` and the
+  Home screen's `<h1>` — previously the Home version drew its own loops at
+  12px/22px, a different size than nothing else in the app used. The
+  bounding box is exact: the large loop spans `x:[3,16] y:[0,13]`, the small
+  one `x:[0,6] y:[10,16]`, and their union is precisely `[0,16]×[0,16]`.
+- **Flower decorations pinned to the same fixed 16px box**, replacing what
+  had been a same-size-as-the-font `::before`/`::after` glyph with
+  asymmetric `top: 2px; left: 3px` corner offsets. Every flower selector —
+  button corners, panels, modals, the app menu, PCreate's colour row — now
+  declares an explicit `width: 16px; height: 16px; font-size: 16px;
+  line-height: 16px;` and sits at a symmetric `2px` inset on whichever
+  corner it occupies.
+
+### The wheel was blurry because it was never drawn at device resolution
+
+`#pcreateWheelCanvas` had static `width="200" height="200"` attributes and
+no DPR awareness at all — on any phone with `devicePixelRatio > 1` the
+browser was upscaling a 200×200 physical bitmap to fill a larger physical
+area, the same blur a small image gets stretched in an `<img>` tag. The fix
+follows the pattern the main PCreate canvas already established
+(`sizeCanvas()`/`render()` under `ctx.setTransform(dpr, 0, 0, dpr, 0, 0)`),
+but the wheel needed one thing the main canvas didn't: the **source**
+bitmap has to be built at native device resolution too, not just the
+destination. `wheelBitmap` — the offscreen canvas holding the actual HSV
+gradient, computed once per size via `createImageData` — is now sized to
+`Math.round(WHEEL_SIZE * dpr)` on each axis, so the final `drawImage` call
+copies it onto the dpr-scaled destination at genuinely 1:1 physical pixels,
+zero interpolation. Getting only the destination canvas right would have
+still upscaled a low-res source and looked identical to before.
+
+The wheel is deliberately **not** `image-rendering: pixelated` — it's a
+colour-picking gradient, not pixel-art content being created, and the one
+canvas in PCreate that should render smooth rather than hard-edged.
+
+### PCreate is a real sibling screen now, not a window inside `#app`
+
+The prompt's sixth item — PCreate should fully *navigate*, not overlay —
+turned out to already be half-built and half-broken. `#pcreateScreen` had
+been given its own `position: fixed; inset: 0` opaque background and its
+own place in the Home routing (`leaveHome(els.pcreateScreen, () =>
+openPCreate())`), which was the right idea. But the closing `</div>` for
+`#app` had been left at the very end of the file, *after* `#pcreateScreen`'s
+own markup — so despite looking like a sibling in the source, `#pcreateScreen`
+was actually a **descendant of `#app`** in the real DOM tree. `#app` stays
+`hidden` for the entire time a visitor is in PCreate, by design (there's
+nothing for the entry dialog to bleed through if the screen behind it is
+never shown) — which meant PCreate's own screen was hidden too, dragged
+down by its hidden ancestor, every single time.
+
+It didn't fail loudly. `pcreateScreen.hidden = false` still ran, still
+removed the attribute, and `getComputedStyle()` on the modal still reported
+`display: flex` — Chromium reports a property's own computed value
+regardless of what an ancestor's `display: none` does to the render tree,
+so nothing about inspecting the modal element in isolation looked wrong.
+The only visible symptom was a screenshot: a flat, empty `background:
+var(--color-bg)` rectangle, no dialog, no buttons, nothing — because the
+whole subtree simply never entered the render tree at all. `#app`'s
+closing tag now lands immediately after its last real child (the CLayer
+naming modal), and `#pcreateScreen` plus `#toast` are true top-level
+siblings of `#app`, exactly as the source already implied.
+
+### A toast could vanish seconds early — found chasing a flaky test, real in production too
+
+Re-running the regression suites after the DOM fix above turned up an
+unrelated, genuine bug: `PCreate → Save work`'s confirmation toast would
+sometimes disappear within a couple hundred milliseconds of appearing,
+instead of the 4.5 seconds `showToast()` promises. It reproduced 2 times
+out of 3, always at the same assertion, regardless of how long the test
+waited before checking — ruling out a simple timing race.
+
+A `MutationObserver` on the toast's `hidden` attribute, logged against
+`performance.now()`, named the cause: **`showToast()` in `pcreate.js`,
+`pxpin.js` and `clayer.js` never cancelled a previous pending hide-timer
+before scheduling a new one.** Call it five times in four seconds — a
+routine Undo/Redo/Save sequence — and you get five independent
+`setTimeout(..., 4500)` calls, each one blind to the other four. Whichever
+toast happens to be showing when the *first* one's timer fires gets hidden,
+regardless of whether that toast has anything to do with the message the
+timer was originally set for. `ui.js`'s own `showToast()` already had the
+fix (`clearTimeout(toastTimer)` before setting a new one); the other three
+copies of the same function, in three separate windows built at different
+times, didn't. All three now track their own `toastTimer` and clear it
+first — the same one-line fix `ui.js` already had, applied consistently.
+This wasn't something the six-item prompt asked for, but it's a real defect
+a normal fast workflow could hit in production, found by legitimate
+regression testing rather than introduced by anything above — worth fixing
+in the same pass rather than shipping around it.
+
+### Verified end to end, with screenshots
+
+A dedicated verification (`browser_sixfix.mjs`, run at **2x device pixel
+ratio** — a real phone — specifically so the wheel's backing-store check
+means something) confirms all six items directly, 10/10 checks:
+
+- Rig mode's kebab menu textContent contains no mention of PCreate, and
+  `#backToMenuBtn` is present and visible inside it.
+- Clicking it, from both Rig mode and from PCreate's own header button,
+  lands back on `#homeScreen` each time.
+- The topbar wordmark's `.wordmark-oo` box measures exactly `16×16`
+  (`getBoundingClientRect()`), `aria-label="oOmni2D"`, and a fetch of the
+  served `index.html` and `style.css` confirms **zero** remaining `∞` or
+  `&#8734;` occurrences anywhere.
+- `getComputedStyle(el, '::after')` on both `.px-pin__controls` and
+  `.modal` reports `width: 16px; height: 16px` for their flower glyphs.
+- The wheel canvas's backing store (`canvas.width`/`.height`) matches
+  `Math.round(cssSize * devicePixelRatio)` to within a pixel — at 2x DPR
+  that's a `400×400` physical bitmap behind a `200×200` CSS box, not the
+  static `200×200` it used to be regardless of screen density.
+- After `#homePcreateBtn`, `#app.hidden` and `#homeScreen.hidden` are both
+  still `true` while `#pcreateScreen.hidden` is `false` and the entry
+  dialog's `getBoundingClientRect()` fills the viewport — there is
+  nothing behind it, at the DOM level, for it to bleed through.
+
+Every existing suite was re-run after all of the above and is green: 78
+headless, 27 PCreate foundation, 56 tools, 41 four-feature (the toast fix
+took this from a 2-in-3 flake to three consecutive clean 41/41 runs), 49
+layer-system, 45 phone-layout and 35 Home-screen checks — the last of
+those updated for the new `.wordmark-oo__loop` class names and to unhide
+`#pcreateScreen` directly where it drives `openPCreate()` without going
+through Home's own routing.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

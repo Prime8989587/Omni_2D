@@ -212,6 +212,9 @@ button, input, select {
 }
 
 .logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--color-accent);
   opacity: 0.85;
   font-size: var(--text-label);
@@ -417,13 +420,23 @@ button, input, select {
   content: '\273F';
 }
 
+/* FIXED 16x16px, everywhere a flower appears -- the same crisp,
+   pixel-grid-multiple size the oO wordmark mark and the app's Press
+   Start 2P headers use (see --text-header), rather than a font-size left
+   to whatever happened to look right in one spot. An explicit box (not
+   just a font-size) is what makes the size actually fixed: font metrics
+   vary by character and by browser, a bare font-size does not guarantee a
+   16px result, an explicit width/height/line-height box does. */
 .btn--flourish::before,
 .btn--flourish::after,
 .flourish {
   position: absolute;
+  width: 16px;
+  height: 16px;
   font-family: var(--font-fallback);
-  font-size: 14px;
-  line-height: 1;
+  font-size: 16px;
+  line-height: 16px;
+  text-align: center;
   color: var(--color-accent);
   pointer-events: none;
   user-select: none;
@@ -458,18 +471,18 @@ button, input, select {
    without each one needing a clip exemption. */
 .btn--flourish::before {
   top: 2px;
-  left: 3px;
+  left: 2px;
 }
 
 .btn--flourish::after {
   bottom: 2px;
-  right: 3px;
+  right: 2px;
 }
 
-.flourish--tl { top: 2px; left: 3px; }
-.flourish--tr { top: 2px; right: 3px; }
-.flourish--bl { bottom: 2px; left: 3px; }
-.flourish--br { bottom: 2px; right: 3px; }
+.flourish--tl { top: 2px; left: 2px; }
+.flourish--tr { top: 2px; right: 2px; }
+.flourish--bl { bottom: 2px; left: 2px; }
+.flourish--br { bottom: 2px; right: 2px; }
 
 /* ---------- The flower, everywhere it belongs ----------
    The brief is every pink-bordered surface, not just CTA buttons: panels,
@@ -482,35 +495,37 @@ button, input, select {
 .app-menu::after,
 .modal::after,
 .px-pin__controls::after,
-.pcreate-color-row::after {
+.pcreate-color-row::after,
+.modal::before {
   content: '\273F';
   position: absolute;
+  width: 16px;
+  height: 16px;
   font-family: var(--font-fallback);
-  font-size: 14px;
-  line-height: 1;
+  font-size: 16px;
+  line-height: 16px;
+  text-align: center;
   color: var(--color-accent);
   pointer-events: none;
   user-select: none;
   transform-origin: center;
   animation: flower-spin 10s linear infinite;
+}
+
+.scene-panel::after,
+.row-aside::after,
+.app-menu::after,
+.modal::after,
+.px-pin__controls::after,
+.pcreate-color-row::after {
   top: 4px;
-  right: 6px;
+  right: 4px;
 }
 
 /* A modal is the one place there is room for a matching pair. */
 .modal::before {
-  content: '\273F';
-  position: absolute;
-  font-family: var(--font-fallback);
-  font-size: 14px;
-  line-height: 1;
-  color: var(--color-accent);
-  pointer-events: none;
-  user-select: none;
-  transform-origin: center;
-  animation: flower-spin 10s linear infinite;
   bottom: 4px;
-  left: 6px;
+  left: 4px;
 }
 
 /* These are the ones that needed a positioning context to hang a corner
@@ -971,9 +986,20 @@ button, input, select {
 }
 
 .pcreate-wheel {
+  /* Pinned regardless of the backing store's own width/height attributes,
+     which pcreate.js now sets to the device's actual pixel density for
+     sharpness -- without this the CSS box would grow to match them and
+     the wheel would balloon on every high-DPI phone instead of just
+     getting crisper. */
+  width: 200px;
+  height: 200px;
   border-radius: 50%;
   touch-action: none;
   flex: 0 0 auto;
+  /* Deliberately NOT image-rendering: pixelated. The wheel is a smooth
+     colour-picking gradient, not pixel-art content -- see the comment on
+     drawWheel() in pcreate.js for why this canvas is the one exception
+     to the app's usual hard-edged rule. */
 }
 
 .pcreate-color-controls {
@@ -1980,6 +2006,19 @@ button, input, select {
   padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
 }
 
+/* PCreate's own screen: a sibling of .home and #app, not a modal drawn on
+   top of either. Opaque and full-bleed for exactly the reason .home is --
+   the entry dialog (a .modal-backdrop, only 75% opaque on its own) needs
+   an opaque surface of PCreate's OWN to sit over, so nothing from whatever
+   screen was showing before ever shows through it, at any point from the
+   very first tap through to a session actually starting. */
+.pcreate-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--color-bg);
+}
+
 /* Full-bleed and BELOW the content, but still able to take a drag: the
    content column is narrow, so most of the petal field is reachable. */
 .home__petals {
@@ -2018,8 +2057,8 @@ button, input, select {
 
 .home__wordmark {
   display: flex;
-  align-items: baseline;
-  gap: 0;
+  align-items: center;
+  gap: 4px;
   margin: 0;
   font-family: var(--font-header);
   font-size: var(--text-header);
@@ -2027,31 +2066,54 @@ button, input, select {
   letter-spacing: 1px;
 }
 
-.home__loop {
+.home__wordmark-text {
+  font-family: var(--font-header);
+}
+
+/* ---------- The oO mark ----------
+   A small loop immediately followed by a larger one reading as the O of
+   "Omni". Used identically everywhere the wordmark appears -- the Home
+   screen and the topbar logo both reference this exact same pair of
+   classes, so there is exactly one place that defines what "oO" looks
+   like rather than two definitions that could quietly drift apart.
+
+   FIXED AT 16x16px, deliberately not scaled per context: 16px is the same
+   crisp, pixel-grid-multiple size the app already uses for its Press
+   Start 2P headers (see --text-header), so the mark reads as sized on
+   purpose rather than as whatever happened to fit. Only the TEXT after it
+   ("mni2D") takes each context's own normal text size -- the icon itself
+   never does. */
+.wordmark-oo {
+  position: relative;
   display: inline-block;
-  border: 3px solid var(--color-accent);
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.wordmark-oo__loop {
+  position: absolute;
+  border: 2px solid var(--color-accent);
   border-radius: 50%;
   background: transparent;
 }
 
-.home__loop--small {
-  width: 12px;
-  height: 12px;
-  margin-right: 3px;
-  align-self: flex-end;
-  margin-bottom: 2px;
+/* The small loop's bottom-left corner and the large loop's top-right
+   corner each land exactly on the 16x16 box's own edge, so the two loops
+   together -- overlapping where they meet -- fill precisely that box and
+   nothing wider. */
+.wordmark-oo__loop--small {
+  width: 6px;
+  height: 6px;
+  left: 0;
+  bottom: 0;
 }
 
-.home__loop--large {
-  width: 22px;
-  height: 22px;
-  margin-right: 2px;
-  align-self: flex-end;
-  margin-bottom: -2px;
-}
-
-.home__wordmark-text {
-  font-family: var(--font-header);
+.wordmark-oo__loop--large {
+  width: 13px;
+  height: 13px;
+  top: 0;
+  right: 0;
 }
 
 .home__tagline {

@@ -58,6 +58,7 @@ const CASCADE_WRAP = 6;
 
 const els = {};
 let session = null;
+let toastTimer = null;
 
 function cacheElements() {
   for (const id of [
@@ -77,7 +78,8 @@ function showToast(message) {
   if (!toast) return;
   toast.textContent = message;
   toast.hidden = false;
-  setTimeout(() => { toast.hidden = true; }, 4500);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 4500);
 }
 
 // ---------------------------------------------------------------------------

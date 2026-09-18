@@ -35,6 +35,7 @@ const GRID_MIN_CELL_PX = 12; // draw the texel grid once cells are this big
 
 const els = {};
 let session = null;
+let toastTimer = null;
 
 function cacheElements() {
   for (const id of [
@@ -53,7 +54,8 @@ function showToast(message) {
   if (!toast) return;
   toast.textContent = message;
   toast.hidden = false;
-  setTimeout(() => { toast.hidden = true; }, 4000);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 4000);
 }
 
 // ---------------------------------------------------------------------------

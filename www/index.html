@@ -13,9 +13,10 @@
     <canvas id="homePetals" class="home__petals" aria-hidden="true"></canvas>
     <div class="home__content">
       <h1 class="home__wordmark" aria-label="oOmni2D">
-        <span class="home__loop home__loop--small" aria-hidden="true"></span><span
-          class="home__loop home__loop--large" aria-hidden="true"></span><span
-          class="home__wordmark-text" aria-hidden="true">mni2D</span>
+        <span class="wordmark-oo" aria-hidden="true">
+          <span class="wordmark-oo__loop wordmark-oo__loop--small"></span>
+          <span class="wordmark-oo__loop wordmark-oo__loop--large"></span>
+        </span><span class="home__wordmark-text" aria-hidden="true">mni2D</span>
       </h1>
       <p class="home__tagline">Rig it, or draw it.</p>
       <div class="home__actions">
@@ -33,13 +34,20 @@
       <button id="undoBtn" class="btn btn--icon" type="button" aria-label="Undo" title="Undo" disabled>&#8634;</button>
       <button id="redoBtn" class="btn btn--icon" type="button" aria-label="Redo" title="Redo" disabled>&#8635;</button>
       <button id="appMenuBtn" class="btn btn--icon" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="appMenu" aria-label="Save, open and discard" title="Save / Open / Discard">&#8801;</button>
-      <div id="logo" class="logo">&#8734;omni-2D</div>
+      <div id="logo" class="logo" aria-label="oOmni2D">
+        <span class="wordmark-oo" aria-hidden="true">
+          <span class="wordmark-oo__loop wordmark-oo__loop--small"></span>
+          <span class="wordmark-oo__loop wordmark-oo__loop--large"></span>
+        </span><span aria-hidden="true">mni2D</span>
+      </div>
       <div id="modeLabel" class="mode-label" hidden>
         <span class="mode-label__dot" aria-hidden="true"></span>
         <span id="modeLabelText">Animate Mode</span>
       </div>
 
       <div id="appMenu" class="app-menu" hidden>
+        <p class="app-menu__group">Navigation</p>
+        <button id="backToMenuBtn" class="app-menu__item" type="button">◀ Back to Menu</button>
         <p class="app-menu__group">Project</p>
         <button id="saveProjectBtn" class="app-menu__item" type="button">Save project…</button>
         <button id="openProjectBtn" class="app-menu__item" type="button">Open project…</button>
@@ -48,8 +56,6 @@
         <button id="psaverImportBtn" class="app-menu__item" type="button">PSaver: Import…</button>
         <p class="app-menu__group">CLayer — extract a layer by hand</p>
         <button id="clayerOpenBtn" class="app-menu__item" type="button">CLayer: New extraction…</button>
-        <p class="app-menu__group">PCreate — paint a layer from scratch</p>
-        <button id="pcreateOpenBtn" class="app-menu__item" type="button">PCreate: New…</button>
         <p class="app-menu__group">Saved state</p>
         <button id="stateSaveBtn" class="app-menu__item" type="button">Save state</button>
         <button id="stateReverseBtn" class="app-menu__item" type="button">Reverse</button>
@@ -707,7 +713,16 @@
       </div>
     </div>
 
-    <!-- ==================== PCreate ==================== -->
+  </div>
+
+  <!-- ==================== PCreate ====================
+       A genuine sibling of #homeScreen/#app, not a modal stacked on top
+       of whichever of those happened to be showing. Home's "PCreate"
+       button navigates HERE -- #app stays hidden throughout a PCreate
+       visit, so there is nothing behind the entry dialog for it to
+       bleed through, at any point from the very first tap. -->
+
+  <section id="pcreateScreen" class="pcreate-screen" hidden>
 
     <div id="pcreateEntryModal" class="modal-backdrop" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateEntryTitle">
@@ -747,6 +762,7 @@
 
     <div id="pcreateWindow" class="px-pin" hidden>
       <header class="px-pin__bar">
+        <button id="pcreateBackToMenuBtn" class="btn btn--icon" type="button" aria-label="Back to Menu" title="Back to Menu">&#8962;</button>
         <span class="px-pin__title">PCreate — <b id="pcreateCanvasLabel"></b></span>
         <span id="pcreateStatus" class="px-pin__status"></span>
         <button id="pcreateDoneBtn" class="btn btn--sm" type="button">Done</button>
@@ -946,8 +962,9 @@
       </div>
     </div>
 
-    <div id="toast" class="toast" role="status" hidden></div>
-  </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" hidden></div>
 
   <script type="module" src="js/app.js"></script>
 </body>

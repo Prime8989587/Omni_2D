@@ -256,9 +256,10 @@ function cacheElements() {
   els.appMenuBtn = document.getElementById('appMenuBtn');
   els.appMenu = document.getElementById('appMenu');
   els.clayerOpenBtn = document.getElementById('clayerOpenBtn');
-  els.pcreateOpenBtn = document.getElementById('pcreateOpenBtn');
+  els.backToMenuBtn = document.getElementById('backToMenuBtn');
   els.homeScreen = document.getElementById('homeScreen');
   els.appRoot = document.getElementById('app');
+  els.pcreateScreen = document.getElementById('pcreateScreen');
   els.stateSaveBtn = document.getElementById('stateSaveBtn');
   els.stateReverseBtn = document.getElementById('stateReverseBtn');
   els.stateDiscardBtn = document.getElementById('stateDiscardBtn');
@@ -1984,13 +1985,17 @@ function cancelDeletePart() {
   els.deletePartModal.hidden = true;
 }
 
-// Home -> everywhere else. One function so both buttons leave the same way
-// and the petals are always stopped on the way out; a decorative animation
-// left running behind a working canvas is a battery cost for nothing.
-function leaveHome(then) {
+// Home -> everywhere else. Takes WHICH screen to land on -- #app for
+// Rigging, #pcreateScreen for PCreate -- so both destinations leave Home
+// the same way (petals always stopped on the way out; a decorative
+// animation left running behind a working canvas is a battery cost for
+// nothing) while landing on their own genuinely separate screen rather
+// than sharing #app. That separation is what stops PCreate's entry dialog
+// from ever having Rig-mode's own chrome sitting behind it.
+function leaveHome(target, then) {
   transitionScreens({
     from: els.homeScreen,
-    to: els.appRoot,
+    to: target,
     hide: (el) => { el.hidden = true; },
     show: (el) => { el.hidden = false; },
   }).then(() => {
@@ -1999,10 +2004,16 @@ function leaveHome(then) {
   });
 }
 
-// Back to Home: the petals start again, and the app is put away.
+// Back to Home, from whichever screen is actually showing -- Rigging or
+// PCreate. Only one of the two is ever unhidden at a time, so finding it
+// is just asking each in turn rather than tracking a separate "where am I"
+// flag that could drift out of sync with the DOM it describes.
 export function returnHome() {
+  const current = !els.appRoot.hidden ? els.appRoot
+    : !els.pcreateScreen.hidden ? els.pcreateScreen
+    : null;
   transitionScreens({
-    from: els.appRoot,
+    from: current,
     to: els.homeScreen,
     hide: (el) => { el.hidden = true; },
     show: (el) => { el.hidden = false; },
@@ -2702,7 +2713,10 @@ function bindEvents() {
   // its modal opens -- otherwise the menu is still sitting there behind it.
   els.saveProjectBtn.addEventListener('click', () => { closeStateMenu(); openSaveProjectModal(); });
   els.clayerOpenBtn.addEventListener('click', () => { closeStateMenu(); openClayer(); });
-  els.pcreateOpenBtn.addEventListener('click', () => { closeStateMenu(); openPCreate(); });
+  // PCreate is a top-level Home-screen destination now, not a Rig-mode
+  // sub-feature, so this is the same exit this menu already gives every
+  // other item -- back out of Rig mode entirely, to Home.
+  els.backToMenuBtn.addEventListener('click', () => { closeStateMenu(); returnHome(); });
   els.psaverExportBtn.addEventListener('click', () => { closeStateMenu(); openPSaverExport(); });
   els.psaverImportBtn.addEventListener('click', () => { closeStateMenu(); handlePSaverImport(); });
   els.psaverExportConfirmBtn.addEventListener('click', handlePSaverExport);
@@ -2785,14 +2799,17 @@ export function initUI() {
   initPierceTool();
   initPierceDepthCanvas();
   initClayer();
-  initPCreate();
+  // PCreate has nowhere else to fall back to once it is a top-level
+  // destination -- Back to Menu (its own header button, and Cancel on its
+  // entry dialog) both hand back to here.
+  initPCreate({ onExit: () => returnHome() });
 
-  // THE APP OPENS HERE. #app starts hidden in the markup, so the first
-  // thing on screen is the Home screen rather than a working canvas
-  // nobody asked for yet.
+  // THE APP OPENS HERE. #app and #pcreateScreen both start hidden in the
+  // markup, so the first thing on screen is Home rather than a working
+  // canvas nobody asked for yet.
   initHome({
-    onRigging: () => leaveHome(),
-    onPCreate: () => leaveHome(() => openPCreate()),
+    onRigging: () => leaveHome(els.appRoot),
+    onPCreate: () => leaveHome(els.pcreateScreen, () => openPCreate()),
   });
   initInfoButtons();
   restorePierceOverlay();

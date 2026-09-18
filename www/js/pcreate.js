@@ -147,6 +147,13 @@ const WHEEL_RADIUS = 96; // leaves room for the marker ring at full saturation
 const els = {};
 let session = null;
 let blankMirror = false;
+let toastTimer = null;
+// Called whenever PCreate hands control back to the rest of the app --
+// Back to Menu, Done, and Cancel on the entry dialog all funnel through
+// here. PCreate has nowhere else of its own to fall back to now that it is
+// a top-level destination reached straight from Home, so all three roads
+// lead to the same place; ui.js supplies what that place actually is.
+let exitCallback = () => {};
 let editInPlace = false; // false = always work on a copy (the safer default)
 
 // The wheel's own hue/saturation raster, at V = 1. Built once; a
@@ -164,11 +171,11 @@ let renamingPaletteName = null;
 
 function cacheElements() {
   for (const id of [
-    'pcreateOpenBtn', 'pcreateFileInput', 'pcreateEntryModal', 'pcreateBlankBtn',
+    'pcreateFileInput', 'pcreateEntryModal', 'pcreateBlankBtn',
     'pcreateImportBtn', 'pcreateEntryCancelBtn',
     'pcreateSizeModal', 'pcreateSizePresets', 'pcreateWidthInput', 'pcreateHeightInput',
     'pcreateMirrorToggle', 'pcreateSizeCreateBtn', 'pcreateSizeCancelBtn',
-    'pcreateWindow', 'pcreateCanvasLabel', 'pcreateStatus', 'pcreateDoneBtn', 'pcreateCanvas',
+    'pcreateWindow', 'pcreateBackToMenuBtn', 'pcreateCanvasLabel', 'pcreateStatus', 'pcreateDoneBtn', 'pcreateCanvas',
     'pcreateWheelCanvas', 'pcreateSwatch', 'pcreateValueSlider', 'pcreateValueLabel', 'pcreateHexInput',
     'pcreateLoadedPaletteName', 'pcreateSaveColorBtn', 'pcreatePalettesBtn', 'pcreateSwatchStrip',
     'pcreateEditModeToggle', 'pcreateSaveLayerBtn',
@@ -200,7 +207,8 @@ function showToast(message) {
   if (!toast) return;
   toast.textContent = message;
   toast.hidden = false;
-  setTimeout(() => { toast.hidden = true; }, 4500);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 4500);
 }
 
 // ---------------------------------------------------------------------------
@@ -1792,24 +1800,63 @@ function renderTools() {
 // field -- three views of the same session.hsv, kept in sync however the
 // user changes it.
 
+// THE WHEEL IS A PICKING UI, NOT PIXEL-ART CONTENT -- deliberately the one
+// canvas in PCreate that is NOT drawn nearest-neighbour. Everywhere else
+// "hard-edged, no smoothing" is the whole point; here it is precisely
+// backwards; a colour wheel is read by its gradient, and a blocky one is
+// harder to pick a precise shade from, not more honest about what it is.
+//
+// It was rendered BLURRY rather than hard-edged, though, which is a
+// different bug: the bitmap and the on-screen canvas were both a flat
+// 200x200 physical pixels regardless of the device's actual pixel density.
+// On any screen denser than that -- which is effectively every phone this
+// app runs on -- the browser has to stretch a 200x200 image across a much
+// larger physical area, and stretching is exactly what produces the soft,
+// low-fidelity look. The fix is the same device-pixel-ratio awareness the
+// main canvas already has (see sizeCanvas()/render()): the bitmap is built
+// at the SCREEN'S OWN pixel density, not a fixed 200, so there is no
+// stretching left for the browser to do -- every physical pixel the wheel
+// occupies is one this code actually computed a colour for.
+function wheelDevicePixelSize() {
+  const dpr = window.devicePixelRatio || 1;
+  return Math.max(1, Math.round(WHEEL_SIZE * dpr));
+}
+
+// The on-screen canvas's own backing store, resized to the current
+// device's pixel density. The element's CSS size stays pinned at 200x200
+// (see .pcreate-wheel) regardless, so only the sharpness changes, never
+// the layout.
+function sizeWheelCanvas() {
+  const canvas = els.pcreateWheelCanvas;
+  const size = wheelDevicePixelSize();
+  if (canvas.width === size && canvas.height === size) return;
+  canvas.width = size;
+  canvas.height = size;
+  wheelBitmap = null; // stale at the old resolution -- rebuild it to match
+}
+
 function drawWheel() {
+  sizeWheelCanvas();
   if (!wheelBitmap) {
+    const size = wheelDevicePixelSize();
+    const dpr = window.devicePixelRatio || 1;
     wheelBitmap = document.createElement('canvas');
-    wheelBitmap.width = WHEEL_SIZE;
-    wheelBitmap.height = WHEEL_SIZE;
+    wheelBitmap.width = size;
+    wheelBitmap.height = size;
     const wctx = wheelBitmap.getContext('2d');
-    const image = wctx.createImageData(WHEEL_SIZE, WHEEL_SIZE);
-    const cx = WHEEL_SIZE / 2;
-    const cy = WHEEL_SIZE / 2;
-    for (let y = 0; y < WHEEL_SIZE; y++) {
-      for (let x = 0; x < WHEEL_SIZE; x++) {
+    const image = wctx.createImageData(size, size);
+    const cx = size / 2;
+    const cy = size / 2;
+    const radius = WHEEL_RADIUS * dpr;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
         const dx = x + 0.5 - cx;
         const dy = y + 0.5 - cy;
         const dist = Math.hypot(dx, dy);
-        const o = (y * WHEEL_SIZE + x) * 4;
-        if (dist > WHEEL_RADIUS) continue; // left transparent: a round wheel on a square canvas
+        const o = (y * size + x) * 4;
+        if (dist > radius) continue; // left transparent: a round wheel on a square canvas
         const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
-        const sat = Math.min(1, dist / WHEEL_RADIUS);
+        const sat = Math.min(1, dist / radius);
         const { r, g, b } = hsvToRgb(hue, sat, 1);
         image.data[o] = r;
         image.data[o + 1] = g;
@@ -1825,8 +1872,19 @@ function drawWheel() {
 function paintWheel() {
   const canvas = els.pcreateWheelCanvas;
   const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  // Everything below this line works in the wheel's ordinary 200-unit
+  // logical space, same as before -- this transform is what maps that
+  // space onto the now device-resolution backing store, exactly the
+  // pattern the main canvas's own render() already uses.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, WHEEL_SIZE, WHEEL_SIZE);
-  ctx.drawImage(wheelBitmap, 0, 0);
+  // wheelBitmap holds exactly WHEEL_SIZE*dpr physical pixels, and drawing
+  // it into a WHEEL_SIZE logical box under this dpr transform lands
+  // every one of them on exactly one physical pixel of the canvas -- a
+  // 1:1 draw with nothing for the browser to interpolate, which is what
+  // actually makes this crisp rather than merely higher-resolution.
+  ctx.drawImage(wheelBitmap, 0, 0, WHEEL_SIZE, WHEEL_SIZE);
   if (!session) return;
 
   const { h, s } = session.hsv;
@@ -3002,13 +3060,20 @@ export function pcreatePixelAt(u, v) {
 // ---------------------------------------------------------------------------
 // Wiring
 
-export function initPCreate() {
+export function initPCreate({ onExit } = {}) {
   cacheElements();
   loadEditMode();
+  if (onExit) exitCallback = onExit;
 
   els.pcreateBlankBtn.addEventListener('click', openSizeModal);
   els.pcreateImportBtn.addEventListener('click', openImportPicker);
-  els.pcreateEntryCancelBtn.addEventListener('click', closeEntryModal);
+  // Cancel on the entry dialog used to just close the modal, leaving
+  // whatever was behind it (Rig mode's own chrome) visible -- exactly the
+  // bleed-through this dialog is not supposed to have. Now that PCreate is
+  // its own screen with nothing of its own behind that dialog, "cancel"
+  // can only sensibly mean leaving PCreate altogether.
+  els.pcreateEntryCancelBtn.addEventListener('click', () => { closeEntryModal(); exitCallback(); });
+  els.pcreateBackToMenuBtn.addEventListener('click', () => { endSession(); exitCallback(); });
   els.pcreateFileInput.addEventListener('change', onImportPicked);
 
   els.pcreateWidthInput.addEventListener('input', handleWidthInput);
@@ -3017,7 +3082,10 @@ export function initPCreate() {
   els.pcreateSizeCreateBtn.addEventListener('click', createBlankCanvas);
   els.pcreateSizeCancelBtn.addEventListener('click', closeSizeModal);
 
-  els.pcreateDoneBtn.addEventListener('click', endSession);
+  // Done finishes THIS canvas, same as before; it now also leaves PCreate
+  // for the same reason Back to Menu and Cancel do -- there is no
+  // Rig-mode chrome sitting underneath to reveal any more.
+  els.pcreateDoneBtn.addEventListener('click', () => { endSession(); exitCallback(); });
   els.pcreateCanvas.addEventListener('pointerdown', onPointerDown);
   els.pcreateCanvas.addEventListener('pointermove', onPointerMove);
   els.pcreateCanvas.addEventListener('pointerup', onPointerUp);
@@ -3116,5 +3184,10 @@ export function initPCreate() {
     if (!session) return;
     sizeCanvas();
     render();
+    // A no-op unless the device pixel ratio actually changed (moving the
+    // window to a different-density display, folding/unfolding a phone) --
+    // sizeWheelCanvas() only rebuilds when the backing store is actually
+    // out of date.
+    drawWheel();
   });
 }
