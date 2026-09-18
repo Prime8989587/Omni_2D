@@ -26,7 +26,7 @@ import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
 import { serializeProject, applyProject } from './project.js';
 import * as storage from './storage.js';
-import { initAutoSave, setAutoSaveSource, autoSaveNow } from './autosave.js';
+import { initAutoSave, setAutoSaveSource, autoSaveNow, setAutoSaveInterval } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
@@ -39,6 +39,8 @@ import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
 import { encodeGif, describeGif } from './gif.js';
 import { saveBinaryFile, toSafeFilename } from './filesave.js';
+import { initSettings, getSetting, subscribeSettings } from './settings.js';
+import { initSettingsUI, openSettings } from './settingsUI.js';
 
 const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
@@ -82,6 +84,7 @@ let currentState = AppState.HOME;
 let scenePanelOpen = true;
 let skeletonPanelOpen = true;
 let toastTimer = null;
+let pendingLeaveHome = false;
 let pendingDeleteBoneId = null;
 let bindListTab = 'parts'; // which list the Bind panel is showing
 let densitySyncedFor = null; // part id the density slider currently reflects
@@ -257,6 +260,12 @@ function cacheElements() {
   els.appMenu = document.getElementById('appMenu');
   els.clayerOpenBtn = document.getElementById('clayerOpenBtn');
   els.backToMenuBtn = document.getElementById('backToMenuBtn');
+  els.rigSettingsBtn = document.getElementById('rigSettingsBtn');
+  els.homeSettingsBtn = document.getElementById('homeSettingsBtn');
+  els.settingsScreen = document.getElementById('settingsScreen');
+  els.leaveConfirmModal = document.getElementById('leaveConfirmModal');
+  els.leaveConfirmBtn = document.getElementById('leaveConfirmBtn');
+  els.leaveCancelBtn = document.getElementById('leaveCancelBtn');
   els.homeScreen = document.getElementById('homeScreen');
   els.appRoot = document.getElementById('app');
   els.pcreateScreen = document.getElementById('pcreateScreen');
@@ -2020,6 +2029,89 @@ export function returnHome() {
   }).then(() => startPetals());
 }
 
+// The guarded version, used by every Back to Menu control.
+//
+// Only asks when there is genuinely something to lose: the setting being on
+// is not on its own a reason to interrupt, and a confirmation that appears
+// when nothing is unsaved is exactly the kind of prompt people learn to
+// dismiss without reading -- which is what makes the one that mattered get
+// dismissed too.
+export function requestReturnHome() {
+  if (!getSetting('backConfirm') || !history.isDirty) {
+    returnHome();
+    return;
+  }
+  pendingLeaveHome = true;
+  els.leaveConfirmModal.hidden = false;
+}
+
+function confirmLeaveHome() {
+  pendingLeaveHome = false;
+  els.leaveConfirmModal.hidden = true;
+  returnHome();
+}
+
+function cancelLeaveHome() {
+  pendingLeaveHome = false;
+  els.leaveConfirmModal.hidden = true;
+}
+
+// Settings, opened from Rig mode. Hands openSettings the screen to restore
+// on the way back, so Back returns to the rig rather than to Home.
+function openRigSettings() {
+  closeStateMenu();
+  openSettings({ section: 'rig', from: els.appRoot });
+}
+
+// Pushes settings into the features that cannot read them for themselves.
+//
+// Most preferences are pulled: grid snap, the contour and the checkerboard
+// are consulted by rigTool.js and canvas.js at the moment they are needed,
+// so those only need a redraw here. The ones handled explicitly below are
+// the push cases -- values that live as module state somewhere else, or
+// that a visible control has to be kept in step with.
+//
+// Runs on every settings change and once at boot through the same
+// subscription, so there is no separate "apply the initial values" path
+// that could apply a different set from the update path.
+function applyAppSettings(key = null) {
+  const touched = (k) => key === null || key === k;
+
+  if (touched('weightBrushRadius')) {
+    const radius = getSetting('weightBrushRadius');
+    setBrushRadius(radius);
+    if (els.brushSlider) {
+      els.brushSlider.value = String(radius);
+      els.brushValue.textContent = String(radius);
+    }
+  }
+  if (touched('weightBrushStrength')) {
+    const strength = getSetting('weightBrushStrength');
+    setBrushStrength(strength);
+    if (els.strengthSlider) {
+      els.strengthSlider.value = String(strength);
+      els.strengthValue.textContent = strength.toFixed(2);
+    }
+  }
+  if (touched('autoSaveInterval')) {
+    setAutoSaveInterval(getSetting('autoSaveInterval') * 1000);
+  }
+  if (touched('boneListDefault')) {
+    // The DEFAULT state, so this only moves the panel while the user is
+    // out of Rig mode. Changing the preference mid-session and having the
+    // list you deliberately opened snap shut under you would be the
+    // setting overruling a direct action, which is the wrong way round.
+    if (currentState === AppState.HOME) {
+      skeletonPanelOpen = getSetting('boneListDefault') === 'expanded';
+      renderRigChrome();
+    }
+  }
+
+  // Contour, checkerboard and grid snap are all read at draw time, so the
+  // only thing needed for them is asking for a frame.
+  canvasEngine.requestRender();
+}
+
 // Reflects app state + scene contents onto the DOM: which control row is
 // visible, which buttons are enabled, the canvas border, and the panel.
 // Every mode change animates the working area, so switching Rig -> Bind ->
@@ -2716,7 +2808,10 @@ function bindEvents() {
   // PCreate is a top-level Home-screen destination now, not a Rig-mode
   // sub-feature, so this is the same exit this menu already gives every
   // other item -- back out of Rig mode entirely, to Home.
-  els.backToMenuBtn.addEventListener('click', () => { closeStateMenu(); returnHome(); });
+  els.backToMenuBtn.addEventListener('click', () => { closeStateMenu(); requestReturnHome(); });
+  els.rigSettingsBtn.addEventListener('click', openRigSettings);
+  els.leaveConfirmBtn.addEventListener('click', confirmLeaveHome);
+  els.leaveCancelBtn.addEventListener('click', cancelLeaveHome);
   els.psaverExportBtn.addEventListener('click', () => { closeStateMenu(); openPSaverExport(); });
   els.psaverImportBtn.addEventListener('click', () => { closeStateMenu(); handlePSaverImport(); });
   els.psaverExportConfirmBtn.addEventListener('click', handlePSaverExport);
@@ -2802,7 +2897,32 @@ export function initUI() {
   // PCreate has nowhere else to fall back to once it is a top-level
   // destination -- Back to Menu (its own header button, and Cancel on its
   // entry dialog) both hand back to here.
-  initPCreate({ onExit: () => returnHome() });
+  initPCreate({
+    onExit: () => returnHome(),
+    // PCreate's own header button. It hands back to PCreate rather than to
+    // Home, so changing a preference mid-drawing does not cost the canvas.
+    onSettings: () => openSettings({ section: 'pcreate', from: els.pcreateScreen }),
+  });
+
+  initSettingsUI({ toast: showToast });
+  els.homeSettingsBtn.addEventListener('click', () => {
+    openSettings({
+      section: 'main',
+      from: els.homeScreen,
+      // Home's petals are stopped on the way out and started again on the
+      // way back, the same courtesy every other departure from Home gets.
+      onReturn: () => startPetals(),
+    });
+    stopPetals();
+  });
+
+  // Settings are read synchronously from memory everywhere, so the durable
+  // copy has to be in memory before anything consults it. Awaiting here
+  // would hold up first paint for a disk read; instead the app boots on
+  // defaults and every consumer re-applies through subscribeSettings the
+  // moment the real values land, which is a frame or two later at worst.
+  subscribeSettings((key) => applyAppSettings(key));
+  initSettings();
 
   // THE APP OPENS HERE. #app and #pcreateScreen both start hidden in the
   // markup, so the first thing on screen is Home rather than a working

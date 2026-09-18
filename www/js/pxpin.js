@@ -27,6 +27,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
+import { getSetting } from './settings.js';
 
 const ACCENT = '#FF2E93';
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
@@ -143,7 +144,9 @@ function startSession() {
     belowCanvas: layerCanvas(below),
     cam: { zoom: 1, panX: 0, panY: 0 },
     tool: 'pin',
-    brush: 1,
+    // The Rig section's remembered default, rather than a hardcoded 1, so
+    // an artist who works at 4x4 does not reset the brush every session.
+    brush: getSetting('pxPinBrush'),
     brushMenuOpen: false,
     aboveOpacity: 1,
     belowOpacity: 1,

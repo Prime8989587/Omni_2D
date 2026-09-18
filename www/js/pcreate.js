@@ -70,6 +70,7 @@ import {
 // on why a workspace that is not part of the project needs its own
 // timeline rather than a place on the project's.
 import { createHistory } from './history.js';
+import { getSetting, setSetting, subscribeSettings } from './settings.js';
 
 const MAX_ZOOM = 64; // css px per canvas px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -136,11 +137,6 @@ const GRID_EDGE = 'rgba(255, 255, 255, 0.28)';
 const CASCADE_STEP = 8;
 const CASCADE_WRAP = 6;
 
-// Whether PCreate edits a COPY of an imported image or the image's own
-// data directly. See setEditMode() for what this actually governs today
-// and what it is wired for.
-const EDIT_MODE_KEY = 'omni2d.pcreate.editInPlace';
-
 const WHEEL_SIZE = 200;
 const WHEEL_RADIUS = 96; // leaves room for the marker ring at full saturation
 
@@ -154,6 +150,7 @@ let toastTimer = null;
 // a top-level destination reached straight from Home, so all three roads
 // lead to the same place; ui.js supplies what that place actually is.
 let exitCallback = () => {};
+let settingsCallback = () => {};
 let editInPlace = false; // false = always work on a copy (the safer default)
 
 // The wheel's own hue/saturation raster, at V = 1. Built once; a
@@ -175,7 +172,7 @@ function cacheElements() {
     'pcreateImportBtn', 'pcreateEntryCancelBtn',
     'pcreateSizeModal', 'pcreateSizePresets', 'pcreateWidthInput', 'pcreateHeightInput',
     'pcreateMirrorToggle', 'pcreateSizeCreateBtn', 'pcreateSizeCancelBtn',
-    'pcreateWindow', 'pcreateBackToMenuBtn', 'pcreateCanvasLabel', 'pcreateStatus', 'pcreateDoneBtn', 'pcreateCanvas',
+    'pcreateWindow', 'pcreateBackToMenuBtn', 'pcreateSettingsBtn', 'pcreateCanvasLabel', 'pcreateStatus', 'pcreateDoneBtn', 'pcreateCanvas',
     'pcreateWheelCanvas', 'pcreateSwatch', 'pcreateValueSlider', 'pcreateValueLabel', 'pcreateHexInput',
     'pcreateLoadedPaletteName', 'pcreateSaveColorBtn', 'pcreatePalettesBtn', 'pcreateSwatchStrip',
     'pcreateEditModeToggle', 'pcreateSaveLayerBtn',
@@ -493,7 +490,9 @@ function startSession({ kind, name, width, height, pixels, bitmap, layers = null
     savedCount: 0,
 
     tool: 'brush',
-    brush: 1,
+    // Remembered from the PCreate settings section rather than reset to 1
+    // on every canvas.
+    brush: getSetting('defaultBrush'),
     brushMenuOpen: false,
     shapeFilled: true,
     stroke: null, // an in-progress brush stroke
@@ -501,8 +500,11 @@ function startSession({ kind, name, width, height, pixels, bitmap, layers = null
     boundary: new Set(), // Select's in-progress lasso line
     selection: null, // the committed selection, as a Set of texel indices
     selectionDrag: null, // an in-progress Move of that selection
-    shadowDirection: 'se',
-    shadowOffset: 2,
+    // The generated shadow's starting light direction and distance, from
+    // settings, so an artist with a consistent light source configures it
+    // once instead of on every canvas.
+    shadowDirection: getSetting('shadowDirection'),
+    shadowOffset: getSetting('shadowOffset'),
     shadowColor: null, // null means "recompute from the artwork on every apply"
     shadeToneSeeded: false,
     freeAngle: 0,
@@ -941,6 +943,104 @@ function inCanvas(texel) {
   return texel.u >= 0 && texel.v >= 0 && texel.u < session.width && texel.v < session.height;
 }
 
+// ---------------------------------------------------------------------------
+// The two gesture shortcuts from the PCreate settings section
+//
+// Both exist so a drawing tool can reach Fill and Pick Color without a trip
+// to the tool strip, and both are off the critical path: with their setting
+// off, not one line of this runs and the pointer handlers behave exactly as
+// they did before.
+//
+// DOUBLE-TAP TO FILL HAS TO UNDO THE FIRST TAP
+//
+// This is the whole subtlety of the feature. By the time a second tap
+// identifies the gesture as a double tap, the FIRST tap has already been
+// committed as a brush dot -- so the texel under the finger is now painted
+// in the current colour, and a flood fill seeded there would find a region
+// of exactly the pixels that tap just painted. The user would double-tap a
+// large area and watch a single dot change colour.
+//
+// So the double tap rolls the first tap back through the existing undo
+// stack before filling. That restores the texel to whatever it genuinely
+// was, which is what the flood fill has to read to find the right region.
+// Reusing undo rather than snapshotting the colour by hand also handles a
+// wide brush, where the first tap painted a whole square, not one texel.
+
+const DOUBLE_TAP_MS = 320;
+const DOUBLE_TAP_SLOP_PX = 24; // a finger never lands twice in exactly one spot
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10; // beyond this it is a stroke, not a hold
+
+let lastTap = null; // { u, v, x, y, at }
+let longPressTimer = null;
+let longPressFired = false;
+// Where the current press landed. Tracked separately from lastTap, which
+// only exists while double-tap-to-fill is switched on -- the hold has to
+// know how far the finger has travelled whatever the other setting says.
+let pressOrigin = null;
+
+function cancelLongPress() {
+  clearTimeout(longPressTimer);
+  longPressTimer = null;
+}
+
+function armLongPress(point, texel) {
+  cancelLongPress();
+  longPressFired = false;
+  pressOrigin = { x: point.x, y: point.y };
+  if (!getSetting('longPressPick')) return;
+  if (!inCanvas(texel)) return;
+  // Only from a tool that draws. From Pick Color itself the gesture is
+  // already what a plain tap does, and from Select it would fight the
+  // lasso the finger is in the middle of laying down.
+  if (!BRUSH_TOOLS.has(session.tool) && !SHAPE_TOOLS.has(session.tool)) return;
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    if (!session || session.pointers.size !== 1) return;
+    longPressFired = true;
+    // The stroke the hold began is discarded rather than committed: the
+    // user asked to sample a colour, not to leave a dot where they sampled.
+    abandonGesture();
+    pickColorAt(texel);
+    render();
+  }, LONG_PRESS_MS);
+}
+
+// True when this press completes a double tap and the fill has been done,
+// in which case the caller must not also start a normal gesture.
+function tryDoubleTapFill(point, texel) {
+  if (!getSetting('doubleTapFill')) return false;
+  if (!inCanvas(texel)) return false;
+  if (!BRUSH_TOOLS.has(session.tool) && !SHAPE_TOOLS.has(session.tool)) return false;
+
+  const now = performance.now();
+  const previous = lastTap;
+  // The undo depth is recorded BEFORE this press does anything, so a press
+  // that turns out to be the first of a pair can be told apart from one
+  // that committed nothing -- see the undo below.
+  lastTap = {
+    u: texel.u, v: texel.v, x: point.x, y: point.y, at: now,
+    depth: pcreateHistory.undoDepth,
+  };
+  if (!previous) return false;
+  if (now - previous.at > DOUBLE_TAP_MS) return false;
+  if (Math.hypot(point.x - previous.x, point.y - previous.y) > DOUBLE_TAP_SLOP_PX) return false;
+
+  lastTap = null; // a third tap starts a fresh pair, not another fill
+  // Roll the first tap's mark back, so the fill reads the artwork as it was
+  // before this gesture started -- but ONLY if that tap is genuinely what
+  // sits on top of the undo stack. A brush dot always commits, so in the
+  // common case it is; a tool that declines to (a shape drag that never
+  // left its start texel, say) leaves the stack untouched, and undoing then
+  // would throw away whatever unrelated action was underneath. Comparing
+  // the depth this press recorded against the depth now settles that
+  // exactly. A label comparison could not: two brush strokes in a row carry
+  // the same label, so an unchanged label proves nothing either way.
+  if (pcreateHistory.undoDepth === previous.depth + 1) undoPCreate();
+  fillAt(texel);
+  return true;
+}
+
 function onPointerDown(event) {
   if (!session) return;
   event.preventDefault();
@@ -950,8 +1050,12 @@ function onPointerDown(event) {
 
   if (session.pointers.size === 1) {
     session.pinch = null;
+    const texel = texelAt(point);
+    if (tryDoubleTapFill(point, texel)) return;
     beginToolGesture(point);
+    armLongPress(point, texel);
   } else if (session.pointers.size === 2) {
+    cancelLongPress();
     // The second finger means the camera, so whatever the first one had
     // started is rolled back rather than committed as a stray mark.
     abandonGesture();
@@ -986,14 +1090,34 @@ function onPointerMove(event) {
     return;
   }
 
-  if (session.pointers.size === 1) extendToolGesture(point);
+  if (session.pointers.size === 1) {
+    // A finger that has travelled is drawing, not holding. Cancelling on
+    // distance rather than on any movement at all is what makes the hold
+    // survive the small tremor every real finger has.
+    if (longPressTimer && pressOrigin
+      && Math.hypot(point.x - pressOrigin.x, point.y - pressOrigin.y) > LONG_PRESS_SLOP_PX) {
+      cancelLongPress();
+    }
+    // Once the hold has sampled a colour the gesture is spent: continuing
+    // to paint from it would leave a stroke the user never asked for.
+    if (!longPressFired) extendToolGesture(point);
+  }
 }
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
+  cancelLongPress();
   session.pointers.delete(event.pointerId);
   if (session.pointers.size < 2) session.pinch = null;
-  if (session.pointers.size === 0) endToolGesture();
+  if (session.pointers.size === 0) {
+    if (longPressFired) {
+      longPressFired = false;
+      // Already abandoned when the hold fired; ending the gesture again
+      // would commit an empty stroke as an undo step.
+      return;
+    }
+    endToolGesture();
+  }
 }
 
 // ---- Gesture routing ----------------------------------------------------
@@ -2422,6 +2546,12 @@ function countOpaque(pixels) {
 
 function refreshAutoPalette() {
   if (!session) return;
+  // The PCreate settings section's "Manual only" means exactly that: the
+  // scan happens when the Auto Palette view is opened or its Refresh
+  // button is pressed, and never as a side effect of drawing. Both of
+  // those go through rebuildAutoPalette() directly, so declining here
+  // suppresses the incidental refreshes without disabling the feature.
+  if (getSetting('autoPaletteRefresh') === 'manual') return;
   // Above the live limit this is only rebuilt when explicitly asked for, so
   // a huge canvas does not pay a full scan on every brush stroke.
   if (session.width * session.height > AUTO_PALETTE_LIVE_LIMIT) return;
@@ -2772,19 +2902,22 @@ async function confirmDeletePalette() {
 // stroke undoing hours of work on a layer that was never meant to be
 // touched outside its own tools is a strictly worse failure than PCreate
 // occasionally holding a redundant clone it didn't strictly need to.
+//
+// NOW BACKED BY THE SETTINGS STORE, not by a localStorage key of its own.
+// The PCreate settings section calls this "the default edit behaviour",
+// and the toggle in the drawing window sets it for the session -- but
+// those are the same value, deliberately. Splitting them would mean a user
+// who flips the in-window toggle finds it reverted next session, which is
+// strictly worse than the behaviour this replaces, and it would make the
+// settings screen show something other than what PCreate is actually
+// doing. One value, two places to change it, both persistent.
 function loadEditMode() {
-  try {
-    editInPlace = window.localStorage.getItem(EDIT_MODE_KEY) === '1';
-  } catch {
-    editInPlace = false;
-  }
+  editInPlace = Boolean(getSetting('defaultEditInPlace'));
 }
 
 function setEditMode(value) {
   editInPlace = value;
-  try {
-    window.localStorage.setItem(EDIT_MODE_KEY, value ? '1' : '0');
-  } catch { /* no-op: a device with storage disabled just keeps the default each session */ }
+  setSetting('defaultEditInPlace', value);
   renderEditModeToggle();
 }
 
@@ -3060,10 +3193,20 @@ export function pcreatePixelAt(u, v) {
 // ---------------------------------------------------------------------------
 // Wiring
 
-export function initPCreate({ onExit } = {}) {
+export function initPCreate({ onExit, onSettings } = {}) {
   cacheElements();
-  loadEditMode();
   if (onExit) exitCallback = onExit;
+  if (onSettings) settingsCallback = onSettings;
+
+  // Fires once now with the boot defaults and again when the durable
+  // settings finish loading, so the in-window toggle shows the user's real
+  // preference rather than the default it started the frame on. Keyed on
+  // the one setting this mirrors, so unrelated changes do not redraw it.
+  subscribeSettings((key) => {
+    if (key !== null && key !== 'defaultEditInPlace') return;
+    loadEditMode();
+    if (els.pcreateEditModeToggle) renderEditModeToggle();
+  });
 
   els.pcreateBlankBtn.addEventListener('click', openSizeModal);
   els.pcreateImportBtn.addEventListener('click', openImportPicker);
@@ -3074,6 +3217,9 @@ export function initPCreate({ onExit } = {}) {
   // can only sensibly mean leaving PCreate altogether.
   els.pcreateEntryCancelBtn.addEventListener('click', () => { closeEntryModal(); exitCallback(); });
   els.pcreateBackToMenuBtn.addEventListener('click', () => { endSession(); exitCallback(); });
+  // Settings does NOT end the session: it is a visit, not an exit, so the
+  // canvas is exactly where it was left when Back brings the user back.
+  els.pcreateSettingsBtn.addEventListener('click', () => settingsCallback());
   els.pcreateFileInput.addEventListener('change', onImportPicked);
 
   els.pcreateWidthInput.addEventListener('input', handleWidthInput);

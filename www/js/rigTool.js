@@ -29,6 +29,7 @@
 import { appState, AppState } from './state.js';
 import { bonesStore } from './bones.js';
 import { view } from './view.js';
+import { getSetting } from './settings.js';
 import { history } from './history.js';
 
 // Touch tolerances are in SCREEN pixels, so a bone is as easy to grab
@@ -121,7 +122,13 @@ function screenFromEvent(canvasEl, event) {
 }
 
 // Snap a scene point to the centre of the cell containing it.
+//
+// The Rig section's Grid snap toggle turns this off, and "off" means the
+// point passes through UNCHANGED rather than snapping to something finer:
+// the setting exists for work that needs sub-pixel placement, so rounding
+// it to any grid at all -- however fine -- would defeat the purpose.
 function snapToCell(scenePoint) {
+  if (!getSetting('gridSnap')) return { x: scenePoint.x, y: scenePoint.y };
   return { x: Math.floor(scenePoint.x) + 0.5, y: Math.floor(scenePoint.y) + 0.5 };
 }
 

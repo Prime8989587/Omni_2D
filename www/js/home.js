@@ -24,6 +24,7 @@
 // with itself.
 
 import { playEnter } from './transitions.js';
+import { shouldRenderFrame } from './settings.js';
 
 const SAKURA = '#FFB7C5'; // the light pink the visual identity specifies
 const PETAL_COUNT = 34;
@@ -131,8 +132,19 @@ function drawPetal(ctx, petal) {
   ctx.restore();
 }
 
+// The token the Screen Rate governor keys this loop's pacing off. Any
+// object the module owns will do; `els` is one that already exists and
+// outlives every individual animation frame.
+const rateToken = els;
+
 function step(time) {
   frame = requestAnimationFrame(step);
+  // Screen Rate. The loop keeps running at the display's rate and simply
+  // declines to do work on frames outside the budget -- note that lastTime
+  // is NOT advanced on a skipped frame, so the physics below still
+  // integrates the full elapsed time and petals fall at the same real
+  // speed at 30Hz as at 120Hz, just in fewer, larger steps.
+  if (!shouldRenderFrame(rateToken, time)) return;
   if (!lastTime) lastTime = time;
   // Clamped: coming back to a backgrounded tab hands over a delta of many
   // seconds, which would teleport the whole field off the bottom at once.

@@ -12,13 +12,27 @@ import { bonesStore } from './bones.js';
 import { partsStore } from './parts.js';
 import { stepPierce, markPierceStale } from './pierce.js';
 import { requestRender } from './canvas.js';
+import { shouldRenderFrame } from './settings.js';
 
 const FALLBACK_DT = 1 / 60;
 
 let frameId = null;
 let lastTimestamp = 0;
 
+// Keys this loop's Screen Rate pacing. A module-local object, so the
+// physics loop and the Home petals throttle independently of each other.
+const rateToken = { name: 'physics' };
+
 function tick(timestamp) {
+  // Screen Rate. Skipping early -- before dt is taken and before
+  // lastTimestamp advances -- means the springs integrate the full elapsed
+  // time on the next frame they do run, so a lower refresh rate makes the
+  // simulation coarser but NOT slower. A cap on dt still applies inside
+  // stepPhysics, so a long stall cannot explode the integration.
+  if (!shouldRenderFrame(rateToken, timestamp)) {
+    frameId = requestAnimationFrame(tick);
+    return;
+  }
   const dt = lastTimestamp ? (timestamp - lastTimestamp) / 1000 : FALLBACK_DT;
   lastTimestamp = timestamp;
 

@@ -5134,6 +5134,222 @@ those updated for the new `.wordmark-oo__loop` class names and to unhide
 `#pcreateScreen` directly where it drives `openPCreate()` without going
 through Home's own routing.
 
+## Settings: one screen, one store, three sections
+
+The app had accumulated preferences in the places that happened to need
+them — PCreate's edit-in-place toggle in its own `localStorage` key, brush
+sizes reset to a hardcoded default on every session, the auto-save period
+a constant in `autosave.js`, the checkerboard's contrast baked into a
+colour literal. This chapter gathers all of that behind one Settings
+screen and, more importantly, one store.
+
+### Why one store rather than three
+
+The settings arrive in three groups — Main, PCreate, Rig — and the obvious
+build is three small preference objects owned by the three subsystems that
+read them. That is the wrong shape, for a reason that only shows up later:
+a preference is *read* by exactly one feature, but it is **written from one
+shared screen**, persisted through the same storage, and has to be wiped by
+"clear all app data" together with every other one. Three stores means
+three load paths, three save paths, and three chances for one of them to be
+the one that quietly forgot to persist.
+
+So `www/js/settings.js` holds a single record with every preference in it.
+It is loaded once at boot into a plain object, read synchronously from
+memory everywhere, and written through to IndexedDB on every change.
+
+### Synchronous reads, asynchronous writes
+
+`getSetting()` is called from inside pointer handlers and render loops —
+places that cannot `await` anything. Making it async would mean either
+threading promises through the rasterizer or having every feature keep its
+own cached copy, which is the three-stores problem again wearing a hat.
+
+So the durable copy is pulled into memory once during boot, and every read
+after that hits that object. A write updates memory first (so the effect
+lands immediately), notifies subscribers, and *then* persists in the
+background. A device with storage disabled still behaves correctly for the
+rest of the session; it just forgets on next launch.
+
+Boot deliberately does **not** await the load. The app starts on defaults
+and every consumer re-applies through `subscribeSettings` when the real
+values arrive a frame or two later — which is also why that subscription
+fires immediately on subscribe with a `null` key. A subscriber gets its
+initial apply and its updates through one code path, rather than two that
+can drift apart.
+
+### The schema is the UI
+
+Every setting declares its section, label, kind and options in one table in
+`settings.js`, and `settingsUI.js` renders the screen *from* that
+declaration. Adding a preference is one entry in one table rather than an
+entry plus a block of hand-written markup plus a listener that has to be
+kept in step with it. It also makes "does every setting actually persist?"
+answerable by iterating the schema instead of by remembering.
+
+That is what makes the reachability guarantee structural rather than
+hopeful: the tab bar is built from `SECTIONS` unconditionally, so **all
+three sections exist from every entry point**. Where Settings was opened
+from only chooses which tab starts selected — Home opens on Main, Rig mode's
+kebab on Rig, PCreate's header on PCreate — and never which tabs exist.
+
+`#settingsScreen` is a genuine top-level sibling of `#homeScreen`, `#app`
+and `#pcreateScreen` (the same lesson as [the PCreate screen](#six-loose-ends-from-the-home-screen-launch-and-two-real-bugs-found-while-closing-them)),
+so whichever screen invoked it is fully hidden behind it. Back returns to
+*that* screen, not to Home — opening Settings from PCreate and coming back
+leaves the canvas exactly where it was.
+
+### Screen Rate: throttle, don't reschedule
+
+The Main section's 120/60/30Hz modes have to reach every animation in the
+app, and those live in modules that know nothing about each other: the Home
+petal field, the physics solver, the scene renderer. Rather than teach each
+of them about settings, they each wrap their own `requestAnimationFrame` in
+one shared gate, `shouldRenderFrame(token)`.
+
+It **throttles** rather than schedules. `rAF` still fires at whatever rate
+the display runs at, and a callback whose turn has not come simply returns
+without doing work. That keeps each caller's loop structure untouched and
+costs a subtraction on skipped frames.
+
+Two details matter:
+
+- **`lastTime` is not advanced on a skipped frame.** The physics and the
+  petals both integrate the *full* elapsed time on the next frame they do
+  run, so a lower refresh rate makes the motion coarser but **not slower**.
+  Getting this backwards would have made "Battery Economic" also mean
+  "everything moves at a quarter speed".
+- **120 means "no cap", on purpose.** Gating on an 8.33ms budget against a
+  display already delivering 8.33ms frames turns a rounding error into a
+  dropped frame roughly every other frame. The highest setting asks the gate
+  to get out of the way entirely — and the 60Hz budget carries a 2ms
+  tolerance for the same reason.
+
+The scene renderer is the exception, and it is the interesting one.
+`requestRender()` is **edge-driven and already coalesced** — many stores can
+each ask for a frame and only one is drawn. There, a dropped frame is not a
+slightly coarser animation, it is a real change that never reaches the
+screen at all. So that one **defers** rather than drops: it re-arms `rAF`
+until its turn comes.
+
+### Double-tap to Fill has to undo the first tap
+
+This is the whole subtlety of the PCreate section. By the time a second tap
+identifies the gesture as a double tap, the **first** tap has already been
+committed as a brush dot — so the texel under the finger is now painted in
+the current colour, and a flood fill seeded there finds a region of exactly
+the pixels that tap just painted. The user double-taps a large area and
+watches a single dot change colour.
+
+So the double tap rolls the first tap back through the existing undo stack
+before filling. That restores the texel to whatever it genuinely was, which
+is what the flood fill has to read to find the right region. Reusing undo
+rather than snapshotting the colour by hand also handles a wide brush, where
+the first tap painted a whole square rather than one texel.
+
+It defaults **off**, and its long-press sibling defaults **on**. That is not
+inconsistency: two quick taps in one spot is a routine drawing action —
+dotting a pixel, correcting a stroke — so binding a flood fill to it
+misfires often rather than rarely, and the misfire repaints a whole region.
+Long-pressing is not something a hand does by accident mid-stroke, and Pick
+Color changes no pixels at all.
+
+### Contour: screen space, not the scene bitmap
+
+The Rig section's outline is drawn from the scene's alpha but painted in
+**screen** space, for three reasons: the outline keeps its weight at any
+zoom rather than becoming a smear; it cannot contaminate the artwork the
+rasterizer just composed; and `captureFrame()` — which runs off that same
+bitmap — keeps exporting the character alone, with no rigging aid baked
+into the GIF.
+
+`www/js/contour.js` is pure, so "does this find the right edge" is settled
+against hand-written 5×5 grids in `tests/contour.mjs` rather than by
+screenshotting a rig. Two decisions in it are worth stating:
+
+- **Four-connected, not eight.** An eight-connected test also lights up the
+  pixel diagonally inside a staircase — and on pixel art, where every curve
+  *is* a staircase, that thickens the line to two pixels along every
+  diagonal run while leaving it one pixel along the flats. The outline then
+  reads as uneven for reasons that have nothing to do with the drawing.
+- **Thickness is not applied by dilating the edge set.** Growing it would
+  cost `O(area × thickness)` every frame; instead the caller draws a bigger
+  rectangle per edge pixel, which costs nothing and looks the same. The
+  trace stays `O(area)` whatever thickness is chosen.
+
+Per-layer mode re-rasterizes each part alone into a scratch buffer cleared
+only over that part's own bounds, so its cost scales with the artwork's area
+rather than with canvas area times layer count. That is what lets it show
+the boundary of a layer *hidden underneath another* — the one thing the
+full-silhouette mode structurally cannot.
+
+### The edit-in-place toggle moved stores
+
+PCreate's destructive-vs-copy setting used to live in its own
+`localStorage` key. It is now backed by the settings store, and the
+in-window toggle and the settings entry are deliberately **the same value**.
+Splitting them into "the default for next time" and "the setting for now"
+would mean a user who flips the in-window toggle finds it reverted next
+session — strictly worse than the behaviour it replaces — and would let the
+settings screen display something other than what PCreate is actually doing.
+One value, two places to change it, both persistent.
+
+### Clearing app data empties the stores rather than deleting the database
+
+`indexedDB.deleteDatabase()` blocks indefinitely while any connection is
+still open, and this app's connection is held for the life of the page. A
+reset done that way appears to hang until the app is closed, which is the
+opposite of what someone pressing a reset button expects. Clearing each
+store completes immediately and leaves the schema in place, so the very next
+write works without waiting for a reopen.
+
+The reload afterwards is not cosmetic: the stores are empty, but half the
+app is still holding objects loaded from them, and there is no honest way to
+put all of that back to first-launch condition in place.
+
+### Verification
+
+The point of this task was settings that *do something*, so each section's
+representative setting is measured in the feature it governs, never in the
+toggle:
+
+- **Screen Rate** — `clearRect` calls on the Home petal canvas counted over
+  a wall-clock second: **61 frames at 120Hz, 30 at 30Hz**.
+- **Double-tap to Fill** — opaque texels in the artwork before and after:
+  **+1 px with the setting off, +4095 px with it on**.
+- **Grid snap** — the placed bone's world head from the same drag:
+  **(78.5, 142.5) snapped, (78.80, 142.20) free**.
+- **Back-to-Menu confirmation** — with unsaved changes present, the prompt
+  appears and the app has *not* navigated; with the setting off the same
+  action leaves immediately.
+- **Clear all app data** — a real saved project and palette in place first;
+  cancel changes nothing, confirm leaves both stores empty and every setting
+  back at its first-launch default.
+- **Checkerboard strength** — mean canvas brightness **5.96 / 8.46 / 13.87**
+  across Subtle / Normal / Bold.
+- **Persistence** — all 19 settings survive a close and reopen, *and* are
+  live where they are used: the restored auto-save interval is armed in
+  `autosave.js` (30 000ms), the restored brush size and strength are what
+  `bindTool.js` reports, and the restored Screen Rate is the governor's
+  actual budget (33.33ms).
+
+Reachability is checked from all three entry points, and from each one all
+three sections are opened in turn and confirmed to render their fields.
+
+Everything is green: **479 checks** — 216 headless (13 CLayer, 27 colour,
+**19 contour**, 25 dent, 78 pixelops, **54 settings**) and 263 in a real
+browser (35 Home, 27 PCreate foundation, 56 tools, 49 layers, 41
+four-feature, 10 six-fix, **45 settings**). The one pre-existing assertion
+that changed was PCreate's edit-mode persistence check, which asserted the
+`localStorage` key rather than the behaviour; it now reads the store the
+value actually lives in.
+
+Two of those checks are there because the undo-first step above is easy to
+get wrong and invisible when you do: with it removed, a double tap adds
+**one** texel instead of 4095, and the fill recolours only the dot the
+first tap left. Both assertions were confirmed to fail against a build with
+that step disabled, rather than merely passing against the one that has it.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

@@ -75,6 +75,15 @@ class History {
     return this.canUndo ? this._undoStack[this._undoStack.length - 1].label : null;
   }
 
+  // How many actions are on the undo stack. A caller that wants to know
+  // whether a specific thing it just did actually committed an action can
+  // compare this before and after -- which "did the label change" cannot
+  // answer, since repeating an action leaves the label identical, and
+  // canUndo cannot answer either once the stack is already non-empty.
+  get undoDepth() {
+    return this._undoStack.length;
+  }
+
   get redoLabel() {
     return this.canRedo ? this._redoStack[this._redoStack.length - 1].label : null;
   }

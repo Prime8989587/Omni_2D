@@ -15,9 +15,14 @@ import { history } from './history.js';
 import { serializeProject } from './project.js';
 import { saveRecovery } from './storage.js';
 
-const PERIODIC_MS = 2 * 60 * 1000; // every two minutes while dirty
+// The DEFAULT period. The Main settings section overrides it through
+// setAutoSaveInterval() below, which is why this is a mutable starting
+// value rather than a constant: the timer has to be re-armed at the new
+// period the moment the preference changes, not at the next launch.
+const DEFAULT_PERIODIC_MS = 2 * 60 * 1000; // every two minutes while dirty
 const DEBOUNCE_MS = 8 * 1000; // ...and shortly after any change settles
 
+let periodicMs = DEFAULT_PERIODIC_MS;
 let timer = null;
 let debounce = null;
 let currentName = null; // the named project this session came from, if any
@@ -50,13 +55,32 @@ export function autoSaveNow(reason = 'manual') {
   return write(reason);
 }
 
+// Re-arms the periodic timer at a new interval. Called on boot and on every
+// change to the Main section's Auto-save interval, so shortening it takes
+// effect within one period rather than at the next launch. Safe before
+// initAutoSave(): there is simply no timer to clear yet, and the interval
+// this records is the one initAutoSave will arm with.
+export function setAutoSaveInterval(ms) {
+  const next = Math.max(5000, Number(ms) || DEFAULT_PERIODIC_MS);
+  if (next === periodicMs && timer) return;
+  periodicMs = next;
+  if (timer) {
+    clearInterval(timer);
+    timer = setInterval(() => write('timer'), periodicMs);
+  }
+}
+
+export function autoSaveIntervalMs() {
+  return periodicMs;
+}
+
 export function initAutoSave({ onFailure } = {}) {
   if (onFailure) onError = onFailure;
   history.subscribe(() => {
     if (history.isDirty) scheduleDebounced();
   });
   clearInterval(timer);
-  timer = setInterval(() => write('timer'), PERIODIC_MS);
+  timer = setInterval(() => write('timer'), periodicMs);
 
   // Backgrounding an app on a phone is the moment before it gets killed.
   document.addEventListener('visibilitychange', () => {

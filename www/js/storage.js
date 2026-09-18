@@ -11,10 +11,11 @@
 
 const DB_NAME = 'omni2d';
 // Bumped for the palettes store, then again for PCreate's work-in-progress
-// slot. onupgradeneeded below already guards every store's creation with
-// "if not already there", so this runs harmlessly for a database that
-// already has the earlier stores in it -- only the new one gets created.
-const DB_VERSION = 3;
+// slot, then again for app settings. onupgradeneeded below already guards
+// every store's creation with "if not already there", so this runs
+// harmlessly for a database that already has the earlier stores in it --
+// only the new one gets created.
+const DB_VERSION = 4;
 const PROJECTS = 'projects';
 const RECOVERY = 'recovery';
 const RECOVERY_KEY = 'autosave';
@@ -41,6 +42,15 @@ const PALETTES = 'palettes';
 const PCREATE = 'pcreate';
 const PCREATE_KEY = 'session';
 
+// App settings: one record holding every preference from all three
+// sections. A single row rather than a row per setting, because settings
+// are only ever read as a set (the whole thing is pulled into memory once
+// at boot) and only ever written one at a time -- so a single put is both
+// the cheapest read and a write that can never leave two related
+// preferences disagreeing with each other halfway through.
+const SETTINGS = 'settings';
+const SETTINGS_KEY = 'app';
+
 let dbPromise = null;
 
 function openDb() {
@@ -57,6 +67,7 @@ function openDb() {
       if (!db.objectStoreNames.contains(RECOVERY)) db.createObjectStore(RECOVERY, { keyPath: 'key' });
       if (!db.objectStoreNames.contains(PALETTES)) db.createObjectStore(PALETTES, { keyPath: 'name' });
       if (!db.objectStoreNames.contains(PCREATE)) db.createObjectStore(PCREATE, { keyPath: 'key' });
+      if (!db.objectStoreNames.contains(SETTINGS)) db.createObjectStore(SETTINGS, { keyPath: 'key' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('Could not open the project database'));
@@ -214,4 +225,43 @@ export function clearRestorePoint() {
     store.delete(RESTORE_KEY);
     return true;
   });
+}
+
+// ---- App settings ---------------------------------------------------------
+
+export function saveSettings(values) {
+  const record = { key: SETTINGS_KEY, savedAt: Date.now(), values };
+  return runTransaction(SETTINGS, 'readwrite', (store) => {
+    store.put(record);
+    return record;
+  });
+}
+
+export function loadSettings() {
+  return runTransaction(SETTINGS, 'readonly', (store) => wrap(store.get(SETTINGS_KEY)));
+}
+
+// ---- Clear all app data ---------------------------------------------------
+//
+// Empties every store rather than deleting the database outright.
+// deleteDatabase() blocks indefinitely while any connection is still open,
+// and this one's connection is held for the life of the page -- so a reset
+// done that way would appear to hang until the app was closed, which is the
+// opposite of what someone pressing a reset button expects. Clearing each
+// store completes immediately and leaves the schema in place, so the very
+// next write works without waiting for a reopen.
+export function clearAllData() {
+  return openDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const names = [PROJECTS, RECOVERY, PALETTES, PCREATE, SETTINGS].filter((n) =>
+          db.objectStoreNames.contains(n)
+        );
+        const tx = db.transaction(names, 'readwrite');
+        for (const name of names) tx.objectStore(name).clear();
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error || new Error('Could not clear app data'));
+        tx.onabort = () => reject(tx.error || new Error('Clearing app data was interrupted'));
+      })
+  );
 }

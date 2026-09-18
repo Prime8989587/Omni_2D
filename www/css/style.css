@@ -2019,6 +2019,139 @@ button, input, select {
   background: var(--color-bg);
 }
 
+/* ==================== Settings ====================
+   Same full-bleed opaque treatment as .pcreate-screen, one layer above it,
+   because Settings can be opened FROM PCreate and has to cover it. */
+
+.settings-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  flex: 0 0 auto;
+}
+
+.settings-tab {
+  flex: 1 1 0;
+  min-height: 44px;
+  padding: 8px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font: inherit;
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.settings-tab[aria-selected='true'] {
+  border-color: var(--color-accent);
+  background: rgba(255, 46, 147, 0.12);
+  color: var(--color-accent);
+}
+
+/* The only scrolling region: the header and tab bar stay put so the three
+   sections are reachable from anywhere in a long list. */
+.settings-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px 12px 48px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.settings-field {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.settings-field__label {
+  display: block;
+  margin: 0 0 2px;
+  font-size: var(--text-label);
+  color: var(--color-text);
+}
+
+.settings-field__hint {
+  margin: 0 0 8px;
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.4);
+  line-height: 1.4;
+}
+
+.settings-field__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.settings-choice {
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.settings-choice[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  background: rgba(255, 46, 147, 0.16);
+  color: var(--color-accent);
+}
+
+.settings-choice__note {
+  display: block;
+  font-size: calc(var(--text-label) * 0.75);
+  opacity: 0.6;
+}
+
+.settings-field__value {
+  min-width: 56px;
+  font-size: var(--text-label);
+  color: var(--color-accent);
+}
+
+.settings-field .slider {
+  flex: 1 1 140px;
+}
+
+.settings-readout {
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.settings-group-title {
+  margin: 20px 0 4px;
+  font-size: var(--text-label);
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-group-title:first-child {
+  margin-top: 4px;
+}
+
+/* A third route off Home, alongside Rigging and PCreate but deliberately
+   quieter than them: those two are where the work happens. */
+.home__btn--quiet {
+  min-height: 48px;
+  opacity: 0.75;
+}
+
 /* Full-bleed and BELOW the content, but still able to take a drag: the
    content column is narrow, so most of the petal field is reachable. */
 .home__petals {

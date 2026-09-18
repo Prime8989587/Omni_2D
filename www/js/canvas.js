@@ -19,6 +19,8 @@ import { deformVerticesSnapped, partQuad } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
+import { traceAlphaEdges, traceAlphaEdgesInBounds } from './contour.js';
+import { getSetting, shouldRenderFrame } from './settings.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture, pierceOffsets,
   pierceDentCuts,
@@ -69,6 +71,7 @@ let dirty = null; // { x0, y0, x1, y1 } written last frame, cleared next frame
 // The checkerboard tile, rebuilt only when the zoom changes.
 let checkerTile = null;
 let checkerTileZoom = 0;
+let checkerTileLight = null;
 
 // ---------------------------------------------------------------------------
 // Scene bitmap
@@ -196,7 +199,10 @@ function renderScene(boneTransforms) {
 
   let touched = dirty;
   for (const entry of drawList) touched = unionBounds(touched, entry.bounds);
-  if (!touched) return;
+  // Returned even when there is nothing to redraw: the contour is drawn in
+  // screen space every frame (a pan or a zoom moves it without the scene
+  // bitmap changing at all), so it needs the draw list regardless.
+  if (!touched) return drawList;
 
   clearRegion(buffer, sceneWidth, sceneHeight, touched.x0, touched.y0, touched.x1, touched.y1);
 
@@ -231,16 +237,128 @@ function renderScene(boneTransforms) {
   const x1 = Math.min(sceneWidth, touched.x1);
   const y1 = Math.min(sceneHeight, touched.y1);
   if (x1 > x0 && y1 > y0) sceneCtx.putImageData(sceneImage, 0, 0, x0, y0, x1 - x0, y1 - y0);
+  return drawList;
+}
+
+// ---------------------------------------------------------------------------
+// Contour
+//
+// Drawn in SCREEN space from the scene's alpha, not baked into the scene
+// bitmap. Three reasons: the outline stays one screen pixel's worth of
+// weight per unit of thickness at any zoom rather than becoming a smear
+// when zoomed in; it can never contaminate the artwork the rasterizer just
+// composed; and captureFrame(), which runs off that same bitmap, keeps
+// exporting the character alone, with no rigging aid drawn into the GIF.
+//
+// The per-layer mode needs each part's own silhouette rather than the
+// composited one, so it re-rasterizes each part alone into a scratch
+// buffer. That buffer is allocated once and cleared only over the part's
+// own bounds, so the cost is proportional to the artwork's area rather
+// than to the canvas area times the layer count.
+
+let contourScratch = null;
+let contourScratchSize = 0;
+
+function contourScratchBuffer() {
+  const needed = sceneWidth * sceneHeight * 4;
+  if (!contourScratch || contourScratchSize !== needed) {
+    contourScratch = new Uint8ClampedArray(needed);
+    contourScratchSize = needed;
+  }
+  return contourScratch;
+}
+
+function paintContourEdges(edges, color, thickness) {
+  if (edges.length === 0) return;
+  const zoom = view.zoom;
+  // Thickness is applied by drawing a BIGGER rectangle per edge pixel
+  // rather than by growing the edge set, which keeps the trace O(area)
+  // whatever thickness is chosen. The rect is centred on its pixel, so a
+  // thicker outline grows evenly to both sides of the true boundary
+  // instead of drifting inward.
+  const size = zoom * thickness;
+  const inset = (size - zoom) / 2;
+  ctx.fillStyle = color;
+  for (const index of edges) {
+    const x = index % sceneWidth;
+    const y = (index - x) / sceneWidth;
+    const p = view.toScreen(x, y);
+    ctx.fillRect(p.x - inset, p.y - inset, size, size);
+  }
+}
+
+function drawContour(drawList) {
+  const mode = getSetting('contourMode');
+  if (mode === 'off' || !sceneImage) return;
+
+  const color = getSetting('contourColor');
+  const thickness = getSetting('contourThickness');
+
+  if (mode === 'silhouette') {
+    // The composed scene: overlapping layers read as ONE shape, which is
+    // the entire difference between this mode and the one below.
+    paintContourEdges(
+      traceAlphaEdges(sceneImage.data, sceneWidth, sceneHeight),
+      color, thickness
+    );
+    return;
+  }
+
+  // Per-layer: every part outlined on its own, including where one covers
+  // another, so the stack is legible as separate pieces while rigging.
+  const scratch = contourScratchBuffer();
+  for (const { part, geometry, mask, bounds } of drawList) {
+    if (!bounds) continue;
+    const x0 = Math.max(0, Math.floor(bounds.x0));
+    const y0 = Math.max(0, Math.floor(bounds.y0));
+    const x1 = Math.min(sceneWidth, Math.ceil(bounds.x1));
+    const y1 = Math.min(sceneHeight, Math.ceil(bounds.y1));
+    if (x1 <= x0 || y1 <= y0) continue;
+
+    clearRegion(scratch, sceneWidth, sceneHeight, x0, y0, x1, y1);
+    const { positions, uvs, triangles } = geometry;
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = triangles[i];
+      const b = triangles[i + 1];
+      const c = triangles[i + 2];
+      rasterizeTriangle(
+        scratch, sceneWidth, sceneHeight,
+        part.pixels, part.naturalWidth, part.naturalHeight,
+        positions[a], positions[b], positions[c],
+        uvs[a], uvs[b], uvs[c], mask
+      );
+    }
+    paintContourEdges(
+      traceAlphaEdgesInBounds(scratch, sceneWidth, sceneHeight, { x0, y0, x1, y1 }),
+      color, thickness
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Grid
 
+// The Rig setting's three strengths, as the LIGHT square of the pair. The
+// dark square stays black throughout, so what the setting actually changes
+// is the contrast between the two -- which is what "how visible is the
+// checkerboard" means. CHECKER_LIGHT is the Normal step, unchanged, so the
+// default setting reproduces exactly the previous appearance.
+const CHECKER_STRENGTHS = {
+  subtle: '#1A1A1A',
+  normal: CHECKER_LIGHT,
+  bold: '#404040',
+};
+
 // A 2x2-cell tile at the current zoom, in whole device pixels so the
 // pattern tiles with no seams and no resampling.
 function checkerPattern() {
   const zoom = view.zoom;
-  if (!checkerTile || checkerTileZoom !== zoom) {
+  const light = CHECKER_STRENGTHS[getSetting('checkerStrength')] || CHECKER_LIGHT;
+  // The tile is cached against BOTH the zoom it was built for and the
+  // strength it was built at, so changing the setting rebuilds it
+  // immediately instead of leaving the old contrast on screen until the
+  // next time the user happens to zoom.
+  if (!checkerTile || checkerTileZoom !== zoom || checkerTileLight !== light) {
     const cell = Math.max(1, Math.round(zoom * dpr));
     checkerTile = document.createElement('canvas');
     checkerTile.width = cell * 2;
@@ -248,10 +366,11 @@ function checkerPattern() {
     const tileCtx = checkerTile.getContext('2d');
     tileCtx.fillStyle = CHECKER_DARK;
     tileCtx.fillRect(0, 0, cell * 2, cell * 2);
-    tileCtx.fillStyle = CHECKER_LIGHT;
+    tileCtx.fillStyle = light;
     tileCtx.fillRect(cell, 0, cell, cell);
     tileCtx.fillRect(0, cell, cell, cell);
     checkerTileZoom = zoom;
+    checkerTileLight = light;
   }
 
   const pattern = ctx.createPattern(checkerTile, 'repeat');
@@ -473,7 +592,7 @@ function render() {
   // One snapshot per frame drives every bound part's skinning.
   const boneTransforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
 
-  renderScene(boneTransforms);
+  const drawList = renderScene(boneTransforms);
   captureFrame();
   if (sceneCanvas) {
     ctx.drawImage(
@@ -482,6 +601,12 @@ function render() {
       view.panX, view.panY, sceneWidth * view.zoom, sceneHeight * view.zoom
     );
   }
+
+  // After the artwork, before the skeleton: the outline belongs to the
+  // character, so bone handles stay on top of it and remain grabbable.
+  // Note this runs AFTER captureFrame(), which is what keeps the contour
+  // out of exported animations.
+  if (drawList) drawContour(drawList);
 
   if (isRig) drawSkeleton();
 
@@ -546,13 +671,26 @@ function drawPierceProbe() {
   probeEl.hidden = false;
 }
 
+// The scene render is already coalesced -- many stores can each ask for a
+// frame and only one is drawn -- so Screen Rate is applied by DEFERRING a
+// frame whose turn has not come rather than dropping it. Dropping would be
+// wrong here: unlike the petals or the physics loop, this is edge-driven,
+// and a dropped request is not a slightly coarser animation, it is a real
+// change that never reaches the screen at all.
+const renderRateToken = { name: 'scene' };
+
 export function requestRender() {
   if (frameRequested) return;
   frameRequested = true;
-  requestAnimationFrame(() => {
+  const attempt = () => {
+    if (!shouldRenderFrame(renderRateToken)) {
+      requestAnimationFrame(attempt);
+      return;
+    }
     frameRequested = false;
     render();
-  });
+  };
+  requestAnimationFrame(attempt);
 }
 
 function resize() {

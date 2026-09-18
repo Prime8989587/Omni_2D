@@ -46,6 +46,7 @@
 import { bonesStore } from './bones.js';
 import { partsStore } from './parts.js';
 import { view } from './view.js';
+import { getSetting } from './settings.js';
 import { history } from './history.js';
 import { appState, AppState } from './state.js';
 
@@ -123,6 +124,10 @@ export function isPosing() {
 // Bone endpoints sit on pixel centres (the grid revision's rule), so the
 // character lands on whole pixels however it is dragged.
 function snapToCell(point) {
+  // Honours the Rig section's Grid snap toggle, for the same reason
+  // rigTool.js does: a character placed with snapping off has to be able
+  // to sit between pixels, which is exactly what rounding would prevent.
+  if (!getSetting('gridSnap')) return { x: point.x, y: point.y };
   return { x: Math.floor(point.x) + 0.5, y: Math.floor(point.y) + 0.5 };
 }
 

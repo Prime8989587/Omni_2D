@@ -22,6 +22,7 @@
       <div class="home__actions">
         <button id="homeRiggingBtn" class="btn btn--lg btn--flourish home__btn" type="button">Rigging</button>
         <button id="homePcreateBtn" class="btn btn--lg btn--flourish home__btn" type="button">PCreate</button>
+        <button id="homeSettingsBtn" class="btn btn--lg home__btn home__btn--quiet" type="button">Settings</button>
       </div>
       <p class="home__hint">Drag the petals if you like — they will drift on from wherever you drop them.</p>
     </div>
@@ -48,6 +49,7 @@
       <div id="appMenu" class="app-menu" hidden>
         <p class="app-menu__group">Navigation</p>
         <button id="backToMenuBtn" class="app-menu__item" type="button">◀ Back to Menu</button>
+        <button id="rigSettingsBtn" class="app-menu__item" type="button">Settings…</button>
         <p class="app-menu__group">Project</p>
         <button id="saveProjectBtn" class="app-menu__item" type="button">Save project…</button>
         <button id="openProjectBtn" class="app-menu__item" type="button">Open project…</button>
@@ -765,6 +767,7 @@
         <button id="pcreateBackToMenuBtn" class="btn btn--icon" type="button" aria-label="Back to Menu" title="Back to Menu">&#8962;</button>
         <span class="px-pin__title">PCreate — <b id="pcreateCanvasLabel"></b></span>
         <span id="pcreateStatus" class="px-pin__status"></span>
+        <button id="pcreateSettingsBtn" class="btn btn--icon" type="button" aria-label="Settings" title="Settings">&#9881;</button>
         <button id="pcreateDoneBtn" class="btn btn--sm" type="button">Done</button>
       </header>
       <canvas id="pcreateCanvas" class="px-pin__canvas"></canvas>
@@ -963,6 +966,63 @@
     </div>
 
   </section>
+
+  <!-- ==================== Settings ====================
+       ONE screen and ONE data store for all three sections, reached from
+       Home, from Rig mode's kebab and from PCreate's header. Which section
+       it opens on depends on where it was opened from; which sections are
+       REACHABLE never does -- the tab bar is always all three. A genuine
+       top-level sibling, like #pcreateScreen, so whichever screen invoked
+       it is fully hidden behind it rather than showing through.
+
+       The section bodies are empty here on purpose: every control is
+       rendered from the schema in settings.js, so a new preference is one
+       table entry rather than an entry plus markup plus a listener. -->
+
+  <section id="settingsScreen" class="settings-screen" hidden aria-label="Settings">
+    <header class="px-pin__bar">
+      <button id="settingsBackBtn" class="btn btn--icon" type="button" aria-label="Back" title="Back">&#9664;</button>
+      <span class="px-pin__title">Settings</span>
+      <span id="settingsStatus" class="px-pin__status"></span>
+    </header>
+
+    <nav id="settingsTabs" class="settings-tabs" role="tablist" aria-label="Settings sections"></nav>
+
+    <div id="settingsBody" class="settings-body"></div>
+
+    <div id="settingsClearModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsClearTitle">
+        <h2 id="settingsClearTitle" class="modal__title">Clear all app data?</h2>
+        <p class="modal__text">
+          This permanently removes every saved project, every palette, the
+          recovery slot, any PCreate work in progress and all settings.
+          It cannot be undone.
+        </p>
+        <div class="modal__actions">
+          <button id="settingsClearConfirmBtn" class="btn btn--danger" type="button">Clear everything</button>
+          <button id="settingsClearCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Shown by Back to Menu when the Main setting is on AND there is
+       genuinely unsaved work. A sibling of the screens rather than a child
+       of one, because the same prompt guards leaving either of them. -->
+  <div id="leaveConfirmModal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="leaveConfirmTitle">
+      <h2 id="leaveConfirmTitle" class="modal__title">Leave without saving?</h2>
+      <p class="modal__text">
+        This project has changes that have not been saved. Going back to the
+        menu keeps them in the recovery slot, but they are not in a saved
+        project yet.
+      </p>
+      <div class="modal__actions">
+        <button id="leaveConfirmBtn" class="btn btn--danger" type="button">Leave anyway</button>
+        <button id="leaveCancelBtn" class="btn btn--cancel" type="button">Stay here</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
 
