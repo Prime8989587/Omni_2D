@@ -50,6 +50,7 @@
 // view.js's.
 
 import { Part, partsStore } from './parts.js';
+import { playEnter } from './transitions.js';
 import { sceneStore, SCENE_PRESETS, MIN_SCENE_SIZE, MAX_SCENE_SIZE } from './scene.js';
 import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName } from './importer.js';
@@ -518,6 +519,7 @@ function startSession({ kind, name, width, height, pixels, bitmap, layers = null
 
   els.pcreateCanvasLabel.textContent = name;
   els.pcreateWindow.hidden = false;
+  playEnter(els.pcreateWindow); // the same transition every other screen uses
 
   sizeCanvas();
   fitCamera();

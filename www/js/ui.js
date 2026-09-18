@@ -32,6 +32,8 @@ import { initPxPin } from './pxpin.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { initClayer, openClayer } from './clayer.js';
 import { initPCreate, openPCreate } from './pcreate.js';
+import { initHome, startPetals, stopPetals } from './home.js';
+import { playEnter, transitionScreens } from './transitions.js';
 import { pierceOverlayEnabled, setPierceOverlay, pierceDentIssue, markPierceStale } from './pierce.js';
 import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
@@ -96,6 +98,7 @@ let bindRiggedOnly = false; // Bind Parts tab: hide layers no bone has claimed
 function cacheElements() {
   els.canvas = document.getElementById('canvas');
   els.canvasWrap = document.getElementById('canvasWrap');
+  els.controls = document.querySelector('.controls');
 
   els.importBtn = document.getElementById('importBtn');
   els.animateBtn = document.getElementById('animateBtn');
@@ -254,6 +257,8 @@ function cacheElements() {
   els.appMenu = document.getElementById('appMenu');
   els.clayerOpenBtn = document.getElementById('clayerOpenBtn');
   els.pcreateOpenBtn = document.getElementById('pcreateOpenBtn');
+  els.homeScreen = document.getElementById('homeScreen');
+  els.appRoot = document.getElementById('app');
   els.stateSaveBtn = document.getElementById('stateSaveBtn');
   els.stateReverseBtn = document.getElementById('stateReverseBtn');
   els.stateDiscardBtn = document.getElementById('stateDiscardBtn');
@@ -1979,8 +1984,46 @@ function cancelDeletePart() {
   els.deletePartModal.hidden = true;
 }
 
+// Home -> everywhere else. One function so both buttons leave the same way
+// and the petals are always stopped on the way out; a decorative animation
+// left running behind a working canvas is a battery cost for nothing.
+function leaveHome(then) {
+  transitionScreens({
+    from: els.homeScreen,
+    to: els.appRoot,
+    hide: (el) => { el.hidden = true; },
+    show: (el) => { el.hidden = false; },
+  }).then(() => {
+    stopPetals();
+    if (then) then();
+  });
+}
+
+// Back to Home: the petals start again, and the app is put away.
+export function returnHome() {
+  transitionScreens({
+    from: els.appRoot,
+    to: els.homeScreen,
+    hide: (el) => { el.hidden = true; },
+    show: (el) => { el.hidden = false; },
+  }).then(() => startPetals());
+}
+
 // Reflects app state + scene contents onto the DOM: which control row is
 // visible, which buttons are enabled, the canvas border, and the panel.
+// Every mode change animates the working area, so switching Rig -> Bind ->
+// Animate uses the same transition as arriving from Home. Keyed on the
+// state actually changing, so a redraw for some other reason (a layer
+// added, a selection changed) does not replay it.
+let lastAnimatedState = null;
+
+function animateModeChange() {
+  if (lastAnimatedState === currentState) return;
+  lastAnimatedState = currentState;
+  if (els.canvasWrap) playEnter(els.canvasWrap);
+  if (els.controls) playEnter(els.controls);
+}
+
 function renderChrome() {
   const isHome = currentState === AppState.HOME;
   const isRig = currentState === AppState.RIG;
@@ -1988,6 +2031,8 @@ function renderChrome() {
   const isAnimating = currentState === AppState.ANIMATING;
   const isRecording = currentState === AppState.RECORDING;
   const isAnimateMode = isAnimating || isRecording;
+
+  animateModeChange();
 
   els.homeControls.hidden = !isHome;
   els.animateControls.hidden = !isAnimateMode;
@@ -2741,6 +2786,14 @@ export function initUI() {
   initPierceDepthCanvas();
   initClayer();
   initPCreate();
+
+  // THE APP OPENS HERE. #app starts hidden in the markup, so the first
+  // thing on screen is the Home screen rather than a working canvas
+  // nobody asked for yet.
+  initHome({
+    onRigging: () => leaveHome(),
+    onPCreate: () => leaveHome(() => openPCreate()),
+  });
   initInfoButtons();
   restorePierceOverlay();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });

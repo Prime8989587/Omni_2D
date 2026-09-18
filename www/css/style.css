@@ -38,6 +38,17 @@
      as sitting ON the background rather than being flush with it. */
   --color-surface: #2A1E28;
   --color-accent: #FF2E93;
+  /* The pressed state of the accent: the same hue, taken down in value
+     rather than desaturated toward grey, so a held button still reads as
+     this app's pink and not as a disabled one. */
+  --color-accent-dark: #B01062;
+  /* Sakura petals on the Home screen. Light enough to read clearly
+     against the charcoal-plum background at small sizes. */
+  --color-sakura: #FFB7C5;
+  /* One duration for every screen change in the app. Long enough to be
+     seen, short enough that it never sits between the user and the thing
+     they are trying to do. */
+  --screen-transition: 220ms;
   --color-text: #FFFFFF;
   --color-danger: #F44336; /* standard system red, cancel/destructive only */
   --color-disabled: #4d4d4d;
@@ -313,12 +324,21 @@ button, input, select {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background-color 0.08s ease, color 0.08s ease, opacity 0.08s ease;
+  transition: background-color 0.07s ease, color 0.07s ease, opacity 0.07s ease,
+    transform 0.07s ease;
 }
 
+/* PRESS: shrink a little, darken a lot, and do both fast.
+   The scale is small on purpose -- 96% is enough to read as "that moved
+   under my finger" without the label visibly jumping -- and the darker
+   pink is a genuinely darker shade of the SAME accent rather than a grey,
+   so a pressed button still looks like part of this app. 70ms out, which
+   is quick enough to feel like a response to the touch rather than an
+   animation playing afterwards. */
 .btn:active:not(:disabled) {
-  background: var(--color-accent);
+  background: var(--color-accent-dark);
   color: #000000;
+  transform: scale(0.96);
 }
 
 .btn--lg {
@@ -424,20 +444,97 @@ button, input, select {
   }
 }
 
+/* INSIDE the box, not outside it -- and that is the whole bug.
+   Every pink-bordered element in this app carries clip-path:
+   var(--pixel-clip) for its stepped corners, and clip-path clips an
+   element's OWN pseudo-elements too. These flourishes used to sit at
+   -8px, entirely outside the box, so the moment the visual-identity pass
+   gave buttons their pixel corners it silently clipped every flower in
+   the app out of existence. Nothing errored and nothing looked broken;
+   the decoration just stopped being drawn.
+
+   Tucking them just inside the border keeps the stepped corners AND the
+   flowers, and has the side benefit of working on any bordered box
+   without each one needing a clip exemption. */
 .btn--flourish::before {
-  top: -8px;
-  left: -8px;
+  top: 2px;
+  left: 3px;
 }
 
 .btn--flourish::after {
-  bottom: -8px;
-  right: -8px;
+  bottom: 2px;
+  right: 3px;
 }
 
-.flourish--tl { top: -8px; left: -8px; }
-.flourish--tr { top: -8px; right: -8px; }
-.flourish--bl { bottom: -8px; left: -8px; }
-.flourish--br { bottom: -8px; right: -8px; }
+.flourish--tl { top: 2px; left: 3px; }
+.flourish--tr { top: 2px; right: 3px; }
+.flourish--bl { bottom: 2px; left: 3px; }
+.flourish--br { bottom: 2px; right: 3px; }
+
+/* ---------- The flower, everywhere it belongs ----------
+   The brief is every pink-bordered surface, not just CTA buttons: panels,
+   the kebab popovers, the app menu and modal dialogs each get one turning
+   in a corner. They are decorative only -- aria-hidden by virtue of being
+   pseudo-elements, and pointer-events: none so a flower sitting over a
+   corner can never eat a tap meant for what is underneath it. */
+.scene-panel::after,
+.row-aside::after,
+.app-menu::after,
+.modal::after,
+.px-pin__controls::after,
+.pcreate-color-row::after {
+  content: '\273F';
+  position: absolute;
+  font-family: var(--font-fallback);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-accent);
+  pointer-events: none;
+  user-select: none;
+  transform-origin: center;
+  animation: flower-spin 10s linear infinite;
+  top: 4px;
+  right: 6px;
+}
+
+/* A modal is the one place there is room for a matching pair. */
+.modal::before {
+  content: '\273F';
+  position: absolute;
+  font-family: var(--font-fallback);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-accent);
+  pointer-events: none;
+  user-select: none;
+  transform-origin: center;
+  animation: flower-spin 10s linear infinite;
+  bottom: 4px;
+  left: 6px;
+}
+
+/* These are the ones that needed a positioning context to hang a corner
+   flower from; the rest already had one. */
+.scene-panel,
+.row-aside,
+.app-menu,
+.modal,
+.px-pin__controls,
+.pcreate-color-row {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-panel::after,
+  .row-aside::after,
+  .app-menu::after,
+  .modal::after,
+  .modal::before,
+  .px-pin__controls::after,
+  .pcreate-color-row::after {
+    animation: none;
+  }
+}
 
 .btn:disabled::before,
 .btn:disabled::after {
@@ -1863,4 +1960,162 @@ button, input, select {
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
+}
+
+/* ---------- Home screen ----------
+   The app's landing screen: a drifting petal field with the wordmark and
+   the two places you can actually go. The petals are drawn on a canvas
+   rather than as DOM nodes -- there are dozens of them moving every frame
+   and each one is individually hit-testable for dragging, which is the
+   canvas's job, not the layout engine's. */
+
+.home {
+  position: fixed;
+  inset: 0;
+  z-index: 40; /* over the app, under every modal and tool window */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+  padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+}
+
+/* Full-bleed and BELOW the content, but still able to take a drag: the
+   content column is narrow, so most of the petal field is reachable. */
+.home__petals {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none; /* the canvas handles its own dragging */
+  image-rendering: pixelated;
+}
+
+.home__content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  max-width: 340px;
+  /* So a drag that starts on the empty space AROUND the buttons still
+     reaches the petals underneath rather than being swallowed here. */
+  pointer-events: none;
+}
+
+.home__content > * {
+  pointer-events: auto;
+}
+
+/* ---------- The oOmni2D wordmark ----------
+   A small loop, then a large one reading as the O of "Omni", then the
+   rest of the word. The two loops are drawn as bordered boxes rather than
+   typed as letters: at these sizes a font's own "o" would be a soft-sided
+   oval, and this needs to read as a hard pixel ring like everything else
+   in the app. */
+
+.home__wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  margin: 0;
+  font-family: var(--font-header);
+  font-size: var(--text-header);
+  color: var(--color-accent);
+  letter-spacing: 1px;
+}
+
+.home__loop {
+  display: inline-block;
+  border: 3px solid var(--color-accent);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.home__loop--small {
+  width: 12px;
+  height: 12px;
+  margin-right: 3px;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+.home__loop--large {
+  width: 22px;
+  height: 22px;
+  margin-right: 2px;
+  align-self: flex-end;
+  margin-bottom: -2px;
+}
+
+.home__wordmark-text {
+  font-family: var(--font-header);
+}
+
+.home__tagline {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--text-label);
+}
+
+.home__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
+
+.home__btn {
+  width: 100%;
+  min-height: 64px;
+  font-size: var(--text-button);
+}
+
+.home__hint {
+  margin: 0;
+  max-width: 300px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: var(--text-label);
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* ---------- The one screen transition ----------
+   Fade plus a short slide, applied to every major screen change in the
+   app so navigation reads the same way everywhere. Outgoing content
+   leaves to the left, incoming arrives from the right.
+
+   transform and opacity only, deliberately: those are the two properties
+   a browser can animate without laying the page out again, which is what
+   keeps this smooth on a phone mid-project rather than hitching. */
+
+@keyframes screen-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes screen-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-18px); }
+}
+
+.screen-enter {
+  animation: screen-in var(--screen-transition) ease-out;
+}
+
+.screen-leave {
+  animation: screen-out var(--screen-transition) ease-in forwards;
+  pointer-events: none; /* nothing is tappable on its way out */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-enter,
+  .screen-leave {
+    animation: none;
+  }
+  .btn:active:not(:disabled) {
+    transform: none;
+  }
 }

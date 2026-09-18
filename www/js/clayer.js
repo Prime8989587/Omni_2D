@@ -39,6 +39,7 @@ import { Part, partsStore } from './parts.js';
 import { sceneStore } from './scene.js';
 import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName, contentBounds, cropPixels } from './importer.js';
+import { playEnter } from './transitions.js';
 
 const BOUNDARY_COLOR = 'rgba(255, 46, 147, 0.85)';
 const FILL_COLOR = 'rgba(58, 219, 126, 0.4)';
@@ -166,6 +167,7 @@ function startSession({ name, width, height, pixels, bitmap }) {
 
   els.clayerSourceName.textContent = name;
   els.clayerWindow.hidden = false;
+  playEnter(els.clayerWindow);
 
   sizeCanvas();
   fitCamera();

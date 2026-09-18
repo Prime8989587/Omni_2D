@@ -7,7 +7,26 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div id="app" class="app">
+  <!-- The app's actual entry point. Everything else stays hidden behind
+       this until a destination is chosen. -->
+  <section id="homeScreen" class="home" aria-label="Omni 2D home">
+    <canvas id="homePetals" class="home__petals" aria-hidden="true"></canvas>
+    <div class="home__content">
+      <h1 class="home__wordmark" aria-label="oOmni2D">
+        <span class="home__loop home__loop--small" aria-hidden="true"></span><span
+          class="home__loop home__loop--large" aria-hidden="true"></span><span
+          class="home__wordmark-text" aria-hidden="true">mni2D</span>
+      </h1>
+      <p class="home__tagline">Rig it, or draw it.</p>
+      <div class="home__actions">
+        <button id="homeRiggingBtn" class="btn btn--lg btn--flourish home__btn" type="button">Rigging</button>
+        <button id="homePcreateBtn" class="btn btn--lg btn--flourish home__btn" type="button">PCreate</button>
+      </div>
+      <p class="home__hint">Drag the petals if you like — they will drift on from wherever you drop them.</p>
+    </div>
+  </section>
+
+  <div id="app" class="app" hidden>
     <header class="topbar">
       <button id="importBtn" class="btn btn--flourish" type="button">Import</button>
       <button id="fitViewBtn" class="btn btn--icon" type="button" aria-label="Fit the whole canvas on screen" title="Fit">&#10530;</button>

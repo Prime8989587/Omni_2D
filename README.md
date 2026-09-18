@@ -4860,6 +4860,141 @@ brush stroke while one is active paints anywhere. Clipping was not asked
 for, and guessing at it would have been a behaviour change nobody
 requested.
 
+## The Home screen, and the flower that a clip-path had quietly eaten
+
+### The app opens somewhere now
+
+`#app` starts hidden in the markup and the first thing on screen is a
+dedicated Home screen: the charcoal-plum background (`#181117`, the value
+the visual-identity pass established), a drifting field of sakura petals,
+the **oOmni2D** wordmark, and the two places the app can actually take you.
+**Rigging** goes into the existing Import/Rig/Bind/Animate flow untouched;
+**PCreate** goes straight into PCreate, which is now a top-level
+destination rather than something reached through a menu inside Rig mode.
+
+The wordmark's two loops are drawn as bordered boxes rather than typed as
+letters — a small one, then a larger one reading as the O of "Omni", then
+`mni2D` in the pixel display font. At this size a font's own "o" is a
+soft-sided oval, and the mark needs to read as a hard pixel ring like
+everything else in the app.
+
+### Why the petals are on a canvas
+
+Dozens of them move every frame and each one has to be individually
+hit-testable for dragging. As DOM nodes that is dozens of elements being
+re-positioned every frame with a layout pass each time; on a canvas it is
+one element and a loop. The canvas also makes "no smoothing" *enforceable*:
+each petal is drawn as whole-pixel rectangles from a sprite table on an
+integer grid, so they are genuinely hard-edged pixel art rather than smooth
+shapes that happen to be small. The sprite is narrow at the stem end and
+carries the notch at the wide end that makes a cherry-blossom petal read as
+one instead of as a blob.
+
+**Every petal drifts differently**, because one speed and heading for all of
+them reads instantly as a screensaver. Each gets its own fall speed,
+sideways sway amplitude and period, spin rate and phase, so the field never
+lines up with itself. Bigger petals fall slightly faster — a free depth cue
+that stops the field looking flat.
+
+**They are draggable, and that needed more care than it sounds.** A grabbed
+petal is held from *where it was grabbed* rather than jumping to centre
+itself under the finger; it is moved to the end of the draw order so it is
+on top while held; the drag records velocity so a flick carries through on
+release; and on release its sway is re-phased so it **continues drifting
+from where it was dropped** rather than jerking sideways to catch up with
+where its old cycle says it should have been. The hit box is padded by
+10px, because these are small targets and a finger is not precise — that
+padding is the difference between "playful" and "fiddly".
+
+**One real defect, caught by the verification.** The first fill spawned
+petals between `-height` and `0` — that is, entirely *above* the visible
+screen. They drifted down correctly, so nothing looked broken in
+isolation, but it meant the landing screen was visibly bare for the first
+several seconds, which is the one moment it most needs to look alive. The
+initial fill now scatters across the whole screen; only *recycled* petals
+come in from above.
+
+### The flower was never deleted — it was being clipped
+
+The rotating flourish was reported missing, and the CSS for it was still
+there and looked fine: the glyph, the corner positions, the 10-second spin.
+The cause was two changes that were each correct on their own.
+
+The flourishes are `::before`/`::after` pseudo-elements positioned at
+`top: -8px; left: -8px` — just *outside* the element, which is where a
+corner decoration wants to be. Later, the visual-identity pass gave every
+bordered box `clip-path: var(--pixel-clip)` for its stepped corners. **An
+element's clip-path clips its own pseudo-elements too**, so from that
+moment every flower in the app was clipped out of existence. No error, no
+warning, nothing visibly broken — the decoration simply stopped being
+drawn.
+
+They now sit just *inside* the border, which keeps the stepped corners and
+the flowers both, and has the side benefit of working on any bordered box
+without needing a clip exemption. The brief asked for app-wide rather than
+CTA-buttons-only, so panels, the kebab popovers, the app menu, the tool
+footers and modal dialogs each grow one too (a modal gets a matching pair,
+being the one surface with room). All of them `pointer-events: none`, so a
+flower over a corner can never eat a tap meant for what is under it.
+
+### Press: shrink and darken, fast
+
+`scale(0.96)` and a darker pink, over 70ms. The scale is small on purpose —
+enough to read as "that moved under my finger" without the label visibly
+jumping. The darker shade is a genuinely darker version of the same accent
+(`#B01062`) rather than a grey, so a held button still looks like part of
+this app instead of a disabled one. It is on `.btn`, so every button in the
+app gets it, not just Home's two.
+
+### One transition, everywhere
+
+A fade plus an 18px slide, 220ms, in `transitions.js`. The alternative is
+each screen animating itself, which is how an app ends up with a fade here,
+a slide there and a snap somewhere else — each defensible alone, the set of
+them arbitrary. One function means changing how navigation feels is one
+edit in one place.
+
+It is deliberately cheap: **opacity and transform only**, the two properties
+a browser can animate on the compositor without re-laying-out the page.
+This fires when someone switches into Bind mode mid-project with a rigged
+character and a few hundred mesh vertices on screen, on a phone. Anything
+that made navigation feel sluggish would be worse than no animation at all.
+It is skipped entirely under `prefers-reduced-motion`, along with the petal
+drift, the flower spin and the button scale.
+
+The same call covers Home → Rigging, Home → PCreate, every Rig/Bind/Animate
+mode change (keyed on the state actually changing, so an unrelated redraw
+does not replay it), and opening the dedicated tool windows.
+
+### Verified end to end
+
+34 checks at phone size (412×915), on top of the existing suites:
+
+- **Opens on Home**, not on the rigging canvas; wordmark reads `oOmni2D`
+  with a 12px loop followed by a 22px one; background measured at
+  `rgb(24, 17, 23)`.
+- **Petals**: 34 alive and running, in `#FFB7C5`; all 34 moved within
+  700ms, with **10 distinct fall distances** among them — the direct check
+  that they are not moving in lockstep.
+- **Dragging**: a pointer-down grabbed exactly one petal, it followed the
+  finger to within a few pixels of the target, the other 33 kept drifting
+  meanwhile, and after release it stayed where it was dropped and then
+  **resumed drifting from there**.
+- **Press**: measured `scale(0.960)` while held and `rgb(176, 16, 98)` —
+  darker than the resting `rgb(255, 46, 147)` — returning to full size on
+  release.
+- **Flower**: the glyph renders with `animation-name: flower-spin`, is
+  positioned at `top: 2px, left: 3px` (inside the clip, which is the
+  regression guard), and is present on panels as well as buttons.
+- **Transition**: `--screen-transition` is 220ms, and the same classes were
+  observed on **three different navigations** — Home → Rigging, a Rig → Bind
+  mode change, and opening the PCreate window — plus Home → PCreate routing
+  straight into PCreate rather than via Rig mode.
+
+Every earlier suite still passes through the new Home gate: 143 headless,
+27 foundation, 56 tools, 41 four-feature, 49 layer-system and 45
+phone-layout checks.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real
