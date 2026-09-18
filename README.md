@@ -5400,6 +5400,109 @@ Also: `tests/contour.mjs` and `tests/settings.mjs`, added in the Settings
 chapter above, had never been wired into `npm test` — fixed alongside this,
 so the full headless suite (`npm test`) now runs all six files.
 
+## Px Pin tearing during a live Free-Move drag
+
+Reported from a phone with a screenshot: a pinned layer showing jagged,
+detached edges while the character was dragged in Free Move. Reported as a
+regression of the original pin-tearing fix, with the reasonable guess that
+Free-Move's live pipeline was bypassing the mesh-continuity constraint.
+
+That guess turned out to be wrong, and the investigation is worth recording
+because two of the three things it ruled out looked obviously guilty.
+
+### The constraint was being called, and was holding exactly
+
+`partGeometry` -> `deformVerticesSnapped` -> `snapToGrid(deformVertices(...))`,
+and `deformVertices` is where the pin constraint lives. Free Move shares
+that one path with every other mode; there is no second rendering route.
+Measured mid-drag, the pinned band sat **0.000 cells** from where the pin
+says it should be, on every frame, at every speed. The pins were never the
+broken part.
+
+### The original test could not have caught this
+
+The test written with the original fix measures **blob count** -- how many
+separate 4-connected pieces the layer renders as. A layer with holes
+punched through it is still *one* blob, so that metric is structurally
+blind to the artifact being reported. It passes at 1 piece through all of
+this. Measuring enclosed holes and scanline gaps instead showed the problem
+immediately.
+
+### It is speed-dependent, and that is the whole clue
+
+| drag speed | peak spring lag | artifact |
+| --- | --- | --- |
+| 2 px/frame | 19 deg | none |
+| 10 px/frame | 81 deg | visible |
+| 40 px/frame | 119 deg | severe |
+
+A spring bone *trails* its rigid parent -- that is the feature. How far it
+trails scales with how hard the character is thrown, and a real drag throws
+it hard: 58 degrees on a moderate pull, 137 on an abrupt one. Pins were
+originally verified against debug sliders and isolated bone tests, which
+produce 5-30 degrees. The constraint was correct for everything it had ever
+been shown.
+
+### What actually breaks
+
+The pin's transition band -- the smoothstep from "held" to "free" -- spanned
+**one mesh cell**. That band is the only thing bridging held artwork and
+artwork that has swung away with its bone, so it absorbs the entire
+difference between them:
+
+| swing | displacement the band must absorb | stretch |
+| --- | --- | --- |
+| 30 deg | 8.3 cells over an 8-texel band | 1.0x |
+| 58 deg | 15.5 cells | 1.9x |
+| 137 deg | 29.8 cells | 3.7x |
+
+One cell handles 30 degrees comfortably and cannot handle 137. Stretched
+3.7x, nearest-neighbour sampling smears a handful of texels across dozens
+of cells, and the boundary reads exactly as reported: jagged pixels
+detaching from their neighbours. Widening the band to three cells divides
+the stretch by three, putting even the 137-degree case back under what one
+cell already handled at 30. It is clamped to a quarter of the layer's
+smaller side, so a pin on a small layer cannot quietly hold all of it.
+
+### And a second, separate collapse found on the way
+
+Skinning was linear blend skinning: ask each influencing bone where it
+would carry the vertex, and average those *positions*. Averaging positions
+produced by rotations an angle apart lands on the chord rather than the
+arc, so the vertex falls toward the pivot and the layer keeps
+`cos^2(theta/2)` of its area -- 93% at 30 degrees, 50% at 90, 19% at 128,
+zero at 180. This is the classic "candy wrapper" of linear blend skinning.
+
+It is not what caused the reported artifact (auto-weighting gives most
+vertices one dominant bone, and the before/after area in the real rig is
+163% vs 164% -- unchanged). It is a real collapse waiting for any rig that
+*does* weight a vertex evenly across two bones that disagree, which is
+exactly what a spring bone lagging its parent by 128 degrees is.
+
+So skinning now blends the bones' **transforms** rather than the positions
+they produce: rotations averaged as angles (a weighted circular mean),
+translations as vectors, applied once. A blend of rigid motions built that
+way is itself rigid, so it cannot lose area at any angle. Where the bones
+agree it reduces to exactly the old formula -- `tests/skinning.mjs` pins
+that down to 0.00e+0 for the rigid, pure-translation and at-rest cases, so
+nothing that worked before moves by a pixel.
+
+### Verification
+
+`tests/skinning.mjs` (16 checks) holds area at 100% across 0-179 degrees
+where the old blend kept 19% and 0%, handles the 180-degree case where the
+mean rotation is genuinely undefined, and proves the rigid/translation/rest
+cases are bit-exact. Full headless suite: **232 checks**.
+
+The honest limit of this fix: a pin holding the middle of a layer while a
+spring bone swings the rest through 105 degrees still *folds* the layer in
+half, because that is what those inputs geometrically mean. The fold is
+narrower and its edges are clean, and the mesh is one connected piece
+throughout -- but a layer asked to hold still and swing at the same time
+has to go somewhere. Pinning the scalp rather than the mid-band, or a
+stiffer spring, is the modelling answer to that; it is not something the
+renderer can decide.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

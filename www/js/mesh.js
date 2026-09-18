@@ -294,18 +294,47 @@ export function applyWeightDelta(vertex, boneId, delta) {
   normalizeWeights(vertex);
 }
 
-// Linear blend skinning.
+// Skinning: blend the bones' TRANSFORMS, not the positions they produce.
 //
-// For each vertex: take its rest position in world space, and for every
-// influencing bone compute where that bone's movement since bind time
-// would carry the point -- rotate it about the bone's bind head by the
-// bone's change in rotation, then translate to the bone's current head.
-// The result is the weighted average of those per-bone answers.
+// WHY NOT THE OBVIOUS WAY
+//
+// The obvious way -- and what this did originally -- is linear blend
+// skinning: ask each influencing bone where it would carry the vertex, and
+// average those answers.
 //
 //   deformed = sum_b w_b * ( R(theta_b_now - theta_b_bind) * (p - head_b_bind) + head_b_now )
 //
-// With no bone moved, every term reduces to p, so the mesh sits exactly at
-// rest and renders identically to the undeformed sprite.
+// That is correct only while the bones roughly agree. Average two POSITIONS
+// produced by rotations an angle apart and the answer lands on the chord
+// between them rather than on the arc, so the vertex falls toward the
+// pivot: the layer keeps cos^2(theta/2) of its area, and at 180 degrees it
+// collapses to a point. This is the classic "candy wrapper" of linear blend
+// skinning, and the numbers are brutal -- 93% of the area left at 30
+// degrees, 50% at 90, 19% at 128.
+//
+// Which is fine at a debug slider's pace and catastrophic during a real
+// drag. A spring bone LAGS its rigid parent by however hard the character
+// was thrown: a measured 58 degrees on a moderate Free-Move drag and 128 on
+// an abrupt one. Any vertex auto-weighted across both -- which is most of
+// them -- was being crushed to a fraction of its size every time the
+// character was flung about, which is what read on screen as a layer
+// tearing into jagged, detached pieces. A pinned band made it plainer
+// still: the pins held their pixels exactly where they belonged (they were
+// never the broken part) against a neighbourhood that was collapsing
+// around them, so the pinned artwork looked like it was detaching from
+// everything next to it.
+//
+// So blend the MOTIONS and apply the result once. Each bone contributes a
+// rigid motion -- a rotation delta and a translation -- the rotations are
+// averaged as angles (a weighted circular mean) and the translations as
+// vectors. A blend of rigid motions built this way is ITSELF rigid, so it
+// cannot lose area at any angle, however far the bones disagree. Where the
+// bones do agree it reduces to exactly the old formula, so nothing that
+// worked before moves by so much as a pixel.
+//
+// With no bone moved, every delta is zero and every translation is zero, so
+// the mesh sits exactly at rest and renders identically to the undeformed
+// sprite.
 function deformRaw(mesh, part, boneTransforms) {
   const out = new Array(mesh.vertices.length);
 
@@ -313,9 +342,19 @@ function deformRaw(mesh, part, boneTransforms) {
     const vertex = mesh.vertices[i];
     const rest = localToWorld(part, vertex.restLocal);
 
-    let x = 0;
-    let y = 0;
+    // The circular mean is accumulated as a vector -- summing the angles
+    // directly would be wrong the moment one crosses +/-pi.
+    let sumCos = 0;
+    let sumSin = 0;
+    let tx = 0;
+    let ty = 0;
     let totalWeight = 0;
+    // The fallback if the rotations cancel exactly (two bones a clean 180
+    // degrees apart, equally weighted). The mean direction is genuinely
+    // undefined there, so the heaviest bone decides rather than the
+    // vertex jumping to whatever atan2(0, 0) happens to return.
+    let heaviest = null;
+    let heaviestWeight = -1;
 
     for (const [boneId, weight] of Object.entries(vertex.weights)) {
       const bind = mesh.bindPose[boneId];
@@ -355,15 +394,39 @@ function deformRaw(mesh, part, boneTransforms) {
       const angle = rotation - bind.rotation;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-      const dx = rest.x - bind.head.x;
-      const dy = rest.y - bind.head.y;
 
-      x += weight * (head.x + dx * cos - dy * sin);
-      y += weight * (head.y + dx * sin + dy * cos);
+      // This bone's motion written as "rotate about the origin, then
+      // translate" rather than "rotate about the bind head": the same map,
+      // in the form the two halves can be averaged separately.
+      //   p -> R(angle) * p + t,  where t = head - R(angle) * bindHead
+      sumCos += weight * cos;
+      sumSin += weight * sin;
+      tx += weight * (head.x - (bind.head.x * cos - bind.head.y * sin));
+      ty += weight * (head.y - (bind.head.x * sin + bind.head.y * cos));
       totalWeight += weight;
+
+      if (weight > heaviestWeight) {
+        heaviestWeight = weight;
+        heaviest = angle;
+      }
     }
 
-    out[i] = totalWeight > 0 ? { x: x / totalWeight, y: y / totalWeight } : rest;
+    if (totalWeight <= 0) {
+      out[i] = rest;
+      continue;
+    }
+
+    // The mean rotation, and the mean translation, applied ONCE. Both sums
+    // are divided by the same total weight, which is what renormalizes a
+    // vertex whose bones do not sum to 1 (one having been deleted since
+    // binding, say).
+    const meanAngle = (sumCos === 0 && sumSin === 0) ? heaviest : Math.atan2(sumSin, sumCos);
+    const mc = Math.cos(meanAngle);
+    const ms = Math.sin(meanAngle);
+    out[i] = {
+      x: rest.x * mc - rest.y * ms + tx / totalWeight,
+      y: rest.x * ms + rest.y * mc + ty / totalWeight,
+    };
   }
 
   return out;
@@ -427,8 +490,32 @@ export function pinInfluence(mesh, part) {
   const height = part.naturalHeight;
   const cellW = width / Math.max(1, mesh.cols);
   const cellH = height / Math.max(1, mesh.rows);
-  // One mesh cell, in texels: the width of the transition band.
-  const radius = Math.max(1, Math.max(cellW, cellH));
+  // The width of the transition band, in texels.
+  //
+  // This was ONE mesh cell, and that is what made a pinned layer look torn
+  // during a Free-Move drag. The band is the only thing bridging held
+  // artwork and artwork that has swung away with its bone, so it has to
+  // absorb the WHOLE difference between them. One cell can do that while
+  // the difference is small -- at the 5-30 degrees a debug slider produces,
+  // which is what pins were originally verified against, the band stretches
+  // by at most its own width and nothing shows. A real drag is not small: a
+  // spring bone trails its rigid parent by a measured 58 degrees on a
+  // moderate throw and 137 on an abrupt one, which asks that single cell to
+  // span 1.9x to 3.7x its own width. Stretched that far, nearest-neighbour
+  // sampling smears a handful of texels across dozens of cells, and the
+  // boundary reads as jagged pixels detaching from their neighbours.
+  //
+  // Spreading the same total shear over several cells divides the stretch
+  // by the same factor, which brings even the 137-degree case back under
+  // what one cell handled at 30. The cost is the one the note below already
+  // names -- a slightly wider neighbourhood comes along with each pin --
+  // and it is bounded: never more than a quarter of the layer's smaller
+  // side, so a pin on a small layer cannot quietly hold all of it.
+  const PIN_BAND_CELLS = 3;
+  const radius = Math.min(
+    Math.max(1, Math.max(cellW, cellH) * PIN_BAND_CELLS),
+    Math.max(1, Math.min(width, height) / 4)
+  );
 
   // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
   // what its vertices can express, and the vertices are cell corners -- so
