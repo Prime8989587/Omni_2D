@@ -117,6 +117,57 @@ export function masterBone() {
   return roots.reduce((best, bone) => (descendants(bone) > descendants(best) ? bone : best), roots[0]);
 }
 
+// ---------------------------------------------------------------------------
+// Which layer's bone a drag writes to
+//
+// SELECTION ONLY. Neither of the two things a drag can do is defined here
+// or changed by anything here -- moving the whole character and moving one
+// bone with its children both already existed, both are already verified,
+// and this only decides which of them the finger gets. Everything below
+// resolves to a bone and then hands off.
+//
+// null means the default the master handle has always had: the character's
+// root, and with it the whole-character move. Anything else is a layer the
+// user picked, whose ATTACHED bone becomes the target.
+let targetPartId = null;
+
+export function getTargetLayer() {
+  return targetPartId;
+}
+
+export function setTargetLayer(partId) {
+  if (targetPartId === partId) return;
+  // Same reason switching Body/Piercer ends the drag: handing the finger a
+  // different object halfway through one gesture is never what was meant.
+  endPoseDrag();
+  targetPartId = partId;
+}
+
+// The bone a body drag writes to, or null when there is nothing to write
+// to. Resolved fresh on every call rather than cached at selection time,
+// because the answer legitimately changes underneath a Free-Move session:
+// a bone can be attached to the chosen layer in Rig mode and the user can
+// come straight back expecting it to work, and a layer or its bone can be
+// deleted while still selected.
+export function targetBone() {
+  if (targetPartId === null) return masterBone();
+  return bonesStore.bonesAttachedTo(targetPartId)[0] || null;
+}
+
+// What the UI needs to tell the user where they stand: whether a layer is
+// chosen at all, whether it has a bone, and whether that bone is the root
+// (so a drag moves everything) or not (so a drag moves it and its children).
+export function targetLayerStatus() {
+  const bone = targetBone();
+  return {
+    partId: targetPartId,
+    isDefault: targetPartId === null,
+    bone,
+    hasBone: Boolean(bone),
+    isRoot: Boolean(bone) && bone.parentId === null,
+  };
+}
+
 export function isPosing() {
   return drag !== null;
 }
@@ -134,6 +185,12 @@ function snapToCell(point) {
 export function beginPoseDrag(bone, scenePoint) {
   if (drag) return;
   const piercing = poseTarget === PoseTarget.PIERCER;
+  // A chosen layer with no bone attached has nothing to write to, so the
+  // drag simply never starts -- which is what makes it a clean no-op rather
+  // than something that silently falls back to moving the whole character.
+  // The menu shows the warning and the tip; this is the half that makes the
+  // canvas honour them.
+  if (!piercing && !targetLayerStatus().hasBone) return;
   // A reference point the finger carries. It is a root bone's own
   // position when there is a rig, so the drag still writes root data;
   // with no bones at all it is just the finger, so unbound artwork can
@@ -145,7 +202,8 @@ export function beginPoseDrag(bone, scenePoint) {
     offsetY: anchor.y - scenePoint.y,
     lastX: anchor.x,
     lastY: anchor.y,
-    token: history.capture(piercing ? 'Move piercer' : 'Move character'),
+    token: history.capture(piercing ? 'Move piercer'
+      : (anchorBone && anchorBone.parentId !== null ? `Move ${anchorBone.name}` : 'Move character')),
     piercing,
     moved: false,
   };
@@ -169,10 +227,25 @@ export function updatePoseDrag(scenePoint) {
     for (const bone of piercerBones()) bonesStore.nudgePosition(bone, dx, dy);
     partsStore.translatePiercers(dx, dy);
   } else {
-    bonesStore.translateRoots(dx, dy);
-    // Piercers are excluded here so the body cannot drag the needle along
-    // with it; the Piercer target is the only thing that moves those.
-    partsStore.translateUnbound(dx, dy, { skipPiercers: true });
+    // The fork, and the ONLY thing the layer menu changes. Both branches
+    // are the behaviour that was already here and already verified; which
+    // one runs is the whole of the new feature.
+    const target = targetBone();
+    if (target && target.parentId !== null) {
+      // A non-root bone: it and its children move, its parent chain stays
+      // put. Exactly the rule the Piercer drag above uses, on a different
+      // bone -- children follow for free because their positions are
+      // stored relative to this one.
+      bonesStore.nudgePosition(target, dx, dy);
+    } else {
+      // The root, whether by default or because the chosen layer's bone
+      // IS the root: the whole character, untouched from what the master
+      // handle has always done.
+      bonesStore.translateRoots(dx, dy);
+      // Piercers are excluded here so the body cannot drag the needle along
+      // with it; the Piercer target is the only thing that moves those.
+      partsStore.translateUnbound(dx, dy, { skipPiercers: true });
+    }
   }
   drag.moved = true;
 }
@@ -212,7 +285,7 @@ function attachDragSurface(element) {
     }
     event.preventDefault();
     element.setPointerCapture(event.pointerId);
-    beginPoseDrag(masterBone(), sceneFromScreen(screenFromEvent(element, event)));
+    beginPoseDrag(targetBone(), sceneFromScreen(screenFromEvent(element, event)));
   });
 
   element.addEventListener('pointermove', (event) => {

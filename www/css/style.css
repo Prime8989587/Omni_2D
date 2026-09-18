@@ -1794,6 +1794,71 @@ button, input, select {
   filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.55));
 }
 
+/* ---------- Free Move: which layer's bone a drag moves ---------- */
+
+.pose-layer {
+  position: relative; /* the menu hangs off this */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.pose-layer__label {
+  flex: 0 0 auto;
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.pose-layer__btn {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+/* Opens UPWARD: this row lives in the footer, and a menu dropping down
+   from it would run off the bottom of the screen. Capped and scrollable
+   for the same reason .modal is -- a project with many layers must not
+   produce a menu taller than the phone. */
+.pose-layer__menu {
+  top: auto;
+  bottom: calc(100% - 4px);
+  right: 0;
+  left: 0;
+  min-width: 0;
+  max-height: min(50vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The chosen layer, so reopening the menu shows where you already are. */
+.pose-layer__menu .app-menu__item[aria-pressed='true'] {
+  background: rgba(255, 46, 147, 0.16);
+}
+
+/* A layer with no bone is still listed and still selectable -- picking it
+   is how you find out, and the notice below says what to do about it. */
+.pose-layer__menu .app-menu__item--boneless {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.pose-layer__notice {
+  padding: 8px 0 0;
+}
+
+.pose-layer__warning {
+  margin: 0 0 4px;
+  color: var(--color-danger);
+  font-size: var(--text-label);
+  line-height: 1.4;
+}
+
+.pose-layer__tip {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: var(--text-label);
+  line-height: 1.4;
+}
+
 .app-menu__group {
   margin: 0;
   padding: 10px 18px 6px;

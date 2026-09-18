@@ -5503,6 +5503,72 @@ has to go somewhere. Pinning the scalp rather than the mid-band, or a
 stiffer spring, is the modelling answer to that; it is not something the
 renderer can decide.
 
+## Free Move: choosing which layer's bone a drag moves
+
+Free Move had one target: the character's root, via the master handle. This
+adds a kebab in the Free-Move footer listing every layer by name, so any
+layer's attached bone can be the drag target instead.
+
+### Selection only, on purpose
+
+The two things a drag can do both already existed and were both already
+verified, so neither was touched:
+
+- **the root** -> `bonesStore.translateRoots()` plus
+  `partsStore.translateUnbound()`: the whole character, rigid children in
+  lockstep, physics children lagging and settling.
+- **a non-root bone** -> `bonesStore.nudgePosition()`: that bone and its
+  children move, its parent chain stays put. This is the same call the
+  Piercer drag has always used, pointed at a different bone -- children
+  follow for free because their positions are stored relative to the parent.
+
+The whole feature is a fork choosing between those two, plus the menu that
+sets it. `bones.js` is not in the diff at all, and the only lines removed
+from `poseTool.js` are two call sites and one re-indent.
+
+### The list is built live, not cached
+
+`targetBone()` resolves the selection to a bone on every call rather than
+caching one when the menu is tapped, because the answer legitimately changes
+underneath a Free-Move session: a bone can be attached to the chosen layer
+in Rig mode and the user can come straight back expecting it to work, and
+the selected layer or its bone can be deleted while still selected. The menu
+is rebuilt from `partsStore` each time it opens for the same reason, which
+is also what makes it show the Scene Parts names -- it is reading the same
+field, so a rename shows through with nothing needing to be told about it.
+
+### A layer with no bone
+
+Listed, and selectable -- picking it is how you find out. Selecting one
+shows both messages together:
+
+> **Warning: The selected layer does not have a bone.**
+> Tip: Create a bone for the selected layer.
+
+and the drag goes inactive. Not by ignoring the deltas, but by
+`beginPoseDrag()` refusing to start at all, so there is no half-state where
+a gesture is running with nothing to write to -- and no silent fallback to
+moving the whole character, which would be the one outcome that makes the
+warning a lie.
+
+### Verification
+
+21 browser checks against a rig built for the purpose: a root bone, a
+non-root child with a child of its own, and a deliberately boneless layer.
+Movement is measured on the BONES' world heads before and after each drag,
+which is where "moved" and "stayed fixed" mean something:
+
+| selection | rootBone | armBone | handBone | unbound layer |
+| --- | --- | --- | --- | --- |
+| Whole character | 19 | 19 | 19 | 19 |
+| `body` (its bone IS the root) | 19 | 19 | 19 | — |
+| `arm` (non-root) | **0** | 19 | 19 | **0** |
+| `cape` (no bone) | **0** | **0** | **0** | **0** |
+
+Plus: the menu lists every layer under its real name, a rename shows through
+on the next open, the Warning and Tip match the specified wording exactly,
+and switching between all of those happens without leaving Free Move.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

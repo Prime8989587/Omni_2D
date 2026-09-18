@@ -269,6 +269,22 @@
         <button id="poseTargetPiercerBtn" class="segmented__btn" type="button" aria-pressed="false">Piercer</button>
       </div>
 
+      <!-- Which layer's bone a drag writes to. Selection only: the two
+           things a drag can do are unchanged and live in poseTool.js. -->
+      <div id="poseLayerRow" class="pose-layer" hidden>
+        <span class="pose-layer__label">Drag moves</span>
+        <button id="poseLayerBtn" class="btn btn--sm pose-layer__btn" type="button"
+          aria-haspopup="true" aria-expanded="false" aria-controls="poseLayerMenu">
+          <span id="poseLayerBtnText">Whole character</span> &#8942;
+        </button>
+        <div id="poseLayerMenu" class="app-menu pose-layer__menu" hidden></div>
+      </div>
+
+      <div id="poseLayerNotice" class="pose-layer__notice" role="status" hidden>
+        <p id="poseLayerWarning" class="pose-layer__warning"></p>
+        <p id="poseLayerTip" class="pose-layer__tip"></p>
+      </div>
+
       <div id="movePad" class="move-pad" role="application" aria-label="Drag to move the character" hidden>
         <span class="move-pad__glyph" aria-hidden="true">&#10021;</span>
         <span class="move-pad__label">Drag here — keeps your finger off the character</span>

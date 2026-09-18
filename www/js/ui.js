@@ -21,6 +21,7 @@ import {
 } from './bindTool.js';
 import {
   initPoseTool, initMovePad, PoseTarget, getPoseTarget, setPoseTarget, hasPiercerTarget,
+  getTargetLayer, setTargetLayer, targetLayerStatus,
 } from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
@@ -254,6 +255,13 @@ function cacheElements() {
   els.animateHint = document.getElementById('animateHint');
   els.movePad = document.getElementById('movePad');
   els.poseTargetRow = document.getElementById('poseTargetRow');
+  els.poseLayerRow = document.getElementById('poseLayerRow');
+  els.poseLayerBtn = document.getElementById('poseLayerBtn');
+  els.poseLayerBtnText = document.getElementById('poseLayerBtnText');
+  els.poseLayerMenu = document.getElementById('poseLayerMenu');
+  els.poseLayerNotice = document.getElementById('poseLayerNotice');
+  els.poseLayerWarning = document.getElementById('poseLayerWarning');
+  els.poseLayerTip = document.getElementById('poseLayerTip');
   els.poseTargetBodyBtn = document.getElementById('poseTargetBodyBtn');
   els.poseTargetPiercerBtn = document.getElementById('poseTargetPiercerBtn');
   els.appMenuBtn = document.getElementById('appMenuBtn');
@@ -2169,6 +2177,7 @@ function renderChrome() {
   els.poseTargetRow.hidden = !canPierce;
   els.poseTargetBodyBtn.setAttribute('aria-pressed', String(getPoseTarget() === PoseTarget.BODY));
   els.poseTargetPiercerBtn.setAttribute('aria-pressed', String(getPoseTarget() === PoseTarget.PIERCER));
+  renderPoseLayerChrome();
   if (isAnimating) {
     els.animateHint.textContent = bonesStore.isEmpty
       ? 'Build a skeleton in Rig mode first — Free Move moves the character by its root bone.'
@@ -2542,6 +2551,90 @@ function closeStateMenu() {
   renderStateChrome();
 }
 
+// ---------------------------------------------------------------------------
+// Free Move: the layer whose bone a drag moves
+//
+// The list is built from partsStore every time it is rendered rather than
+// cached, so it shows the layers that exist NOW, under the names they carry
+// NOW -- the same names the Scene Parts list shows, because it is reading
+// the same field. Renaming a layer, adding one, or deleting the selected
+// one all come out right without this needing to know any of it happened.
+
+let poseLayerMenuOpen = false;
+
+function closePoseLayerMenu() {
+  if (!poseLayerMenuOpen) return;
+  poseLayerMenuOpen = false;
+  renderPoseLayerChrome();
+}
+
+function selectPoseLayer(partId) {
+  setTargetLayer(partId);
+  poseLayerMenuOpen = false;
+  renderPoseLayerChrome();
+  canvasEngine.requestRender();
+}
+
+function renderPoseLayerChrome() {
+  if (!els.poseLayerRow) return;
+
+  const isAnimating = currentState === AppState.ANIMATING || currentState === AppState.RECORDING;
+  // Hidden for a Piercer drag: that target has its own rule about which
+  // bones it writes to, and a layer picker would be claiming to steer
+  // something it does not steer.
+  const relevant = isAnimating && !partsStore.isEmpty && getPoseTarget() === PoseTarget.BODY;
+  els.poseLayerRow.hidden = !relevant;
+  if (!relevant) {
+    els.poseLayerNotice.hidden = true;
+    els.poseLayerMenu.hidden = true;
+    return;
+  }
+
+  const status = targetLayerStatus();
+  const selected = status.isDefault ? null : partsStore.parts.find((p) => p.id === status.partId);
+
+  els.poseLayerBtnText.textContent = status.isDefault
+    ? 'Whole character'
+    : (selected ? selected.name : 'Whole character');
+  els.poseLayerBtn.setAttribute('aria-expanded', String(poseLayerMenuOpen));
+  els.poseLayerMenu.hidden = !poseLayerMenuOpen;
+
+  // A selected layer with no bone attached: say so, say what to do, and
+  // leave the drag inactive (poseTool refuses to start one).
+  const boneless = !status.isDefault && !status.hasBone;
+  els.poseLayerNotice.hidden = !boneless;
+  if (boneless) {
+    els.poseLayerWarning.textContent = 'Warning: The selected layer does not have a bone.';
+    els.poseLayerTip.textContent = 'Tip: Create a bone for the selected layer.';
+  }
+
+  if (!poseLayerMenuOpen) return;
+
+  els.poseLayerMenu.replaceChildren();
+  const group = document.createElement('p');
+  group.className = 'app-menu__group';
+  group.textContent = 'Drag moves';
+  els.poseLayerMenu.appendChild(group);
+
+  const addItem = (label, partId, hasBone) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'app-menu__item' + (hasBone ? '' : ' app-menu__item--boneless');
+    button.textContent = hasBone ? label : `${label} — no bone`;
+    button.setAttribute('aria-pressed', String(status.partId === partId));
+    button.addEventListener('click', () => selectPoseLayer(partId));
+    els.poseLayerMenu.appendChild(button);
+  };
+
+  // The default stays on the list as an entry of its own, so returning to
+  // the whole-character drag never means hunting for which layer happens
+  // to own the root.
+  addItem('Whole character', null, true);
+  for (const part of partsStore.parts) {
+    addItem(part.name, part.id, bonesStore.bonesAttachedTo(part.id).length > 0);
+  }
+}
+
 function askState({ title, message, confirmLabel, danger, onConfirm }) {
   pendingStateAction = onConfirm;
   els.stateConfirmTitle.textContent = title;
@@ -2777,6 +2870,19 @@ function bindEvents() {
   els.pierceDepthCancelBtn.addEventListener('click', cancelPierceDepths);
   els.pierceTipOkBtn.addEventListener('click', () => { els.pierceTipModal.hidden = true; });
 
+  els.poseLayerBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    poseLayerMenuOpen = !poseLayerMenuOpen;
+    renderPoseLayerChrome();
+  });
+  // Tapping anywhere else puts the menu away, the same courtesy the app
+  // menu already extends. The canvas is included on purpose: a tap there
+  // is the start of a drag, and the menu must not be sitting over it.
+  document.addEventListener('pointerdown', (event) => {
+    if (!poseLayerMenuOpen) return;
+    if (els.poseLayerRow.contains(event.target)) return;
+    closePoseLayerMenu();
+  });
   els.poseTargetBodyBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.BODY); renderChrome(); });
   els.poseTargetPiercerBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.PIERCER); renderChrome(); });
 
