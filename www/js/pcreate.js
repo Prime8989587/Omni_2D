@@ -184,7 +184,10 @@ function cacheElements() {
     'pcreateFlipHBtn', 'pcreateFlipVBtn', 'pcreateAngleSlider', 'pcreateAngleLabel', 'pcreateRotateFreeBtn',
     'pcreatePaletteModal', 'pcreatePaletteEmpty', 'pcreatePaletteList', 'pcreateNewPaletteBtn', 'pcreatePaletteDoneBtn',
     'pcreateNameModal', 'pcreateNameTitle', 'pcreateNameInput', 'pcreateNameConfirmBtn', 'pcreateNameCancelBtn',
-    'pcreateLayerNameModal', 'pcreateLayerNameInput', 'pcreateLayerNameConfirmBtn', 'pcreateLayerNameCancelBtn',
+    'pcreateLayerList', 'pcreateLayerCount', 'pcreateAddLayerBtn',
+    'pcreateLayerDeleteModal', 'pcreateLayerDeleteMessage', 'pcreateLayerDeleteConfirmBtn', 'pcreateLayerDeleteCancelBtn',
+    'pcreateExportModal', 'pcreateExportList', 'pcreateExportAllBtn', 'pcreateExportNoneBtn',
+    'pcreateExportConfirmBtn', 'pcreateExportCancelBtn',
     'pcreateDeleteModal', 'pcreateDeleteMessage', 'pcreateDeleteConfirmBtn', 'pcreateDeleteCancelBtn',
   ]) {
     els[id] = document.getElementById(id);
@@ -282,17 +285,9 @@ function createBlankCanvas() {
   const width = clampCanvasDim(els.pcreateWidthInput.value);
   const height = clampCanvasDim(els.pcreateHeightInput.value);
   closeSizeModal();
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  startSession({
-    kind: 'blank',
-    name: `${width}×${height}`,
-    width,
-    height,
-    pixels: new Uint8ClampedArray(width * height * 4), // all zero: fully transparent
-    bitmap: canvas,
-  });
+  // One empty layer to start on; makeLayer allocates its buffer (all zero,
+  // so fully transparent) and its own bitmap.
+  startSession({ kind: 'blank', name: `${width}×${height}`, width, height });
 }
 
 // ---- Import: the same decode-only pattern CLayer's own picker uses --
@@ -305,61 +300,181 @@ function openImportPicker() {
   els.pcreateFileInput.click();
 }
 
+// MULTI-FILE, because already-layered artwork is normally handed over as
+// one PNG per layer -- that is what every editor exports and what the main
+// app's own import already accepts. A true layered container (PSD, ORA)
+// would need a parser this app has no dependency for and no way to add
+// offline, so several PNGs at once IS the layered-import path here rather
+// than a lesser substitute for one.
 async function onImportPicked(event) {
-  const file = (event.target.files || [])[0];
+  const files = [...(event.target.files || [])];
   event.target.value = '';
-  if (!file) return;
-  if (!isPng(file)) {
-    showToast(`${file.name} is not a PNG.`);
+  if (files.length === 0) return;
+
+  const rejected = files.filter((f) => !isPng(f));
+  const pngs = files.filter((f) => isPng(f));
+  if (pngs.length === 0) {
+    showToast(`${files[0].name} is not a PNG.`);
     return;
   }
 
-  let image;
-  let objectUrl;
-  try {
-    ({ image, objectUrl } = await loadImage(file));
-  } catch (error) {
-    showToast(`Could not open ${file.name}.`);
-    return;
+  const decoded = [];
+  for (const file of pngs) {
+    try {
+      const { image, objectUrl } = await loadImage(file);
+      decoded.push({
+        name: displayName(file.name),
+        pixels: readPixels(image),
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
+      URL.revokeObjectURL(objectUrl); // the pixels are already copied out
+    } catch (error) {
+      console.warn(error);
+      showToast(`Could not open ${file.name}.`);
+    }
   }
-  // Decoded once, straight into PCreate's own buffer. Nothing keeps this
-  // tied to the picked File: the objectUrl is revoked immediately, and the
-  // pixel array below is PCreate's own copy from the moment it exists --
-  // there is no live object anywhere else in the app whose data this could
-  // ever be said to be editing "in place". See setEditMode() for what the
-  // destructive-vs-copy setting is actually for.
-  const pixels = readPixels(image);
-  URL.revokeObjectURL(objectUrl);
+  if (decoded.length === 0) return;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
-  const ctx = canvas.getContext('2d');
-  const imageData = ctx.createImageData(image.naturalWidth, image.naturalHeight);
-  imageData.data.set(pixels);
-  ctx.putImageData(imageData, 0, 0);
+  // The canvas is sized to hold the LARGEST piece, and each piece keeps its
+  // position relative to that frame. This is the same rule Import and
+  // CLayer's save already follow: a picture that matches the canvas exactly
+  // is position-preserving and lands at the origin, so a set of layers
+  // exported at one common size reassembles itself precisely. Anything
+  // smaller is centred, which is the only defensible guess when the file
+  // itself carries no offset.
+  const width = Math.max(...decoded.map((d) => d.width));
+  const height = Math.max(...decoded.map((d) => d.height));
+
+  // Sorted by name so a set exported as "01-body", "02-head" stacks in the
+  // order the artist numbered them rather than in whatever order the file
+  // picker happened to hand them over.
+  decoded.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  const layers = decoded.map((piece) => {
+    const buffer = new Uint8ClampedArray(width * height * 4);
+    const offsetX = piece.width === width ? 0 : Math.floor((width - piece.width) / 2);
+    const offsetY = piece.height === height ? 0 : Math.floor((height - piece.height) / 2);
+    for (let v = 0; v < piece.height; v++) {
+      for (let u = 0; u < piece.width; u++) {
+        const from = (v * piece.width + u) * 4;
+        const to = ((v + offsetY) * width + (u + offsetX)) * 4;
+        buffer[to] = piece.pixels[from];
+        buffer[to + 1] = piece.pixels[from + 1];
+        buffer[to + 2] = piece.pixels[from + 2];
+        buffer[to + 3] = piece.pixels[from + 3];
+      }
+    }
+    return makeLayer({ name: piece.name, width, height, pixels: buffer });
+  });
 
   startSession({
     kind: 'import',
-    name: displayName(file.name),
-    width: image.naturalWidth,
-    height: image.naturalHeight,
-    pixels,
-    bitmap: canvas,
+    name: decoded.length === 1 ? decoded[0].name : `${decoded.length} layers`,
+    width,
+    height,
+    layers,
   });
+
+  if (rejected.length) showToast(`Skipped ${rejected.length} file(s) that were not PNGs.`);
+  else if (decoded.length > 1) showToast(`Imported ${decoded.length} pieces as separate layers.`);
+}
+
+// ---------------------------------------------------------------------------
+// The layer stack
+//
+// PCreate's canvas is a stack of independent layers sharing one set of
+// dimensions, the same shape the main scene's Parts list has. Every layer
+// owns its own pixel buffer, its own on-screen bitmap, an opacity, and its
+// own generated shadow -- a drop shadow belongs to the thing casting it, so
+// it belongs to a layer rather than to the window.
+//
+// HOW EVERY EXISTING TOOL BECAME LAYER-AWARE WITHOUT BEING REWRITTEN
+//
+// The tools were all written against session.pixels, session.bitmap and
+// session.shadow. Rather than editing every one of them to look up the
+// active layer first -- dozens of call sites, each an opportunity to miss
+// one and have a tool silently keep painting the old flat buffer --
+// those three names are now ACCESSORS that forward to whichever layer is
+// active. A brush stroke, a fill, a rotation and a shadow all land on the
+// selected layer because there is no longer any other buffer for them to
+// land on. Missing a call site is not possible, because there are no call
+// sites to miss.
+const LAYER_LIMIT = 24; // past this a phone-sized layer list stops being usable
+
+let nextLayerId = 1;
+
+function makeLayer({ name, width, height, pixels = null, opacity = 1 }) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const layer = {
+    id: `L${nextLayerId++}`,
+    name,
+    pixels: pixels || new Uint8ClampedArray(width * height * 4),
+    bitmap: canvas,
+    opacity,
+    shadow: null,
+    shadowVisible: true,
+    artworkDirty: true,
+  };
+  paintLayerBitmap(layer, width, height);
+  return layer;
+}
+
+function paintLayerBitmap(layer, width, height) {
+  const ctx = layer.bitmap.getContext('2d');
+  const data = ctx.createImageData(width, height);
+  data.data.set(layer.pixels);
+  ctx.putImageData(data, 0, 0);
+}
+
+function activeLayer() {
+  if (!session || !session.layers) return null;
+  return session.layers.find((l) => l.id === session.activeLayerId) || session.layers[0] || null;
+}
+
+// layers[0] is the BOTTOM of the stack and is drawn first. The list in the
+// UI runs top-first, matching the Scene Parts list, so it iterates this
+// array reversed -- "up" in the list is later in the array.
+function defineActiveLayerAccessors(target) {
+  for (const key of ['pixels', 'bitmap', 'shadow', 'shadowVisible', 'artworkDirty']) {
+    Object.defineProperty(target, key, {
+      configurable: true,
+      get() {
+        const layer = activeLayer();
+        return layer ? layer[key] : null;
+      },
+      set(value) {
+        const layer = activeLayer();
+        if (layer) layer[key] = value;
+      },
+    });
+  }
+}
+
+function uniqueLayerName(base) {
+  const taken = new Set(session.layers.map((l) => l.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} ${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Session
 
-function startSession({ kind, name, width, height, pixels, bitmap }) {
+function startSession({ kind, name, width, height, pixels, bitmap, layers = null }) {
   session = {
     kind,
     sourceName: name,
     width,
     height,
-    pixels,
-    bitmap,
+    layers: layers || [makeLayer({ name: 'Layer 1', width, height, pixels })],
+    activeLayerId: null,
+    openLayerMenuId: null,
+    renamingLayerId: null,
     cam: { zoom: 1, panX: 0, panY: 0 },
     pointers: new Map(),
     pinch: null,
@@ -393,14 +508,13 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
     // as it was. And the generator always reads session.pixels -- the
     // artwork alone -- so the silhouette it offsets is never contaminated
     // by a previous run's output.
-    shadow: null, // { indices: Set, color: [r,g,b,a] }
-    shadowVisible: true,
-    // Has any tool touched the artwork since the shadow was generated?
-    // Starts true so the first press has something to do.
-    artworkDirty: true,
-
+    // shadow / shadowVisible / artworkDirty are NOT here: they belong to
+    // whichever layer is active, and reach this object through the
+    // accessors installed just below.
     autoPalette: [],
   };
+  defineActiveLayerAccessors(session);
+  session.activeLayerId = session.layers[session.layers.length - 1].id;
 
   els.pcreateCanvasLabel.textContent = name;
   els.pcreateWindow.hidden = false;
@@ -415,6 +529,7 @@ function startSession({ kind, name, width, height, pixels, bitmap }) {
   pcreateHistory.reset();
   renderUndoRedo();
   rebuildAutoPalette();
+  renderLayerList();
   renderTools();
   render();
 }
@@ -444,12 +559,18 @@ function snapshotSession() {
   return {
     width: session.width,
     height: session.height,
-    pixels: new Uint8ClampedArray(session.pixels),
-    shadow: session.shadow
-      ? { indices: [...session.shadow.indices], color: [...session.shadow.color] }
-      : null,
-    shadowVisible: session.shadowVisible,
-    artworkDirty: session.artworkDirty,
+    activeLayerId: session.activeLayerId,
+    layers: session.layers.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      opacity: layer.opacity,
+      pixels: new Uint8ClampedArray(layer.pixels),
+      shadow: layer.shadow
+        ? { indices: [...layer.shadow.indices], color: [...layer.shadow.color] }
+        : null,
+      shadowVisible: layer.shadowVisible,
+      artworkDirty: layer.artworkDirty,
+    })),
     selection: session.selection ? [...session.selection] : null,
   };
 }
@@ -459,23 +580,33 @@ function restoreSession(snapshot) {
   const sizeChanged = snapshot.width !== session.width || snapshot.height !== session.height;
   session.width = snapshot.width;
   session.height = snapshot.height;
-  session.pixels = new Uint8ClampedArray(snapshot.pixels);
-  session.shadow = snapshot.shadow
-    ? { indices: new Set(snapshot.shadow.indices), color: [...snapshot.shadow.color] }
-    : null;
-  session.shadowVisible = snapshot.shadowVisible;
-  session.artworkDirty = snapshot.artworkDirty;
+
+  session.layers = snapshot.layers.map((saved) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = snapshot.width;
+    canvas.height = snapshot.height;
+    const layer = {
+      id: saved.id,
+      name: saved.name,
+      opacity: saved.opacity,
+      pixels: new Uint8ClampedArray(saved.pixels),
+      bitmap: canvas,
+      shadow: saved.shadow
+        ? { indices: new Set(saved.shadow.indices), color: [...saved.shadow.color] }
+        : null,
+      shadowVisible: saved.shadowVisible,
+      artworkDirty: saved.artworkDirty,
+    };
+    paintLayerBitmap(layer, snapshot.width, snapshot.height);
+    return layer;
+  });
+  session.activeLayerId = snapshot.activeLayerId;
+  if (!activeLayer() && session.layers.length) session.activeLayerId = session.layers[0].id;
   session.selection = snapshot.selection ? new Set(snapshot.selection) : null;
 
-  if (sizeChanged) {
-    const canvas = document.createElement('canvas');
-    canvas.width = session.width;
-    canvas.height = session.height;
-    session.bitmap = canvas;
-    fitCamera();
-  }
-  syncBitmap();
+  if (sizeChanged) fitCamera();
   refreshAutoPalette();
+  renderLayerList();
   renderTools();
   render();
 }
@@ -485,10 +616,12 @@ const pcreateHistory = createHistory({
   apply: restoreSession,
   limit: () => {
     if (!session) return UNDO_MAX_STEPS;
-    // TWO buffers per entry, not one: History keeps a `before` and an
-    // `after` for every step, and they are separate copies even where two
-    // neighbouring entries hold the same picture.
-    const bytesPerStep = session.width * session.height * 4 * 2;
+    // Two buffers per entry (History keeps a `before` and an `after`, and
+    // they are separate copies even where neighbouring entries hold the
+    // same picture) TIMES the number of layers, since a snapshot now
+    // carries the whole stack.
+    const layerCount = Math.max(1, session.layers ? session.layers.length : 1);
+    const bytesPerStep = session.width * session.height * 4 * 2 * layerCount;
     if (bytesPerStep <= 0) return UNDO_MAX_STEPS;
     const affordable = Math.floor(UNDO_BYTE_BUDGET / bytesPerStep);
     return Math.max(UNDO_MIN_STEPS, Math.min(UNDO_MAX_STEPS, affordable));
@@ -610,15 +743,22 @@ function render() {
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
 
   drawGrid(ctx);
-  // The shadow layer sits UNDER the artwork. It only ever occupies texels
-  // the artwork left empty, so there is nothing to blend -- but drawing it
-  // first still matters, because anything painted over a shadow texel
-  // afterwards should cover it rather than appear behind it.
-  if (session.shadow && session.shadowVisible) {
-    const [r, g, b, a] = session.shadow.color;
-    drawIndexSet(ctx, session.shadow.indices, `rgba(${r}, ${g}, ${b}, ${a / 255})`, null);
+
+  // Bottom of the stack first. Each layer's shadow is drawn immediately
+  // before that layer's own artwork, so the shadow sits under the thing
+  // casting it while still falling over everything below -- which is what
+  // a stack of cut-out sheets each casting onto the one beneath looks
+  // like.
+  for (const layer of session.layers) {
+    if (layer.opacity <= 0) continue;
+    ctx.globalAlpha = layer.opacity;
+    if (layer.shadow && layer.shadowVisible) {
+      const [r, g, b, a] = layer.shadow.color;
+      drawIndexSet(ctx, layer.shadow.indices, `rgba(${r}, ${g}, ${b}, ${a / 255})`, null);
+    }
+    ctx.drawImage(layer.bitmap, cam.panX, cam.panY, width * cam.zoom, height * cam.zoom);
   }
-  ctx.drawImage(session.bitmap, cam.panX, cam.panY, width * cam.zoom, height * cam.zoom);
+  ctx.globalAlpha = 1;
 
   // The per-texel grid, once cells are big enough to aim a single pixel at
   // -- the same threshold CLayer and the Pierce painter already use.
@@ -693,18 +833,63 @@ function syncBitmap() {
 // toggled it off, it is not part of the picture they are looking at, and
 // baking it into an exported layer anyway would be a surprise.
 function compositePixels() {
-  if (!session.shadow || !session.shadowVisible || session.shadow.indices.size === 0) {
-    return new Uint8ClampedArray(session.pixels);
-  }
-  const out = new Uint8ClampedArray(session.pixels);
-  const [r, g, b, a] = session.shadow.color;
-  for (const index of session.shadow.indices) {
+  const total = session.width * session.height;
+  const out = new Uint8ClampedArray(total * 4);
+
+  const over = (index, r, g, b, a) => {
+    if (a <= 0) return;
     const o = index * 4;
-    if (out[o + 3] !== 0) continue; // the artwork wins wherever they meet
-    out[o] = r;
-    out[o + 1] = g;
-    out[o + 2] = b;
-    out[o + 3] = a;
+    const dstA = out[o + 3] / 255;
+    const srcA = a / 255;
+    const outA = srcA + dstA * (1 - srcA);
+    if (outA <= 0) return;
+    out[o] = Math.round((r * srcA + out[o] * dstA * (1 - srcA)) / outA);
+    out[o + 1] = Math.round((g * srcA + out[o + 1] * dstA * (1 - srcA)) / outA);
+    out[o + 2] = Math.round((b * srcA + out[o + 2] * dstA * (1 - srcA)) / outA);
+    out[o + 3] = Math.round(outA * 255);
+  };
+
+  for (const layer of session.layers) {
+    if (layer.opacity <= 0) continue;
+    if (layer.shadow && layer.shadowVisible) {
+      const [sr, sg, sb, sa] = layer.shadow.color;
+      for (const index of layer.shadow.indices) {
+        if (layer.pixels[index * 4 + 3] !== 0) continue; // the art wins where they meet
+        over(index, sr, sg, sb, sa * layer.opacity);
+      }
+    }
+    for (let index = 0; index < total; index++) {
+      const o = index * 4;
+      const a = layer.pixels[o + 3];
+      if (a === 0) continue;
+      over(index, layer.pixels[o], layer.pixels[o + 1], layer.pixels[o + 2], a * layer.opacity);
+    }
+  }
+  return out;
+}
+
+// One layer on its own, flattened with its own opacity and shadow -- what
+// Import to Main hands the project for a single selected layer.
+function compositeLayer(layer) {
+  const total = session.width * session.height;
+  const out = new Uint8ClampedArray(total * 4);
+  if (layer.shadow && layer.shadowVisible) {
+    const [sr, sg, sb, sa] = layer.shadow.color;
+    for (const index of layer.shadow.indices) {
+      if (layer.pixels[index * 4 + 3] !== 0) continue;
+      const o = index * 4;
+      out[o] = sr; out[o + 1] = sg; out[o + 2] = sb;
+      out[o + 3] = Math.round(sa * layer.opacity);
+    }
+  }
+  for (let index = 0; index < total; index++) {
+    const o = index * 4;
+    const a = layer.pixels[o + 3];
+    if (a === 0) continue;
+    out[o] = layer.pixels[o];
+    out[o + 1] = layer.pixels[o + 1];
+    out[o + 2] = layer.pixels[o + 2];
+    out[o + 3] = Math.round(a * layer.opacity);
   }
   return out;
 }
@@ -713,15 +898,16 @@ function compositePixels() {
 // buffer's DIMENSIONS -- only a quarter turn of a non-square canvas does
 // that, but it invalidates the bitmap, the zoom fit and the checkerboard
 // tile all at once.
-function adoptBuffer(pixels, width, height) {
-  session.pixels = pixels;
+function adoptSize(width, height) {
   session.width = width;
   session.height = height;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  session.bitmap = canvas;
-  syncBitmap();
+  for (const layer of session.layers) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    layer.bitmap = canvas;
+    paintLayerBitmap(layer, width, height);
+  }
   fitCamera();
 }
 
@@ -1439,13 +1625,30 @@ function transformSelection(transform) {
   render();
 }
 
+// "The whole canvas" means EVERY layer, not just the active one. It has to:
+// a quarter turn of a non-square canvas swaps its width and height, and
+// layers in one stack share one set of dimensions -- turning only the
+// selected layer would leave the stack holding buffers of two different
+// shapes. Flip and free rotation go the same way for consistency, so
+// "Applies to the whole canvas" means the same thing whichever transform
+// is pressed.
 function transformCanvas(transform) {
-  const result = transform(session.pixels, session.width, session.height);
-  if (result.width !== session.width || result.height !== session.height) {
-    adoptBuffer(result.pixels, result.width, result.height);
+  let outWidth = session.width;
+  let outHeight = session.height;
+  for (const layer of session.layers) {
+    const result = transform(layer.pixels, session.width, session.height);
+    layer.pixels = result.pixels;
+    outWidth = result.width;
+    outHeight = result.height;
+    // A transform invalidates whatever shadow was generated from the old
+    // orientation; it would otherwise stay put while the art moved.
+    layer.shadow = null;
+    layer.artworkDirty = true;
+  }
+  if (outWidth !== session.width || outHeight !== session.height) {
+    adoptSize(outWidth, outHeight);
   } else {
-    session.pixels = result.pixels;
-    syncBitmap();
+    for (const layer of session.layers) paintLayerBitmap(layer, session.width, session.height);
   }
   render();
 }
@@ -1843,6 +2046,310 @@ async function removeColorFromPalette(name, hex) {
 }
 
 // ---------------------------------------------------------------------------
+// The layer list
+//
+// Built to the same shape as the main scene's Parts list, because it is the
+// same job: a row per layer, the selected one highlighted, and the controls
+// that would otherwise crowd every row tucked behind a "⋮" that opens one
+// aside panel at a time. Reusing the list-row / scene-part / row-aside
+// classes means it also inherits that list's spacing, tap targets and
+// selected state rather than growing a second look for the same idea.
+//
+// Top of the stack first, so the row order on screen matches what the eye
+// sees on the canvas. layers[] itself runs bottom-first, so "move up" in
+// the list is a move toward the END of the array.
+
+function renderLayerList() {
+  if (!session) return;
+  els.pcreateLayerList.replaceChildren();
+  els.pcreateLayerCount.textContent =
+    `${session.layers.length} layer${session.layers.length === 1 ? '' : 's'}`;
+  els.pcreateAddLayerBtn.disabled = session.layers.length >= LAYER_LIMIT;
+
+  if (session.openLayerMenuId && !session.layers.some((l) => l.id === session.openLayerMenuId)) {
+    session.openLayerMenuId = null;
+  }
+  if (session.renamingLayerId && !session.layers.some((l) => l.id === session.renamingLayerId)) {
+    session.renamingLayerId = null;
+  }
+
+  const topFirst = [...session.layers].reverse();
+  topFirst.forEach((layer, indexFromTop) => {
+    const item = document.createElement('li');
+
+    if (session.renamingLayerId === layer.id) {
+      item.appendChild(layerRenameRow(layer));
+      els.pcreateLayerList.appendChild(item);
+      return;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'list-row';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'scene-part';
+    button.classList.toggle('is-selected', layer.id === session.activeLayerId);
+    button.classList.toggle('is-hidden', layer.opacity <= 0);
+    button.appendChild(document.createTextNode(layer.name));
+    if (layer.opacity < 1) {
+      const tag = document.createElement('span');
+      tag.className = 'scene-part__tag';
+      tag.textContent = ` — ${Math.round(layer.opacity * 100)}%`;
+      button.appendChild(tag);
+    }
+    button.addEventListener('click', () => selectLayer(layer.id));
+    row.appendChild(button);
+
+    const isOpen = session.openLayerMenuId === layer.id;
+    const kebab = document.createElement('button');
+    kebab.type = 'button';
+    kebab.className = 'row-btn';
+    kebab.textContent = isOpen ? '✕' : '⋮';
+    kebab.setAttribute('aria-label', isOpen ? `Close menu for ${layer.name}` : `More actions for ${layer.name}`);
+    kebab.setAttribute('aria-pressed', String(isOpen));
+    kebab.addEventListener('click', () => {
+      // Tapping the open row's button closes it; tapping another row's
+      // closes whatever was open and opens that one -- never two at once.
+      session.openLayerMenuId = isOpen ? null : layer.id;
+      renderLayerList();
+    });
+    row.appendChild(kebab);
+
+    item.appendChild(row);
+    if (isOpen) item.appendChild(layerRowAside(layer, indexFromTop, topFirst.length));
+    els.pcreateLayerList.appendChild(item);
+  });
+}
+
+function layerRowAside(layer, indexFromTop, total) {
+  const aside = document.createElement('div');
+  aside.className = 'row-aside';
+
+  const action = (label, onClick, disabled = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'row-aside__btn';
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener('click', onClick);
+    aside.appendChild(button);
+  };
+
+  action('Rename', () => {
+    session.openLayerMenuId = null;
+    session.renamingLayerId = layer.id;
+    renderLayerList();
+  });
+  action('▲ Move up', () => moveLayer(layer.id, 1), indexFromTop === 0);
+  action('▼ Move down', () => moveLayer(layer.id, -1), indexFromTop === total - 1);
+  action('Duplicate', () => duplicateLayer(layer.id), session.layers.length >= LAYER_LIMIT);
+  action('Delete', () => askDeleteLayer(layer.id), session.layers.length <= 1);
+
+  // Opacity lives in the aside rather than the row: it is the one per-layer
+  // control that needs a slider rather than a tap, and a slider in every
+  // row would make the list unusable on a phone.
+  const field = document.createElement('label');
+  field.className = 'slider-field';
+  const caption = document.createElement('span');
+  caption.textContent = `Opacity ${Math.round(layer.opacity * 100)}%`;
+  const slider = document.createElement('input');
+  slider.className = 'slider';
+  slider.type = 'range';
+  slider.min = '0';
+  slider.max = '100';
+  slider.step = '1';
+  slider.value = String(Math.round(layer.opacity * 100));
+  // Live while dragging so the canvas responds, but only ONE undo step for
+  // the whole drag -- the same capture/commit split strokes use.
+  let token = null;
+  slider.addEventListener('pointerdown', () => { token = pcreateHistory.capture('Layer opacity'); });
+  slider.addEventListener('input', () => {
+    layer.opacity = Number(slider.value) / 100;
+    caption.textContent = `Opacity ${slider.value}%`;
+    render();
+  });
+  const commit = () => {
+    if (!token) return;
+    pcreateHistory.commitCapture(token, true);
+    token = null;
+    renderUndoRedo();
+    renderLayerList();
+  };
+  slider.addEventListener('pointerup', commit);
+  slider.addEventListener('change', commit);
+  field.append(caption, slider);
+  aside.appendChild(field);
+
+  return aside;
+}
+
+function layerRenameRow(layer) {
+  const row = document.createElement('div');
+  row.className = 'list-row';
+  const input = document.createElement('input');
+  input.className = 'text-input text-input--inline';
+  input.type = 'text';
+  input.value = layer.name;
+  input.setAttribute('aria-label', `Rename ${layer.name}`);
+
+  // Guards against Enter's commit and the blur it causes both firing.
+  let settled = false;
+  const finish = (save) => {
+    if (settled) return;
+    settled = true;
+    const typed = input.value.trim();
+    if (save && typed && typed !== layer.name) {
+      runLayerAction('Rename layer', () => { layer.name = typed; });
+    }
+    session.renamingLayerId = null;
+    renderLayerList();
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') finish(true);
+    if (event.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+  row.appendChild(input);
+  setTimeout(() => input.focus(), 0);
+  return row;
+}
+
+// Layer structure changes are undoable like any drawing action, but they
+// do not dirty the ARTWORK for shadow purposes -- reordering the stack
+// does not change what any individual layer looks like.
+function runLayerAction(label, mutate) {
+  if (!session) return;
+  pcreateHistory.run(label, mutate);
+  renderUndoRedo();
+  renderLayerList();
+  renderTools();
+  render();
+}
+
+function selectLayer(id) {
+  if (!session) return;
+  session.activeLayerId = id;
+  // A selection belongs to the layer it was made on; carrying it to a
+  // different layer would let a move or delete act on pixels the marquee
+  // was never drawn around.
+  session.selection = null;
+  session.openLayerMenuId = null;
+  refreshAutoPalette();
+  renderLayerList();
+  renderTools();
+  render();
+}
+
+function addLayer() {
+  if (!session) return;
+  if (session.layers.length >= LAYER_LIMIT) {
+    showToast(`PCreate holds up to ${LAYER_LIMIT} layers.`);
+    return;
+  }
+  runLayerAction('Add layer', () => {
+    const layer = makeLayer({
+      name: uniqueLayerName(`Layer ${session.layers.length + 1}`),
+      width: session.width,
+      height: session.height,
+    });
+    session.layers.push(layer); // on top of the stack
+    session.activeLayerId = layer.id;
+    session.selection = null;
+  });
+  showToast('Added a new empty layer on top.');
+}
+
+function duplicateLayer(id) {
+  if (!session) return;
+  if (session.layers.length >= LAYER_LIMIT) {
+    showToast(`PCreate holds up to ${LAYER_LIMIT} layers.`);
+    return;
+  }
+  const index = session.layers.findIndex((l) => l.id === id);
+  if (index < 0) return;
+  const source = session.layers[index];
+  runLayerAction('Duplicate layer', () => {
+    const copy = makeLayer({
+      name: uniqueLayerName(`${source.name} copy`),
+      width: session.width,
+      height: session.height,
+      pixels: new Uint8ClampedArray(source.pixels), // its own buffer, not a shared reference
+      opacity: source.opacity,
+    });
+    copy.shadow = source.shadow
+      ? { indices: new Set(source.shadow.indices), color: [...source.shadow.color] }
+      : null;
+    copy.shadowVisible = source.shadowVisible;
+    copy.artworkDirty = source.artworkDirty;
+    session.layers.splice(index + 1, 0, copy); // directly above its original
+    session.activeLayerId = copy.id;
+    session.openLayerMenuId = null;
+  });
+  showToast('Duplicated — the copy is independent of the original.');
+}
+
+function moveLayer(id, direction) {
+  if (!session) return;
+  const index = session.layers.findIndex((l) => l.id === id);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= session.layers.length) return;
+  runLayerAction('Reorder layer', () => {
+    const [layer] = session.layers.splice(index, 1);
+    session.layers.splice(target, 0, layer);
+  });
+}
+
+let pendingLayerDeleteId = null;
+
+function askDeleteLayer(id) {
+  if (!session) return;
+  if (session.layers.length <= 1) {
+    showToast('A canvas needs at least one layer.');
+    return;
+  }
+  const layer = session.layers.find((l) => l.id === id);
+  if (!layer) return;
+  pendingLayerDeleteId = id;
+  const painted = countOpaque(layer.pixels);
+  els.pcreateLayerDeleteMessage.textContent =
+    `"${layer.name}" and its ${painted} painted pixel${painted === 1 ? '' : 's'} will be removed ` +
+    'from this canvas. Undo can bring it back.';
+  els.pcreateLayerDeleteModal.hidden = false;
+}
+
+function closeLayerDeleteModal() {
+  pendingLayerDeleteId = null;
+  els.pcreateLayerDeleteModal.hidden = true;
+}
+
+function confirmDeleteLayer() {
+  const id = pendingLayerDeleteId;
+  closeLayerDeleteModal();
+  if (!session || !id) return;
+  const index = session.layers.findIndex((l) => l.id === id);
+  if (index < 0 || session.layers.length <= 1) return;
+  const name = session.layers[index].name;
+  runLayerAction('Delete layer', () => {
+    session.layers.splice(index, 1);
+    if (session.activeLayerId === id) {
+      const next = session.layers[Math.min(index, session.layers.length - 1)];
+      session.activeLayerId = next.id;
+    }
+    session.selection = null;
+    session.openLayerMenuId = null;
+  });
+  refreshAutoPalette();
+  showToast(`Deleted "${name}".`);
+}
+
+function countOpaque(pixels) {
+  let count = 0;
+  for (let i = 3; i < pixels.length; i += 4) if (pixels[i] !== 0) count++;
+  return count;
+}
+
+// ---------------------------------------------------------------------------
 // Auto Palette
 //
 // Not a palette the artist curates -- a readout of what the picture is
@@ -1906,12 +2413,18 @@ function sessionRecord() {
     sourceName: session.sourceName,
     width: session.width,
     height: session.height,
-    pixels: new Uint8ClampedArray(session.pixels),
-    shadow: session.shadow
-      ? { indices: [...session.shadow.indices], color: [...session.shadow.color] }
-      : null,
-    shadowVisible: session.shadowVisible,
-    artworkDirty: session.artworkDirty,
+    activeLayerId: session.activeLayerId,
+    layers: session.layers.map((layer) => ({
+      id: layer.id,
+      name: layer.name,
+      opacity: layer.opacity,
+      pixels: new Uint8ClampedArray(layer.pixels),
+      shadow: layer.shadow
+        ? { indices: [...layer.shadow.indices], color: [...layer.shadow.color] }
+        : null,
+      shadowVisible: layer.shadowVisible,
+      artworkDirty: layer.artworkDirty,
+    })),
     loadedPaletteName: session.loadedPaletteName,
     savedCount: session.savedCount,
   };
@@ -1942,29 +2455,43 @@ async function resumeSavedWork() {
   if (!record || !record.data) { showToast('There is no saved PCreate work.'); return; }
 
   const data = record.data;
-  const pixels = new Uint8ClampedArray(data.pixels);
-  const canvas = document.createElement('canvas');
-  canvas.width = data.width;
-  canvas.height = data.height;
+  const layers = (data.layers || []).map((saved) => {
+    const layer = makeLayer({
+      name: saved.name,
+      width: data.width,
+      height: data.height,
+      pixels: new Uint8ClampedArray(saved.pixels),
+      opacity: saved.opacity,
+    });
+    layer.id = saved.id;
+    layer.shadow = saved.shadow
+      ? { indices: new Set(saved.shadow.indices), color: [...saved.shadow.color] }
+      : null;
+    layer.shadowVisible = saved.shadowVisible;
+    layer.artworkDirty = saved.artworkDirty;
+    return layer;
+  });
+  if (layers.length === 0) { showToast('The saved work had no layers.'); return; }
+  // Keep issuing fresh ids above whatever the restored stack already uses,
+  // so a layer added after resuming can never collide with a restored one.
+  nextLayerId = Math.max(nextLayerId, ...layers.map((l) => Number(String(l.id).slice(1)) || 0)) + 1;
+
   startSession({
     kind: data.kind || 'blank',
     name: data.sourceName || `${data.width}×${data.height}`,
     width: data.width,
     height: data.height,
-    pixels,
-    bitmap: canvas,
+    layers,
   });
-  session.shadow = data.shadow
-    ? { indices: new Set(data.shadow.indices), color: [...data.shadow.color] }
-    : null;
-  session.shadowVisible = data.shadowVisible !== false;
-  session.artworkDirty = data.artworkDirty !== false;
+  if (data.activeLayerId && layers.some((l) => l.id === data.activeLayerId)) {
+    session.activeLayerId = data.activeLayerId;
+  }
   session.loadedPaletteName = data.loadedPaletteName || null;
   session.savedCount = data.savedCount || 0;
-  syncBitmap();
   await refreshPaletteCache();
   rebuildAutoPalette();
   renderSwatchStrip();
+  renderLayerList();
   renderTools();
   render();
   showToast('Resumed your saved PCreate work.');
@@ -2225,71 +2752,131 @@ function renderEditModeToggle() {
 // size (chosen deliberately, or imported whole), so the entire buffer is
 // saved as-is, blank canvas or not.
 
-function openLayerNameModal() {
+// IMPORT TO MAIN
+//
+// The export pathway the foundation task proved out, now working on the
+// stack: choose which PCreate layers to push into the project and each one
+// becomes an ordinary Part -- the same partsStore.add(new Part(...)) call
+// an ordinary import makes, so what lands is draggable, riggable and
+// bindable with nothing special about it.
+//
+// NON-DESTRUCTIVE. The layers stay in PCreate afterwards. This is a copy
+// out, not a move: an artist who exports a head to check how it sits in the
+// scene must not find it missing from the canvas they were drawing it on.
+
+function openImportToMainModal() {
   if (!session) return;
-  els.pcreateLayerNameInput.value = session.savedCount === 0
-    ? session.sourceName
-    : `${session.sourceName}_${session.savedCount + 1}`;
-  els.pcreateLayerNameModal.hidden = false;
-  els.pcreateLayerNameInput.focus();
+  els.pcreateExportList.replaceChildren();
+
+  // Top of the stack first, matching the layer list.
+  const topFirst = [...session.layers].reverse();
+  for (const layer of topFirst) {
+    const item = document.createElement('li');
+    const row = document.createElement('label');
+    row.className = 'list-row pcreate-export-row';
+
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'pcreate-export-check';
+    box.dataset.layerId = layer.id;
+    // The active layer starts ticked: exporting the one you are working on
+    // is the common case, and everything else is one tap away.
+    box.checked = layer.id === session.activeLayerId;
+
+    const label = document.createElement('span');
+    label.className = 'scene-part';
+    const painted = countOpaque(layer.pixels);
+    label.textContent = `${layer.name} — ${painted} px`;
+    if (painted === 0) {
+      box.checked = false;
+      box.disabled = true;
+      label.textContent = `${layer.name} — empty`;
+    }
+
+    row.append(box, label);
+    item.appendChild(row);
+    els.pcreateExportList.appendChild(item);
+  }
+
+  els.pcreateExportModal.hidden = false;
 }
 
-function closeLayerNameModal() {
-  els.pcreateLayerNameModal.hidden = true;
+function closeImportToMainModal() {
+  els.pcreateExportModal.hidden = true;
 }
 
-function nextPlacement() {
-  const offset = (session.savedCount % CASCADE_WRAP) * CASCADE_STEP;
+function setAllExportChecks(checked) {
+  for (const box of els.pcreateExportList.querySelectorAll('.pcreate-export-check')) {
+    if (!box.disabled) box.checked = checked;
+  }
+}
+
+function nextPlacement(index) {
+  const offset = ((session.savedCount + index) % CASCADE_WRAP) * CASCADE_STEP;
   return {
     x: Math.floor((sceneStore.width - session.width) / 2) + offset,
     y: Math.floor((sceneStore.height - session.height) / 2) + offset,
   };
 }
 
-function saveAsLayer() {
+function importToMain() {
   if (!session) return;
-  const typed = els.pcreateLayerNameInput.value.trim();
-  const name = typed || els.pcreateLayerNameInput.placeholder || session.sourceName;
-  closeLayerNameModal();
+  const chosen = [...els.pcreateExportList.querySelectorAll('.pcreate-export-check')]
+    .filter((box) => box.checked)
+    .map((box) => session.layers.find((l) => l.id === box.dataset.layerId))
+    .filter(Boolean);
 
-  // The pixels are copied out here regardless of the destructive-vs-copy
-  // setting: whatever PCreate does to its OWN working buffer in the future,
-  // the Part that lands in the project is always an independent snapshot
-  // at the moment of saving, exactly like every other layer-creating
-  // action in the app (duplicate(), CLayer's own extraction).
-  const pixels = compositePixels();
+  if (chosen.length === 0) {
+    showToast('Tick at least one layer to import.');
+    return;
+  }
+  closeImportToMainModal();
+
+  // Each layer is flattened with its own opacity and shadow at the moment
+  // of export, so what the project receives is what the layer looked like
+  // -- an independent snapshot, exactly like every other layer-creating
+  // action in the app.
+  const exported = chosen.map((layer) => ({
+    name: layer.name,
+    pixels: compositeLayer(layer),
+  }));
+
+  // Read fresh, for the same reason CLayer's save reads it inline: only the
+  // FIRST layer of this batch can land in a project that is still empty.
+  const wasEmpty = partsStore.isEmpty;
   const width = session.width;
   const height = session.height;
 
-  // Checked fresh on every single save, not once when the window opened --
-  // the same reason CLayer's own save reads partsStore.isEmpty inline: one
-  // PCreate canvas could in principle be saved more than once, and only
-  // the FIRST such save can land in a project that is still empty.
-  const wasEmpty = partsStore.isEmpty;
-
-  let created = null;
-  history.run('PCreate: save as layer', () => {
+  let created = [];
+  history.run(`PCreate: import ${exported.length} layer${exported.length === 1 ? '' : 's'}`, () => {
     if (wasEmpty) sceneStore.setSize(width, height);
     const matchesCanvas = sceneStore.width === width && sceneStore.height === height;
-    const placement = matchesCanvas ? { x: 0, y: 0 } : nextPlacement();
-
-    created = partsStore.add(new Part({
-      name,
-      image: null,
-      pixels,
-      width,
-      height,
-      objectUrl: null,
-      x: placement.x,
-      y: placement.y,
-      scale: 1,
-      placement: matchesCanvas ? 'auto' : 'manual',
-    }));
-    partsStore.select(created.id);
+    exported.forEach((piece, index) => {
+      // Every layer shares the PCreate canvas's frame, so when that frame
+      // matches the project's they all land at the origin -- which is what
+      // keeps a head sitting on its body instead of each piece being
+      // cascaded to its own corner.
+      const placement = matchesCanvas ? { x: 0, y: 0 } : nextPlacement(index);
+      const part = partsStore.add(new Part({
+        name: piece.name,
+        image: null,
+        pixels: piece.pixels,
+        width,
+        height,
+        objectUrl: null,
+        x: placement.x,
+        y: placement.y,
+        scale: 1,
+        placement: matchesCanvas ? 'auto' : 'manual',
+      }));
+      created.push(part);
+    });
+    if (created.length) partsStore.select(created[created.length - 1].id);
   });
 
-  session.savedCount += 1;
-  showToast(`Saved "${created.name}" — ${width}×${height} px as a new layer.`);
+  session.savedCount += exported.length;
+  showToast(`Imported ${created.length} layer${created.length === 1 ? '' : 's'} into the project — ` +
+    'the originals are still here in PCreate.');
 }
 
 // ---------------------------------------------------------------------------
@@ -2299,6 +2886,7 @@ function saveAsLayer() {
 // module's own boundary.
 export function pcreateDebug() {
   if (!session) return null;
+  const layer = activeLayer();
   return {
     kind: session.kind,
     width: session.width,
@@ -2320,16 +2908,36 @@ export function pcreateDebug() {
     shadowOffset: session.shadowOffset,
     shadowColorIsAuto: session.shadowColor === null,
     freeAngle: session.freeAngle,
-    shadowSize: session.shadow ? session.shadow.indices.size : null,
-    shadowVisible: session.shadowVisible,
-    artworkDirty: session.artworkDirty,
+    shadowSize: layer && layer.shadow ? layer.shadow.indices.size : null,
+    shadowVisible: layer ? layer.shadowVisible : null,
+    artworkDirty: layer ? layer.artworkDirty : null,
     canUndo: pcreateHistory.canUndo,
     canRedo: pcreateHistory.canRedo,
     undoLabel: pcreateHistory.undoLabel,
     redoLabel: pcreateHistory.redoLabel,
     autoPalette: session.autoPalette.map((c) => rgbToHex(c.r, c.g, c.b)),
     autoPaletteHues: session.autoPalette.map((c) => Math.round(c.h)),
+    // The stack, bottom-first, exactly as it is stored.
+    activeLayerId: session.activeLayerId,
+    activeLayerName: layer ? layer.name : null,
+    layers: session.layers.map((l) => ({
+      id: l.id,
+      name: l.name,
+      opacity: l.opacity,
+      painted: countOpaque(l.pixels),
+      shadowSize: l.shadow ? l.shadow.indices.size : null,
+    })),
   };
+}
+
+// One layer's own pixel, regardless of which layer is active -- for
+// proving a tool wrote to the RIGHT layer and left the others alone.
+export function pcreateLayerPixelAt(layerId, u, v) {
+  if (!session) return null;
+  const layer = session.layers.find((l) => l.id === layerId);
+  if (!layer) return null;
+  const o = (v * session.width + u) * 4;
+  return [layer.pixels[o], layer.pixels[o + 1], layer.pixels[o + 2], layer.pixels[o + 3]];
 }
 
 // The composited canvas -- artwork plus a visible shadow -- at one texel,
@@ -2492,9 +3100,15 @@ export function initPCreate() {
   });
   els.pcreateRotateFreeBtn.addEventListener('click', rotateByAngle);
 
-  els.pcreateSaveLayerBtn.addEventListener('click', openLayerNameModal);
-  els.pcreateLayerNameConfirmBtn.addEventListener('click', saveAsLayer);
-  els.pcreateLayerNameCancelBtn.addEventListener('click', closeLayerNameModal);
+  els.pcreateSaveLayerBtn.addEventListener('click', openImportToMainModal);
+  els.pcreateExportConfirmBtn.addEventListener('click', importToMain);
+  els.pcreateExportCancelBtn.addEventListener('click', closeImportToMainModal);
+  els.pcreateExportAllBtn.addEventListener('click', () => setAllExportChecks(true));
+  els.pcreateExportNoneBtn.addEventListener('click', () => setAllExportChecks(false));
+
+  els.pcreateAddLayerBtn.addEventListener('click', addLayer);
+  els.pcreateLayerDeleteConfirmBtn.addEventListener('click', confirmDeleteLayer);
+  els.pcreateLayerDeleteCancelBtn.addEventListener('click', closeLayerDeleteModal);
 
   window.addEventListener('resize', () => {
     if (!session) return;

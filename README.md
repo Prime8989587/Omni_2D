@@ -4724,6 +4724,134 @@ The phone-size pass grew to 45 checks, now also confirming Undo, Save work,
 the Auto Palette refresh and the Shadow ON/OFF toggle are reachable and
 tappable at 412×915, 390×844 and 360×640.
 
+### PCreate's internal layer stack
+
+PCreate's canvas stopped being one flat buffer and became a stack of
+independent layers sharing one set of dimensions — the same shape the
+project's own Parts list has, scoped inside PCreate.
+
+**How every existing tool became layer-aware without being rewritten.** The
+brush, eraser, fill, shapes, shadow, select, transforms, eyedropper and
+blend were all written against `session.pixels`, `session.bitmap` and
+`session.shadow`. Editing every one of them to look up the active layer
+first would have been dozens of call sites, each an opportunity to miss one
+and have a tool silently keep painting a buffer nobody could see any more.
+Instead those three names are now **accessors that forward to whichever
+layer is active**. A stroke lands on the selected layer because there is no
+longer any other buffer for it to land on — missing a call site isn't
+possible, because there are no call sites to miss.
+
+The verification checks this directly rather than taking it on faith: after
+drawing red on layer 1 and blue on layer 2, layer 1 reads red at the stroke
+and **transparent where layer 2's stroke is**, and vice versa.
+
+**Opacity** is a render property, not paint: the layer's own pixels stay at
+full strength and only the composite changes, which is what makes it
+reversible by dragging the slider back. The slider is live while dragging
+but records **one** undo step for the whole drag, using the same
+capture/commit split brush strokes use.
+
+**Duplicate** copies the pixel buffer rather than sharing a reference —
+painting on the copy provably leaves the original untouched — and lands
+directly above its source. **Delete** confirms first and is undoable, like
+every other layer operation, because layer structure lives on the same
+timeline as drawing. **Reorder** moves a layer through the stack, and the
+test confirms it actually controls what covers what: two layers painting
+the same texel, the composite shows the upper one.
+
+The list mirrors the Scene Parts list deliberately — same `list-row` /
+`scene-part` / `row-aside` classes, same one-kebab-open-at-a-time rule —
+so it inherits that list's spacing, tap targets and selected state rather
+than growing a second look for the same idea. It runs **top of stack
+first**, matching what the eye sees, while `layers[]` itself runs
+bottom-first, so "move up" in the list is a move toward the end of the
+array.
+
+**Rotate and Flip with nothing selected apply to every layer at once.**
+They have to: a quarter turn of a non-square canvas swaps its width and
+height, and layers in one stack share one set of dimensions — turning only
+the selected layer would leave the stack holding buffers of two different
+shapes. A transform also drops each layer's generated shadow, which would
+otherwise stay put while the art moved out from under it.
+
+### Multi-layer import
+
+**Several PNGs at once**, which is what this task's "layered source format
+if practically supported" resolves to here, and worth being plain about:
+PSD and ORA would each need a parser this app has no dependency for and no
+way to fetch offline, whereas one-PNG-per-layer is what every editor
+actually exports and what the project's own import already accepts. It is
+the layered-import path, not a lesser stand-in for one.
+
+Each file becomes its own layer. The canvas is sized to hold the largest
+piece and each piece keeps its position relative to that frame, by the same
+rule Import and CLayer's save already follow: a picture matching the canvas
+exactly is position-preserving and lands at the origin, so **a set of
+layers exported at one common size reassembles itself precisely**. Anything
+smaller is centred, the only defensible guess when the file carries no
+offset of its own. Files are sorted by name, so a set exported as
+`01-body`, `02-head` stacks in the order the artist numbered them rather
+than in whatever order the picker handed them over.
+
+### Import to Main
+
+The export pathway the foundation task proved out, now working on the
+stack. A checkbox list chooses which layers to push into the project; each
+becomes an ordinary Part through the identical `partsStore.add(new
+Part(...))` call an ordinary import makes, so what lands is draggable,
+riggable and bindable with nothing special about it. The active layer
+starts ticked, empty layers are disabled rather than silently producing
+blank Parts, and Select all / Select none are there for the common cases.
+
+**Non-destructive, deliberately.** The layers stay in PCreate afterwards —
+an artist who exports a head to check how it sits in the scene must not
+find it missing from the canvas they were drawing it on. The test asserts
+both halves: the chosen layer appears in Scene Parts *and* all the
+originals are still in PCreate.
+
+Every exported layer shares the PCreate canvas's frame, so when that frame
+matches the project's they all land at the origin — which is what keeps a
+head sitting on its body instead of each piece cascading to its own corner.
+
+### The z-index list that has now caught three modals
+
+`.modal-backdrop` sits at `z-index: 50` and the full-screen tool windows at
+`55`, so any modal opened *from inside* the PCreate window needs lifting
+above it. Left out of that rule a modal still renders, so it looks
+completely fine; what fails is every tap on it, because the window is
+sitting on top eating them. That bit CLayer's naming prompt once, PCreate's
+four earlier modals once, and now the layer-delete confirmation and Import
+to Main. The rule carries a note saying so: if it opens over the PCreate
+canvas, it goes in the list.
+
+### Verified end to end
+
+49 checks drive the real window, on top of the 143 headless ones:
+
+- **A stack, and tools that respect it.** Add Layer stacks a second layer
+  and makes it active; each layer holds only its own 11 painted pixels; the
+  red stroke is on layer 1 and layer 2 is **transparent at that exact
+  spot**, and vice versa. Re-selecting layer 1 and drawing lands on layer 1.
+- **Opacity.** 40% on one layer drops the composited alpha from 255 to 102
+  while that layer's own pixels stay at full 255.
+- **Rename** changes the name and leaves the artwork alone. **Duplicate**
+  produces a third layer with the same 11 px, and painting on the copy
+  leaves the original untouched at that texel. **Reorder** changes the
+  stacking order and the composite shows the upper layer where both painted
+  the same pixel. **Delete** confirms first, removes exactly that layer,
+  leaves the others, and **Undo brings it back**.
+- **Multi-import.** Three PNGs became three layers named from their files,
+  in filename order, on a 32×32 canvas, each holding exactly its own 36-px
+  block — with each block still at its original position and **the back
+  layer transparent where the middle layer's block sits**, proving they
+  were not flattened together.
+- **Import to Main.** A one-of-two selection produced exactly one Scene
+  Part at the canvas size under its layer name, with all PCreate layers
+  still present afterwards. The exported Part selects, moves, and generates
+  a real mesh — draggable and riggable like any imported layer. A
+  two-of-three selection exported both at the origin, so they stay aligned
+  with each other.
+
 ### What this deliberately does not have
 
 **Drawing is not clipped to an active selection.** A selection governs

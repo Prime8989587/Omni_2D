@@ -1001,6 +1001,40 @@ button, input, select {
   overscroll-behavior: contain; /* don't scroll the app underneath at the ends */
 }
 
+/* ---------- PCreate layer list ----------
+   Reuses .scene-parts / .list-row / .scene-part / .row-aside from the main
+   Parts list, so the two read as the same idea rather than two takes on it.
+   The only thing it needs of its own is a height cap: the layer list sits
+   INSIDE an already-scrolling footer, and an unbounded list of 24 layers
+   would push everything below it -- colour, palette, Import to Main -- an
+   unreasonable distance down. */
+
+.pcreate-layer-list {
+  max-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pcreate-export-list {
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.pcreate-export-row {
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+/* Big enough to hit with a thumb; the browser default is about half this. */
+.pcreate-export-check {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  accent-color: var(--color-accent);
+}
+
 /* ---------- PCreate drawing tools ----------
    Nine tools is more than a segmented control can hold on a phone without
    each one becoming an unreadable sliver, so the strip wraps instead and
@@ -1224,13 +1258,20 @@ button, input, select {
   z-index: 65;
 }
 
-/* Same reason: these four are all opened FROM WITHIN the already-open
-   PCreate window (z-index 55), which #pcreateEntryModal and
-   #pcreateSizeModal -- opened BEFORE that window exists -- never need. */
-#pcreateLayerNameModal,
+/* Same reason: these are all opened FROM WITHIN the already-open PCreate
+   window (z-index 55), which #pcreateEntryModal and #pcreateSizeModal --
+   opened BEFORE that window exists -- never need.
+
+   EVERY new modal opened from inside the window belongs in this list. Left
+   out, it still renders, so it looks completely fine; what fails is every
+   tap on it, because the window is sitting on top eating them. That has
+   now caught three separate modals, so: if it opens over the PCreate
+   canvas, add it here. */
 #pcreatePaletteModal,
 #pcreateNameModal,
-#pcreateDeleteModal {
+#pcreateDeleteModal,
+#pcreateLayerDeleteModal,
+#pcreateExportModal {
   z-index: 65;
 }
 

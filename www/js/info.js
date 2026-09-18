@@ -205,6 +205,23 @@ const TOPICS = {
       'can compare with and without. It never recalculates anything — ' +
       'switching it off and back on gives you the identical shadow back.',
   },
+  'pcreate-layers': {
+    title: 'PCreate layers',
+    body: 'PCreate’s canvas is a stack of layers, like the project’s own ' +
+      'Scene Parts but kept inside PCreate.\n\n' +
+      'Every tool draws on the SELECTED layer only. Tap a layer’s name to ' +
+      'select it; the list runs top of the stack first, matching what you ' +
+      'see on the canvas.\n\n' +
+      'The "⋮" on a row opens Rename, Move up/down, Duplicate, Delete and ' +
+      'that layer’s Opacity. Duplicate makes a genuinely independent copy ' +
+      '— painting on one does not touch the other.\n\n' +
+      'Rotate and Flip with nothing selected apply to the WHOLE canvas, ' +
+      'meaning every layer at once. They have to: a quarter turn of a ' +
+      'non-square canvas swaps its width and height, and every layer in a ' +
+      'stack shares one set of dimensions.\n\n' +
+      'Import to Main copies whichever layers you tick into the project as ' +
+      'normal Scene Parts. The originals stay here.',
+  },
   'pcreate-auto-palette': {
     title: 'Auto Palette',
     body: 'Not a palette you build — a readout of the colours the current ' +

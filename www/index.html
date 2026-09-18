@@ -69,7 +69,7 @@
     <!-- PCreate's own picker, for the same reason CLayer's is separate
          from #fileInput: picking a file here must not hand it straight to
          partsStore -- PCreate works on it in its own window first. -->
-    <input id="pcreateFileInput" class="visually-hidden" type="file" accept="image/png,.png" />
+    <input id="pcreateFileInput" class="visually-hidden" type="file" accept="image/png,.png" multiple />
 
     <footer class="controls">
       <div id="scenePanel" class="scene-panel" hidden>
@@ -735,6 +735,16 @@
       <canvas id="pcreateCanvas" class="px-pin__canvas"></canvas>
       <footer class="px-pin__controls">
         <div class="px-pin__row-label">
+          <span>Layers</span>
+          <button class="info-btn" type="button" data-info="pcreate-layers" aria-haspopup="true" aria-expanded="false" aria-label="How do PCreate layers work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        </div>
+        <div class="pcreate-palette-row">
+          <span id="pcreateLayerCount" class="pcreate-palette-name">1 layer</span>
+          <button id="pcreateAddLayerBtn" class="btn btn--sm" type="button">+ Add Layer</button>
+        </div>
+        <ul id="pcreateLayerList" class="scene-parts pcreate-layer-list"></ul>
+
+        <div class="px-pin__row-label">
           <span>Tool</span>
           <button class="info-btn" type="button" data-info="pcreate-tools" aria-haspopup="true" aria-expanded="false" aria-label="What does each tool do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
         </div>
@@ -849,7 +859,7 @@
         <button id="pcreateEditModeToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Always edit a copy</button>
 
         <div class="modal__actions">
-          <button id="pcreateSaveLayerBtn" class="btn btn--flourish" type="button">Save as Layer</button>
+          <button id="pcreateSaveLayerBtn" class="btn btn--flourish" type="button">Import to Main…</button>
         </div>
         <p class="px-pin__hint">One finger uses the current tool; two fingers pan and zoom.</p>
       </footer>
@@ -879,18 +889,29 @@
       </div>
     </div>
 
-    <div id="pcreateLayerNameModal" class="modal-backdrop" hidden>
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateLayerNameTitle">
-        <h2 id="pcreateLayerNameTitle" class="modal__title">Save as Layer</h2>
-        <label for="pcreateLayerNameInput" class="field-label">Layer name</label>
-        <input id="pcreateLayerNameInput" class="text-input" type="text" placeholder="New layer" autocomplete="off" />
-        <p class="modal__text">
-          Adds the current PCreate canvas to this project's Scene Parts —
-          ready to drag, rig and bind like any other layer.
-        </p>
+    <div id="pcreateExportModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateExportTitle">
+        <h2 id="pcreateExportTitle" class="modal__title">Import to Main</h2>
+        <p class="modal__text">Choose which layers to add to the project's Scene Parts. They stay here in PCreate too — this copies them out rather than moving them.</p>
+        <ul id="pcreateExportList" class="project-list pcreate-export-list"></ul>
+        <div class="pcreate-action-row">
+          <button id="pcreateExportAllBtn" class="btn btn--sm" type="button">Select all</button>
+          <button id="pcreateExportNoneBtn" class="btn btn--sm" type="button">Select none</button>
+        </div>
         <div class="modal__actions">
-          <button id="pcreateLayerNameConfirmBtn" class="btn btn--flourish" type="button">Save</button>
-          <button id="pcreateLayerNameCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+          <button id="pcreateExportConfirmBtn" class="btn btn--flourish" type="button">Import to Main</button>
+          <button id="pcreateExportCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pcreateLayerDeleteModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pcreateLayerDeleteTitle">
+        <h2 id="pcreateLayerDeleteTitle" class="modal__title">Delete this layer?</h2>
+        <p id="pcreateLayerDeleteMessage" class="modal__text"></p>
+        <div class="modal__actions">
+          <button id="pcreateLayerDeleteConfirmBtn" class="btn btn--danger" type="button">Delete</button>
+          <button id="pcreateLayerDeleteCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
         </div>
       </div>
     </div>
