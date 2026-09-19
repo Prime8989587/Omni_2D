@@ -31,6 +31,7 @@ import { bonesStore } from './bones.js';
 import { view } from './view.js';
 import { getSetting } from './settings.js';
 import { history } from './history.js';
+import { haptic } from './haptics.js';
 
 // Touch tolerances are in SCREEN pixels, so a bone is as easy to grab
 // zoomed out as zoomed in.
@@ -161,6 +162,7 @@ function handleTap(screenPoint) {
     if (placement.stage === 'head') {
       placement.head = snapped;
       placement.stage = 'tail';
+      haptic('snap'); // the head is down, on a cell
       emit();
       return;
     }
@@ -225,7 +227,12 @@ export function initRigTool(canvasEl) {
 
     if (drag) {
       const snapped = snapToCell(sceneFromScreen(screenPoint));
-      dragCell = { x: Math.floor(snapped.x), y: Math.floor(snapped.y) };
+      const cell = { x: Math.floor(snapped.x), y: Math.floor(snapped.y) };
+      // The snap is the moment the endpoint LANDS IN A NEW CELL, not every
+      // frame of the drag: the grid is what the bone is being aimed at, so
+      // one tick per cell crossed is the thing worth feeling.
+      if (!dragCell || dragCell.x !== cell.x || dragCell.y !== cell.y) haptic('snap');
+      dragCell = cell;
       if (drag.handle === 'head') bonesStore.setWorldHead(drag.bone, snapped.x, snapped.y);
       else bonesStore.setWorldTail(drag.bone, snapped.x, snapped.y);
       emit();

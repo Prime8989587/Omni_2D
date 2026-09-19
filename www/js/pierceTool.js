@@ -32,6 +32,7 @@ import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 import { pierceDentIssue } from './pierce.js';
 import { dentPlacement, dentTriangleAt } from './dent.js';
+import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
 
 // The tip is the app's accent; the pierceable area is deliberately NOT,
 // because the two are painted in the same window and confusing them would
@@ -76,6 +77,7 @@ function cacheElements() {
     'pierceCanvas', 'pierceTargetTipBtn', 'pierceTargetAreaBtn', 'pierceTargetDeformBtn',
     'pierceTargetBarrierBtn', 'pierceTargetDentBtn', 'pierceTargetHint', 'pierceToolPaintBtn',
     'pierceToolEraseBtn', 'pierceToolRow', 'pierceBrushBtn', 'pierceBrushMenu',
+    'pierceBrushPresets',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
     'piercePiercedOpacity', 'piercePiercedOpacityValue',
   ]) {
@@ -574,6 +576,13 @@ function renderTools() {
     });
     els.pierceBrushMenu.appendChild(button);
   }
+
+  renderBrushPresets(els.pierceBrushPresets, {
+    key: 'pierceBrushPresets',
+    current: () => session.brush,
+    apply: (size) => { session.brush = size; session.brushMenuOpen = false; renderTools(); },
+    format: SQUARE_FORMAT,
+  });
 }
 
 // ---------------------------------------------------------------------------

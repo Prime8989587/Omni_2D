@@ -209,6 +209,46 @@ export const SCHEMA = [
     step: 0.05,
     format: (v) => v.toFixed(2),
   },
+  // ---- Brush presets ------------------------------------------------------
+  //
+  // Saved favourite sizes, per tool. These carry NO section, which is how
+  // they stay out of the Settings screen: renderBody only draws entries
+  // whose section matches the tab it is on, so an entry belonging to no tab
+  // is never drawn. They are still real settings in every other respect --
+  // same store, same load, same write-through, same wipe -- because they
+  // are edited where they are used, on the tool's own brush menu, and a
+  // second persistence mechanism for three arrays of numbers would be a
+  // second thing to keep in step for no gain.
+  //
+  // `kind: 'presets'` coerces to a sorted, de-duplicated list of in-range
+  // whole numbers, capped at `slots`. A stored value that has been
+  // hand-edited, or written by an older build with a different range, is
+  // filtered down to whatever part of it is still valid rather than
+  // throwing the lot away.
+  {
+    key: 'pxPinBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 4, 8],
+  },
+  {
+    key: 'pierceBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 4, 8],
+  },
+  {
+    key: 'weightBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 10,
+    max: 120,
+    default: [20, 45, 90],
+  },
   {
     key: 'meshTrimInPlace',
     section: 'rig',
@@ -320,6 +360,15 @@ function coerce(entry, raw) {
   if (entry.kind === 'color') {
     return /^#[0-9a-fA-F]{6}$/.test(String(raw)) ? String(raw) : entry.default;
   }
+  if (entry.kind === 'presets') {
+    if (!Array.isArray(raw)) return [...entry.default];
+    const clean = [...new Set(raw
+      .map((v) => Math.round(Number(v)))
+      .filter((v) => Number.isFinite(v) && v >= entry.min && v <= entry.max))]
+      .sort((a, b) => a - b)
+      .slice(0, entry.slots);
+    return clean.length ? clean : [...entry.default];
+  }
   // choice
   return entry.options.some((o) => o.value === raw) ? raw : entry.default;
 }
@@ -371,6 +420,45 @@ export function setSetting(key, raw) {
   values[key] = value;
   notify(key); // effect lands before the write, so the UI never waits on disk
   persist();
+}
+
+// Add a size to a tool's presets, or drop it if it is already there.
+//
+// One gesture for both, because the brush menu shows the presets as a row
+// of chips and a "save this size" star: tapping the star with the current
+// size already saved plainly means remove it. Adding past the last slot
+// drops the LOWEST saved size rather than refusing -- a full set of
+// favourites should not have to be cleared by hand before a new favourite
+// can be added, and the one being pushed out is the one furthest from a
+// deliberate choice to keep.
+//
+// Returns the list as it now stands, already coerced.
+export function togglePreset(key, value) {
+  const entry = BY_KEY.get(key);
+  if (!entry || entry.kind !== 'presets') return [];
+  const size = Math.round(Number(value));
+  if (!Number.isFinite(size) || size < entry.min || size > entry.max) return [...values[key]];
+
+  const current = [...values[key]];
+  const at = current.indexOf(size);
+  let next;
+  if (at >= 0) {
+    next = current.filter((v) => v !== size);
+    // Emptying the row entirely would leave the star with nothing to undo
+    // and the chips gone with no way back except Settings, which does not
+    // show these. The last one stays.
+    if (next.length === 0) next = current;
+  } else {
+    next = [...current, size].sort((a, b) => a - b);
+    if (next.length > entry.slots) next = next.slice(next.length - entry.slots);
+  }
+  setSetting(key, next);
+  return [...values[key]];
+}
+
+export function hasPreset(key, value) {
+  const list = values[key];
+  return Array.isArray(list) && list.includes(Math.round(Number(value)));
 }
 
 export function resetSettings() {

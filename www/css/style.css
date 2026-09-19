@@ -178,6 +178,12 @@ button, input, select {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
+  /* Never shrunk below its own content. .app is a 100dvh flex column and
+     the canvas below it claims a fixed 48vh, so the default flex-shrink
+     of 1 let this bar be squeezed -- which went unnoticed while it was
+     one row tall and clipped the second row in half the moment it
+     wrapped. The scrolling controls area is what gives up the space. */
+  flex: 0 0 auto;
 }
 
 .mode-label {
@@ -1708,9 +1714,18 @@ button, input, select {
 }
 
 /* The top bar and the selection bar both gained buttons; neither may
-   push its neighbours off the edge of a narrow phone. */
+   push its neighbours off the edge of a narrow phone.
+   
+   WRAP, now that the last-saved indicator is up here too. Five buttons
+   plus the wordmark plus "Saved 3 min ago" genuinely does not fit across
+   390px while Import is showing -- measured, it overflowed by about 30px
+   and clipped "Import" down to "mpor" with the clock running off the
+   right edge. Wrapping lets the clock drop to a second line exactly when
+   there is no room for it, and keeps it on the first line in the modes
+   where Import is hidden, so no vertical space is spent unless it buys
+   something. */
 .topbar {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1739,6 +1754,187 @@ button, input, select {
 .mode-label {
   margin-left: auto;
   white-space: nowrap;
+}
+
+/* ---------- List tools: filter + selection mode ----------
+   One row above each list, in both panels, so the two lists read as the
+   same idea rather than two takes on it. */
+
+.list-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 6px;
+}
+
+.list-tools__search {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: var(--color-surface);
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  color: var(--color-text);
+  font-size: var(--text-label);
+}
+
+.list-tools__search::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.list-tools__search:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* The "nothing matched" line. Without it a filter that matches no layer
+   leaves an empty panel that reads as "the project is empty" rather than
+   "your filter is too narrow". */
+.list-tools__empty {
+  margin: 0;
+  padding: 10px 4px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--text-label);
+}
+
+/* ---------- Batch bar ----------
+   Only ever visible while its list is in selection mode, which is what
+   keeps the ordinary lists exactly as they were. */
+
+.batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 2px solid var(--color-accent);
+  clip-path: var(--pixel-clip-lg);
+  background: rgba(255, 46, 147, 0.07);
+}
+
+.batch-bar__count {
+  margin: 0;
+  color: var(--color-accent);
+  font-size: var(--text-label);
+}
+
+.batch-bar__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.batch-bar__row .btn {
+  flex: 1 1 auto;
+}
+
+.batch-bar__label {
+  margin: 4px 0 0;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.batch-bar__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.batch-bar__field > span {
+  flex: 0 0 76px;
+}
+
+.batch-bar__field input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.batch-bar__field output {
+  flex: 0 0 44px;
+  text-align: right;
+  color: var(--color-accent);
+}
+
+/* A row that is part of a multi-selection. Deliberately different from
+   .is-selected: the single selection still drives the editor panels and
+   has to stay distinguishable while several rows are ticked. */
+.scene-part.is-multi {
+  border-left: 4px solid var(--color-accent);
+  background: rgba(255, 46, 147, 0.14);
+}
+
+.scene-part__check {
+  margin-right: 8px;
+  color: var(--color-accent);
+}
+
+/* ---------- Last saved ---------- */
+
+/* Pushed to the right of whatever shares its line, and never squashed:
+   shrinking it would truncate a string whose whole job is to be readable
+   at a glance. */
+.save-clock {
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--text-label);
+}
+
+/* ---------- Brush presets ---------- */
+
+.brush-presets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 0 0;
+}
+
+.brush-presets__label {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: var(--text-label);
+}
+
+.brush-presets__chip {
+  -webkit-tap-highlight-color: transparent;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.brush-presets__chip[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* The save/unsave star. Filled once the CURRENT size is already a
+   favourite, so one glyph answers "is this saved?" and "save this". */
+.brush-presets__save {
+  -webkit-tap-highlight-color: transparent;
+  min-height: 36px;
+  min-width: 40px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.brush-presets__save[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .selection-bar {

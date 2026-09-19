@@ -23,16 +23,32 @@ const eq = (a, b, name, detail) => say(a === b, name, detail || `expected ${b}, 
 {
   const keys = SCHEMA.map((e) => e.key);
   eq(new Set(keys).size, keys.length, 'every setting key is unique');
-  say(SCHEMA.every((e) => SECTIONS.some((s) => s.key === e.section)),
-    'every setting belongs to one of the three declared sections');
+  // Brush presets are real settings -- same store, same persistence, same
+  // wipe -- but they carry no section on purpose, which is exactly what
+  // keeps them off the Settings screen: renderBody only draws entries whose
+  // section matches the open tab. So "every setting is rendered somewhere"
+  // is now a claim about the SHOWN ones, and the hidden ones get their own
+  // checks below rather than being waved through.
+  const shown = SCHEMA.filter((e) => e.section !== undefined);
+  say(shown.every((e) => SECTIONS.some((s) => s.key === e.section)),
+    'every setting with a section belongs to one of the three declared sections');
+  say(SCHEMA.filter((e) => e.kind === 'presets').every((e) => e.section === undefined),
+    'and the preset settings carry no section, so the Settings screen never draws them');
   say(SECTIONS.every((s) => SCHEMA.some((e) => e.section === s.key)),
     'every section has at least one setting in it');
   eq(SECTIONS.length, 3, 'there are exactly three sections');
   eq(SECTIONS.map((s) => s.key).join(','), 'main,pcreate,rig',
     'the sections are Main, PCreate and Rig, in that order');
 
-  say(SCHEMA.every((e) => typeof e.label === 'string' && e.label.length > 0),
-    'every setting has a label to render');
+  say(shown.every((e) => typeof e.label === 'string' && e.label.length > 0),
+    'every setting that is rendered has a label to render');
+  say(SCHEMA.filter((e) => e.kind === 'presets').every((e) =>
+    Array.isArray(e.default)
+    && e.default.length > 0
+    && e.default.length <= e.slots
+    && e.default.every((v) => Number.isInteger(v) && v >= e.min && v <= e.max)
+    && new Set(e.default).size === e.default.length),
+    'every preset setting ships defaults that are unique, in range and within its slot count');
   say(SCHEMA.filter((e) => e.kind === 'choice').every(
     (e) => Array.isArray(e.options) && e.options.some((o) => o.value === e.default)
   ), 'every choice setting\'s default is one of its own options');

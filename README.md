@@ -5953,6 +5953,180 @@ reliably too, and now both are proven: **31/31**, including the two new
 noisy-gesture checks that a perfectly radial synthetic pinch could never
 have exercised.
 
+## Six quality-of-life additions
+
+### Batch-applying settings to several bones or layers
+
+The priority item, and the one with a trap in it. Six hair-strand bones
+that should jiggle alike is a real and common case, and setting stiffness,
+damping and gravity on each of them by hand is eighteen drags. The obvious
+implementation -- give them a shared physics object -- would be wrong, and
+wrong in a way that only shows up later: the moment one strand needs to be
+a little stiffer than the rest, editing it would move all six.
+
+So batching here is not linking. Each action calls the ordinary per-item
+setter once per selected item, and every bone or layer ends up holding its
+own copy of the value:
+
+```js
+batchSetPhysicsParam(ids, key, value) {
+  ...
+  for (const id of ids) {
+    const bone = this.byId(id);
+    if (!bone) continue;
+    bone[key] = clamped;   // this bone's own field. Nothing shared.
+    changed++;
+  }
+}
+```
+
+That claim is tested the only way it can be honestly tested -- by doing
+the batch and then moving ONE of the items:
+
+```
+BATCH PHYSICS wrote all three parameters to every selected bone
+  strand0:420/14/25 strand1:420/14/25 ... strand5:420/14/25
+INDEPENDENT AFTERWARD: editing one batched bone leaves the other five at 420
+  strand0:420 strand1:420 strand2:60 strand3:420 strand4:420 strand5:420
+```
+
+A shared reference passes "all six read 420" and fails that second line.
+The values are also checked to be each bone's **own** properties rather
+than inherited from anything.
+
+Joint type goes through `setJointType` per bone rather than a bulk field
+write, because changing it has to preserve each bone's world rotation and
+re-seed its spring -- per-bone work that a bulk assignment would silently
+skip.
+
+Layers get the same treatment for visibility and lock. Both lists report
+what the store *actually changed* rather than how many were selected; the
+two differ whenever some items were already in the requested state, and
+the checkable number is the useful one.
+
+```
+BATCH HIDE applied to exactly the two selected layers, and not the third
+  ["hairFront:hidden","hairBack:hidden","legLeft:shown"]
+and said how many it affected: Hide layers: applied to 2 layers.
+```
+
+"All" respects the filter on purpose: with "hair" typed, All means all the
+hair, which is the whole reason for filtering before batching.
+
+### Search, on both lists
+
+A live case-insensitive substring match above each list. The bone list
+filters rows without restructuring the tree -- a matching child of a
+non-matching parent still shows, at its own depth, because typing a name
+means "take me to that bone", not "tell me its parent did not match". A
+filter matching nothing says so, rather than leaving an empty panel that
+reads as an empty project.
+
+### The last-saved indicator, and what it is careful about
+
+The Save/Load system already stamped `savedAt` on every record it wrote;
+what was missing was seeing it without opening a dialog. `saveclock.js` is
+a formatter and a clock, not a second source of truth -- every write path
+reports into it.
+
+Two details worth the words. Ages round **down**, because a save 59
+seconds old is not "1 min ago" and rounding up is the one direction that
+understates how long the work has been at risk. And an auto-save says
+"Auto-saved", not "Saved":
+
+```
+it starts, at launch, by saying nothing has been saved: Not saved yet
+an auto-save is reported AS an auto-save: Auto-saved just now
+SAVING updates it immediately: Saved just now
+```
+
+That distinction matters. The recovery slot being current is not the same
+as your named project being current, and a single word "Saved" over the
+recovery write would quietly imply it was.
+
+The indicator refreshes against the moment its **wording** would change
+rather than on a fixed tick -- every second under a minute, once a minute
+after that -- so an idle app is not waking up to rewrite the same string.
+
+### The top bar ran out of room, and had been hiding a bug
+
+Five buttons plus the wordmark plus "Saved 3 min ago" does not fit across
+390px. Measured: it overflowed by about 30px, clipped "Import" down to
+"mpor" and ran the clock off the right edge. The bar now wraps, so the
+clock drops to a second line exactly when there is no room and stays on
+the first line in the modes where Import is hidden.
+
+Wrapping then exposed something that had been latent: `.app` is a 100dvh
+flex column and the canvas below claims a fixed 48vh, so the top bar's
+default `flex-shrink: 1` let it be squeezed below its own content. While
+it was one row tall that was invisible. The moment it wrapped, the second
+row was clipped in half. `flex: 0 0 auto` is the fix, and the scrolling
+controls area gives up the space instead.
+
+```
+the last-saved indicator fits on screen: clock right edge 374 of 390px
+the wrapped top bar contains it without overlapping the canvas:
+  bar bottom 96, canvas top 96
+Import no longer squashed: Import reads "Import"
+```
+
+### Haptics, and why they are throttled
+
+Four moments: a pin landing, a bone snapping to the grid, the piercer tip
+crossing a barrier, and the recorder starting or stopping. All four are
+things the user is *aiming* at with their eye somewhere else, which is
+exactly when a tick is worth more than a message.
+
+8-14ms pulses -- past about 30ms a phone's motor stops reading as a tick
+and starts reading as an error buzz. Each pattern carries its own throttle
+window, and the windows are per-pattern so a barrier contact is never
+swallowed by a pin that fired a moment ago. The barrier one is rate-limited
+hardest because the tip can *lean* on a wall for as long as a finger holds
+it there; what is worth feeling is the crossing, so it fires on the
+transition into contact and stays quiet until the tip comes off again.
+
+The recorder gets the only double-pulse, because it is the one action here
+whose consequence outlives the gesture.
+
+### Long-press artwork to find its layer
+
+Finding a layer in a list of twenty by name means already knowing which
+name you want. Touching the artwork is the other direction. Topmost layer
+under the finger wins -- deliberately no disambiguation UI for overlaps,
+because a picker would cost more than scrolling the list did. It survives
+a filter that would have hidden the row it just selected, which would
+otherwise land the jump on nothing.
+
+### Brush-size presets
+
+Three tools have an adjustable brush and all three had the same friction:
+getting back to a size you use constantly means opening a menu or dragging
+a slider from wherever it happens to be. One renderer serves all three,
+because they differ only in range and in how a size reads -- squares for Px
+Pin and Pierce, screen pixels for weight painting -- and three copies would
+be three places for the behaviour to drift.
+
+Stored as ordinary settings with **no section**, which is exactly what
+keeps them off the Settings screen: the screen draws only entries whose
+section matches the open tab, so an entry belonging to no tab is never
+drawn. They are still real settings in every other respect -- same store,
+same load, same wipe -- because a second persistence mechanism for three
+arrays of numbers would be a second thing to keep in step for nothing.
+
+One star does both halves of the job: filled when the current size is
+already saved, hollow when it is not. Saving past the last slot drops the
+lowest rather than refusing, and the last remaining favourite cannot be
+removed, so the row is never empty and never needs clearing by hand before
+a new favourite can go in.
+
+```
+and it is STILL THERE after closing and reopening the app: [45,77,90]
+the three tools keep SEPARATE favourites, in their own units:
+  {"pxpin":[1,4,8],"pierce":[1,4,8],"weight":[45,77,90]}
+```
+
+Verified across 63 headless checks and 54 browser checks in the real app.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

@@ -13,7 +13,7 @@ import { sceneStore, SCENE_PRESETS } from './scene.js';
 import { view } from './view.js';
 import { initViewGestures } from './viewGestures.js';
 import { importFiles } from './importer.js';
-import { initGestures } from './gestures.js';
+import { initGestures, setLongPressPartHandler } from './gestures.js';
 import { initRigTool, beginPlaceBone, cancelPlacement, getRigStatus, subscribeRig } from './rigTool.js';
 import {
   initBindTool, setBrushRadius, setBrushStrength, getBrush,
@@ -27,13 +27,21 @@ import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
 import { serializeProject, applyProject } from './project.js';
 import * as storage from './storage.js';
-import { initAutoSave, setAutoSaveSource, autoSaveNow, setAutoSaveInterval } from './autosave.js';
+import {
+  initAutoSave, setAutoSaveSource, autoSaveNow, setAutoSaveInterval, onAutoSaveWritten,
+} from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initMeshTrim } from './meshtrim.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { initClayer, openClayer } from './clayer.js';
 import { initPCreate, openPCreate } from './pcreate.js';
+import { boneSelection, partSelection, matchesFilter } from './multiselect.js';
+import {
+  markSavedAt, markLoadedAt, saveClockLabel, msUntilLabelChanges, subscribeSaveClock,
+} from './saveclock.js';
+import { haptic } from './haptics.js';
+import { renderBrushPresets, PIXEL_FORMAT } from './brushpresets.js';
 import { initHome, startPetals, stopPetals } from './home.js';
 import { playEnter, transitionScreens } from './transitions.js';
 import { pierceOverlayEnabled, setPierceOverlay, pierceDentIssue, markPierceStale } from './pierce.js';
@@ -134,6 +142,35 @@ function cacheElements() {
   els.scenePanelChevron = document.getElementById('scenePanelChevron');
   els.scenePartsList = document.getElementById('scenePartsList');
   els.scenePartsCount = document.getElementById('scenePartsCount');
+  els.partFilterInput = document.getElementById('partFilterInput');
+  els.partFilterEmpty = document.getElementById('partFilterEmpty');
+  els.partSelectModeBtn = document.getElementById('partSelectModeBtn');
+  els.partBatchBar = document.getElementById('partBatchBar');
+  els.partBatchCount = document.getElementById('partBatchCount');
+  els.partBatchAllBtn = document.getElementById('partBatchAllBtn');
+  els.partBatchNoneBtn = document.getElementById('partBatchNoneBtn');
+  els.partBatchShowBtn = document.getElementById('partBatchShowBtn');
+  els.partBatchHideBtn = document.getElementById('partBatchHideBtn');
+  els.partBatchLockBtn = document.getElementById('partBatchLockBtn');
+  els.partBatchUnlockBtn = document.getElementById('partBatchUnlockBtn');
+  els.boneFilterInput = document.getElementById('boneFilterInput');
+  els.boneFilterEmpty = document.getElementById('boneFilterEmpty');
+  els.boneSelectModeBtn = document.getElementById('boneSelectModeBtn');
+  els.boneBatchBar = document.getElementById('boneBatchBar');
+  els.boneBatchCount = document.getElementById('boneBatchCount');
+  els.boneBatchAllBtn = document.getElementById('boneBatchAllBtn');
+  els.boneBatchNoneBtn = document.getElementById('boneBatchNoneBtn');
+  els.boneBatchRigidBtn = document.getElementById('boneBatchRigidBtn');
+  els.boneBatchPhysicsBtn = document.getElementById('boneBatchPhysicsBtn');
+  els.boneBatchPivotBtn = document.getElementById('boneBatchPivotBtn');
+  els.boneBatchStiffness = document.getElementById('boneBatchStiffness');
+  els.boneBatchStiffnessOut = document.getElementById('boneBatchStiffnessOut');
+  els.boneBatchDamping = document.getElementById('boneBatchDamping');
+  els.boneBatchDampingOut = document.getElementById('boneBatchDampingOut');
+  els.boneBatchGravity = document.getElementById('boneBatchGravity');
+  els.boneBatchGravityOut = document.getElementById('boneBatchGravityOut');
+  els.boneBatchApplyPhysicsBtn = document.getElementById('boneBatchApplyPhysicsBtn');
+  els.saveClock = document.getElementById('saveClock');
   els.selectionBar = document.getElementById('selectionBar');
   els.selectedPartName = document.getElementById('selectedPartName');
   els.toFrontBtn = document.getElementById('toFrontBtn');
@@ -228,6 +265,7 @@ function cacheElements() {
   els.weightEraseBtn = document.getElementById('weightEraseBtn');
   els.brushSlider = document.getElementById('brushSlider');
   els.brushValue = document.getElementById('brushValue');
+  els.weightBrushPresets = document.getElementById('weightBrushPresets');
   els.strengthSlider = document.getElementById('strengthSlider');
   els.strengthValue = document.getElementById('strengthValue');
   els.debugRotateField = document.getElementById('debugRotateField');
@@ -523,13 +561,29 @@ function handleBoneRename(event) {
 function renderBoneList() {
   els.boneList.replaceChildren();
 
-  for (const { bone, depth } of bonesStore.toTreeList()) {
+  const query = els.boneFilterInput ? els.boneFilterInput.value : '';
+  // The filter hides rows; it does NOT change the tree. A matching child
+  // of a non-matching parent still shows, at its own depth, because the
+  // point of typing a name is to reach that bone rather than to be told
+  // its parent was not what you typed.
+  const rows = bonesStore.toTreeList().filter(({ bone }) => matchesFilter(bone.name, query));
+  if (els.boneFilterEmpty) els.boneFilterEmpty.hidden = rows.length > 0 || !query.trim();
+
+  for (const { bone, depth } of rows) {
     const item = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'scene-part';
     button.style.paddingLeft = `${14 + depth * 18}px`;
     button.classList.toggle('is-selected', bone.id === bonesStore.selectedId);
+    button.classList.toggle('is-multi', boneSelection.active && boneSelection.has(bone.id));
+    button.dataset.boneId = bone.id;
+    if (boneSelection.active) {
+      const check = document.createElement('span');
+      check.className = 'scene-part__check';
+      check.textContent = boneSelection.has(bone.id) ? '[x]' : '[ ]';
+      button.appendChild(check);
+    }
 
     if (depth > 0) {
       const marker = document.createElement('span');
@@ -551,7 +605,18 @@ function renderBoneList() {
       button.appendChild(tag);
     }
     button.classList.toggle('is-hidden', !bonesStore.isVisible(bone));
-    button.addEventListener('click', () => bonesStore.select(bone.id));
+    // In selection mode a tap adds or removes this bone from the set and
+    // deliberately does NOT move the single selection: the editor panel
+    // below would otherwise jump to a different bone on every tick.
+    button.addEventListener('click', () => {
+      if (boneSelection.active) {
+        boneSelection.toggle(bone.id);
+        renderBoneList();
+        renderBoneBatchBar();
+        return;
+      }
+      bonesStore.select(bone.id);
+    });
 
     const row = document.createElement('div');
     row.className = 'list-row';
@@ -583,6 +648,8 @@ function renderRigChrome() {
 
   els.boneCount.textContent = String(bonesStore.bones.length);
   els.boneList.hidden = !skeletonPanelOpen;
+  boneSelection.prune(bonesStore.bones.map((bone) => bone.id));
+  renderBoneBatchBar();
   els.skeletonToggle.setAttribute('aria-expanded', String(skeletonPanelOpen));
   els.skeletonChevron.textContent = skeletonPanelOpen ? '▾' : '▴';
 
@@ -861,6 +928,22 @@ function handleDensityChange() {
 function handleBrushInput() {
   setBrushRadius(Number(els.brushSlider.value));
   els.brushValue.textContent = els.brushSlider.value;
+  renderWeightBrushPresets();
+}
+
+// The weight brush's favourites. Same row, same store and same star as Px
+// Pin's and Pierce's, reading in screen pixels rather than squares because
+// that is what this brush is measured in.
+function renderWeightBrushPresets() {
+  renderBrushPresets(els.weightBrushPresets, {
+    key: 'weightBrushPresets',
+    current: () => Number(els.brushSlider.value),
+    apply: (size) => {
+      els.brushSlider.value = String(size);
+      handleBrushInput();
+    },
+    format: PIXEL_FORMAT,
+  });
 }
 
 function handleStrengthInput() {
@@ -953,6 +1036,7 @@ function renderBindChrome() {
   els.bindRiggedOnlyToggle.hidden = bindListTab !== 'parts';
   els.bindRiggedOnlyToggle.setAttribute('aria-pressed', String(bindRiggedOnly));
   els.bindRiggedOnlyToggle.textContent = bindRiggedOnly ? 'Show: Rigged only' : 'Show: All layers';
+  renderWeightBrushPresets();
 
   const part = partsStore.selected;
   const bone = bonesStore.selected;
@@ -1034,11 +1118,16 @@ function handleExit() {
 function handleStart() {
   appState.startRecording();
   canvasEngine.onStartRecording();
+  // A double tick, unlike the other three: starting a take changes what
+  // the app is DOING, and the user's eye is on the character rather than
+  // on the button they just pressed.
+  haptic('record');
 }
 
 function handleStop() {
   appState.stopRecording();
   canvasEngine.onStopRecording();
+  haptic('record');
   openExportModal();
 }
 
@@ -1113,7 +1202,9 @@ function iconButton({ label, glyph, pressed = null, disabled = false, onClick })
 function renderPartsList() {
   els.scenePartsList.replaceChildren();
 
-  const ordered = partsStore.partsTopFirst;
+  const query = els.partFilterInput ? els.partFilterInput.value : '';
+  const ordered = partsStore.partsTopFirst.filter((part) => matchesFilter(part.name, query));
+  if (els.partFilterEmpty) els.partFilterEmpty.hidden = ordered.length > 0 || !query.trim();
   // A row that was open or mid-rename can't stay that way once its part
   // is gone (deleted, or a project/undo replaced the whole list).
   if (openPartMenuId && !ordered.some((part) => part.id === openPartMenuId)) openPartMenuId = null;
@@ -1136,6 +1227,14 @@ function renderPartsList() {
     button.className = 'scene-part';
     button.classList.toggle('is-selected', part.id === partsStore.selectedId);
     button.classList.toggle('is-hidden', !part.visible);
+    button.classList.toggle('is-multi', partSelection.active && partSelection.has(part.id));
+    button.dataset.partId = part.id;
+    if (partSelection.active) {
+      const check = document.createElement('span');
+      check.className = 'scene-part__check';
+      check.textContent = partSelection.has(part.id) ? '[x]' : '[ ]';
+      button.appendChild(check);
+    }
     button.appendChild(document.createTextNode(part.name));
     if (!part.visible || part.locked) {
       const tag = document.createElement('span');
@@ -1145,7 +1244,15 @@ function renderPartsList() {
         .join(', ')}`;
       button.appendChild(tag);
     }
-    button.addEventListener('click', () => partsStore.select(part.id));
+    button.addEventListener('click', () => {
+      if (partSelection.active) {
+        partSelection.toggle(part.id);
+        renderPartsList();
+        renderPartBatchBar();
+        return;
+      }
+      partsStore.select(part.id);
+    });
     row.appendChild(button);
 
     const isOpen = openPartMenuId === part.id;
@@ -1166,6 +1273,120 @@ function renderPartsList() {
     if (isOpen) item.appendChild(partRowAside(part, index, ordered.length));
     els.scenePartsList.appendChild(item);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Batch actions
+//
+// The whole promise of this feature is that batching is NOT linking. Every
+// action below calls a store method that loops the ordinary per-item setter,
+// so each bone or layer ends up holding its own copy of the value and stays
+// independently editable afterward. Nothing here creates a group, a shared
+// object or a reference between the items -- it saves taps, nothing more.
+//
+// Each action reports the number the store actually changed, not the number
+// selected. Those differ whenever some of the chosen items were already in
+// the requested state, and the honest number is the one the user can check
+// against what they see move.
+
+function renderPartBatchBar() {
+  if (!els.partBatchBar) return;
+  const on = partSelection.active;
+  els.partBatchBar.hidden = !on;
+  els.partSelectModeBtn.setAttribute('aria-pressed', String(on));
+  els.partSelectModeBtn.textContent = on ? 'Done' : 'Select';
+  if (!on) return;
+  const n = partSelection.size;
+  els.partBatchCount.textContent = n === 0
+    ? 'Tap layers to select them.'
+    : `${n} layer${n === 1 ? '' : 's'} selected`;
+  for (const btn of [els.partBatchShowBtn, els.partBatchHideBtn,
+    els.partBatchLockBtn, els.partBatchUnlockBtn]) {
+    btn.disabled = n === 0;
+  }
+}
+
+function runPartBatch(label, apply) {
+  const ids = partSelection.ids;
+  if (ids.length === 0) return;
+  let changed = 0;
+  history.run(label, () => { changed = apply(ids); });
+  renderPartsList();
+  renderPartBatchBar();
+  showToast(changed === 0
+    ? `No layer needed ${label.toLowerCase()}.`
+    : `${label}: applied to ${changed} layer${changed === 1 ? '' : 's'}.`);
+}
+
+function renderBoneBatchBar() {
+  if (!els.boneBatchBar) return;
+  const on = boneSelection.active;
+  els.boneBatchBar.hidden = !on;
+  els.boneSelectModeBtn.setAttribute('aria-pressed', String(on));
+  els.boneSelectModeBtn.textContent = on ? 'Done' : 'Select';
+  if (!on) return;
+  const n = boneSelection.size;
+  els.boneBatchCount.textContent = n === 0
+    ? 'Tap bones to select them.'
+    : `${n} bone${n === 1 ? '' : 's'} selected`;
+  for (const btn of [els.boneBatchRigidBtn, els.boneBatchPhysicsBtn, els.boneBatchPivotBtn,
+    els.boneBatchApplyPhysicsBtn]) {
+    btn.disabled = n === 0;
+  }
+  els.boneBatchStiffnessOut.textContent = els.boneBatchStiffness.value;
+  els.boneBatchDampingOut.textContent = els.boneBatchDamping.value;
+  els.boneBatchGravityOut.textContent = els.boneBatchGravity.value;
+}
+
+function runBoneBatch(label, apply) {
+  const ids = boneSelection.ids;
+  if (ids.length === 0) return;
+  let changed = 0;
+  history.run(label, () => { changed = apply(ids); });
+  renderBoneList();
+  renderBoneBatchBar();
+  renderRigChrome();
+  showToast(changed === 0
+    ? 'Every selected bone was already set that way.'
+    : `${label}: applied to ${changed} bone${changed === 1 ? '' : 's'}.`);
+}
+
+// All three physics parameters in one action, because they are tuned
+// together: a jiggle is a combination of stiffness, damping and gravity,
+// and applying one of the three to six hair bones while the other two
+// stay at whatever each bone happened to have is not "these bones now
+// share a feel", which is what the batch is for.
+function applyBoneBatchPhysics() {
+  const ids = boneSelection.ids;
+  if (ids.length === 0) return;
+  const stiffness = Number(els.boneBatchStiffness.value);
+  const damping = Number(els.boneBatchDamping.value);
+  const gravity = Number(els.boneBatchGravity.value);
+  let changed = 0;
+  history.run('Batch physics', () => {
+    changed = bonesStore.batchSetPhysicsParam(ids, 'stiffness', stiffness);
+    bonesStore.batchSetPhysicsParam(ids, 'damping', damping);
+    bonesStore.batchSetPhysicsParam(ids, 'gravityInfluence', gravity);
+  });
+  renderBoneList();
+  renderBoneBatchBar();
+  renderRigChrome();
+  showToast(`Applied to ${changed} bone${changed === 1 ? '' : 's'}.`);
+}
+
+// ---------------------------------------------------------------------------
+// Last saved
+
+let saveClockTimer = null;
+
+function renderSaveClock() {
+  if (!els.saveClock) return;
+  els.saveClock.textContent = saveClockLabel();
+  clearTimeout(saveClockTimer);
+  // Re-armed against the moment the WORDING would change rather than on a
+  // fixed tick: under a minute that is every second, past it only once a
+  // minute, so an idle app is not waking up to rewrite the same string.
+  saveClockTimer = setTimeout(renderSaveClock, msUntilLabelChanges());
 }
 
 // The panel a row's "⋮" opens: Rename plus the four controls it replaced,
@@ -2203,6 +2424,11 @@ function renderChrome() {
   els.scenePanel.hidden = !showPanel;
   els.scenePartsCount.textContent = String(partsStore.parts.length);
   els.scenePartsList.hidden = !scenePanelOpen;
+  // Deleting a layer while it was multi-selected would otherwise leave its
+  // id in the set, and the count would promise more than a batch could
+  // reach.
+  partSelection.prune(partsStore.parts.map((part) => part.id));
+  renderPartBatchBar();
   els.scenePanelToggle.setAttribute('aria-expanded', String(scenePanelOpen));
   els.scenePanelChevron.textContent = scenePanelOpen ? '▾' : '▴';
 
@@ -2291,6 +2517,7 @@ async function handleConfirmSaveProject() {
     currentProjectName = name;
     setAutoSaveSource(name);
     history.markSaved();
+    markSavedAt(Date.now(), 'manual');
     await storage.clearRecovery(); // the manual save supersedes the recovery slot
     closeSaveProjectModal();
     showToast(`Saved "${name}".`);
@@ -2361,6 +2588,10 @@ function adoptProject(data, name) {
   history.reset();
   currentProjectName = name;
   setAutoSaveSource(name);
+  // A load is the other moment the on-disk copy and what is on screen
+  // agree, so the indicator reports it rather than going blank until the
+  // first save of the session.
+  markLoadedAt();
   view.fit();
 }
 
@@ -2916,6 +3147,76 @@ function bindEvents() {
     if (els.poseLayerRow.contains(event.target)) return;
     closePoseLayerMenu();
   });
+  // ---- List filters ------------------------------------------------------
+  // Re-rendering on every keystroke is what makes the filter live. Both
+  // lists are small (tens of rows) and already re-render on every store
+  // change, so there is nothing to debounce away.
+  els.partFilterInput.addEventListener('input', () => renderPartsList());
+  els.boneFilterInput.addEventListener('input', () => renderBoneList());
+
+  // ---- Multi-select ------------------------------------------------------
+  els.partSelectModeBtn.addEventListener('click', () => {
+    partSelection.setActive(!partSelection.active);
+    renderPartsList();
+    renderPartBatchBar();
+  });
+  els.boneSelectModeBtn.addEventListener('click', () => {
+    boneSelection.setActive(!boneSelection.active);
+    renderBoneList();
+    renderBoneBatchBar();
+  });
+
+  // "All" respects the filter on purpose: with "hair" typed, All means all
+  // the hair, which is the whole reason for filtering before batching.
+  els.partBatchAllBtn.addEventListener('click', () => {
+    const query = els.partFilterInput.value;
+    partSelection.replace(partsStore.parts
+      .filter((part) => matchesFilter(part.name, query))
+      .map((part) => part.id));
+    renderPartsList();
+    renderPartBatchBar();
+  });
+  els.partBatchNoneBtn.addEventListener('click', () => {
+    partSelection.clear();
+    renderPartsList();
+    renderPartBatchBar();
+  });
+  els.boneBatchAllBtn.addEventListener('click', () => {
+    const query = els.boneFilterInput.value;
+    boneSelection.replace(bonesStore.bones
+      .filter((bone) => matchesFilter(bone.name, query))
+      .map((bone) => bone.id));
+    renderBoneList();
+    renderBoneBatchBar();
+  });
+  els.boneBatchNoneBtn.addEventListener('click', () => {
+    boneSelection.clear();
+    renderBoneList();
+    renderBoneBatchBar();
+  });
+
+  // ---- Batch: layers -----------------------------------------------------
+  els.partBatchShowBtn.addEventListener('click', () =>
+    runPartBatch('Show layers', (ids) => partsStore.batchSetVisible(ids, true)));
+  els.partBatchHideBtn.addEventListener('click', () =>
+    runPartBatch('Hide layers', (ids) => partsStore.batchSetVisible(ids, false)));
+  els.partBatchLockBtn.addEventListener('click', () =>
+    runPartBatch('Lock layers', (ids) => partsStore.batchSetLocked(ids, true)));
+  els.partBatchUnlockBtn.addEventListener('click', () =>
+    runPartBatch('Unlock layers', (ids) => partsStore.batchSetLocked(ids, false)));
+
+  // ---- Batch: bones ------------------------------------------------------
+  els.boneBatchRigidBtn.addEventListener('click', () =>
+    runBoneBatch('Rigid', (ids) => bonesStore.batchSetJointType(ids, JointType.RIGID)));
+  els.boneBatchPhysicsBtn.addEventListener('click', () =>
+    runBoneBatch('Physics', (ids) => bonesStore.batchSetJointType(ids, JointType.PHYSICS)));
+  els.boneBatchPivotBtn.addEventListener('click', () =>
+    runBoneBatch('Pivot', (ids) => bonesStore.batchSetJointType(ids, JointType.PIVOT)));
+  for (const slider of [els.boneBatchStiffness, els.boneBatchDamping, els.boneBatchGravity]) {
+    slider.addEventListener('input', renderBoneBatchBar);
+  }
+  els.boneBatchApplyPhysicsBtn.addEventListener('click', applyBoneBatchPhysics);
+
   els.poseTargetBodyBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.BODY); renderChrome(); });
   els.poseTargetPiercerBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.PIERCER); renderChrome(); });
 
@@ -2980,6 +3281,27 @@ export function initUI() {
   // First, so its pointer bookkeeping runs before any tool sees the event.
   initViewGestures(els.canvas);
   initGestures(els.canvas);
+  // Long-pressing artwork jumps the Scene Parts list to that layer. The
+  // gesture layer has already made it the selection; this is the half that
+  // brings the list to it, which is the point of the shortcut -- the row
+  // can easily be below the fold in a project with twenty layers.
+  setLongPressPartHandler((partId) => {
+    scenePanelOpen = true;
+    // Selecting by touch has to survive a filter that hides the row it
+    // just selected, or the jump lands on nothing.
+    if (els.partFilterInput && els.partFilterInput.value
+      && !matchesFilter(partsStore.parts.find((p) => p.id === partId)?.name, els.partFilterInput.value)) {
+      els.partFilterInput.value = '';
+    }
+    renderChrome();
+    requestAnimationFrame(() => {
+      const row = els.scenePartsList.querySelector(`[data-part-id="${partId}"]`);
+      if (row) row.scrollIntoView({ block: 'nearest' });
+    });
+    haptic('snap');
+    const part = partsStore.parts.find((p) => p.id === partId);
+    if (part) showToast(`Selected "${part.name}".`);
+  });
   initRigTool(els.canvas);
   initBindTool(els.canvas);
   initPoseTool(els.canvas);
@@ -3074,6 +3396,12 @@ export function initUI() {
   initInfoButtons();
   restorePierceOverlay();
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
+  // The recovery slot is a save too, and the indicator has to say so --
+  // "Auto-saved 20s ago" is true and useful, and distinguishable from a
+  // named project being current.
+  onAutoSaveWritten(() => markSavedAt(Date.now(), 'auto'));
+  subscribeSaveClock(renderSaveClock);
+  renderSaveClock();
   offerRecovery();
   loadRestorePointFromStorage();
 }

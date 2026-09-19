@@ -205,7 +205,7 @@ function rotatePoint(x, y, angle) {
   return { x: x * cos - y * sin, y: x * sin + y * cos };
 }
 
-class BonesStore {
+export class BonesStore {
   constructor() {
     this._bones = [];
     this._selectedId = null;
@@ -581,6 +581,50 @@ class BonesStore {
     if (!bone) return;
     bone[key] = value;
     this._emit('structure');
+  }
+
+  // ---- Batch edits ------------------------------------------------------
+  //
+  // One value onto several bones, by writing it onto EACH BONE'S OWN FIELD
+  // several times. No shared object, no linked group, no reference between
+  // them afterward: six hair-strand bones batched to the same stiffness
+  // each hold their own copy of that number, and moving one of them
+  // afterward moves only that one. Batching is a way of saving taps, not a
+  // relationship between bones.
+  //
+  // PHYSICS_RANGES is the same clamp the single-bone slider obeys, applied
+  // here too -- a batch must not be a way to write a value the UI would
+  // have refused.
+  batchSetPhysicsParam(ids, key, value) {
+    if (!PHYSICS_RANGES[key]) return 0;
+    const { min, max } = PHYSICS_RANGES[key];
+    const clamped = Math.min(max, Math.max(min, Number(value)));
+    if (!Number.isFinite(clamped)) return 0;
+    let changed = 0;
+    for (const id of ids) {
+      const bone = this.byId(id);
+      if (!bone) continue;
+      bone[key] = clamped;
+      changed++;
+    }
+    if (changed) this._emit('structure');
+    return changed;
+  }
+
+  // Joint type goes through setJointType per bone rather than assigning the
+  // field, because changing it has to preserve each bone's world rotation
+  // and re-seed its spring -- work that is per-bone by nature and would be
+  // silently skipped by a bulk field write.
+  batchSetJointType(ids, type) {
+    if (!JOINT_TYPES.has(type)) return 0;
+    let changed = 0;
+    for (const id of ids) {
+      const bone = this.byId(id);
+      if (!bone || bone.jointType === type) continue;
+      this.setJointType(id, type);
+      changed++;
+    }
+    return changed;
   }
 
   get hasPhysicsBones() {

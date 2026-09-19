@@ -28,10 +28,19 @@ let debounce = null;
 let currentName = null; // the named project this session came from, if any
 let onError = () => {};
 
+// Told after every successful recovery write, so the last-saved indicator
+// can report an auto-save without this module knowing the indicator exists.
+let onWritten = () => {};
+
+export function onAutoSaveWritten(listener) {
+  onWritten = listener || (() => {});
+}
+
 async function write(reason) {
   if (!history.isDirty) return false;
   try {
     await saveRecovery(serializeProject({ copyPixels: false }), currentName);
+    onWritten(reason);
     return true;
   } catch (error) {
     console.warn(`Auto-save (${reason}) failed`, error);

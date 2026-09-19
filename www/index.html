@@ -41,6 +41,7 @@
           <span class="wordmark-oo__loop wordmark-oo__loop--large"></span>
         </span><span aria-hidden="true">mni2D</span>
       </div>
+      <div id="saveClock" class="save-clock" role="status" aria-live="polite" title="When this project was last written to disk">Not saved yet</div>
       <div id="modeLabel" class="mode-label" hidden>
         <span class="mode-label__dot" aria-hidden="true"></span>
         <span id="modeLabelText">Animate Mode</span>
@@ -113,7 +114,31 @@
           <span id="scenePanelChevron" class="scene-panel__chevron" aria-hidden="true">&#9662;</span>
         </button>
 
+        <div class="list-tools">
+          <input id="partFilterInput" class="list-tools__search" type="search"
+            placeholder="Filter layers…" aria-label="Filter layers by name" />
+          <button id="partSelectModeBtn" class="btn btn--sm" type="button" aria-pressed="false">Select</button>
+        </div>
+
+        <!-- Shown only while the layer list is in selection mode. Batch
+             actions write the same value onto each chosen layer's OWN
+             fields; nothing is linked afterward. -->
+        <div id="partBatchBar" class="batch-bar" hidden>
+          <p id="partBatchCount" class="batch-bar__count" role="status"></p>
+          <div class="batch-bar__row">
+            <button id="partBatchAllBtn" class="btn btn--sm" type="button">All</button>
+            <button id="partBatchNoneBtn" class="btn btn--sm" type="button">None</button>
+          </div>
+          <div class="batch-bar__row">
+            <button id="partBatchShowBtn" class="btn btn--sm" type="button">Show</button>
+            <button id="partBatchHideBtn" class="btn btn--sm" type="button">Hide</button>
+            <button id="partBatchUnlockBtn" class="btn btn--sm" type="button">Unlock</button>
+            <button id="partBatchLockBtn" class="btn btn--sm" type="button">Lock</button>
+          </div>
+        </div>
+
         <ul id="scenePartsList" class="scene-parts"></ul>
+        <p id="partFilterEmpty" class="list-tools__empty" hidden>No layer matches that name.</p>
       </div>
 
       <p id="rigHint" class="rig-hint" hidden></p>
@@ -180,7 +205,53 @@
           <span id="skeletonChevron" class="scene-panel__chevron" aria-hidden="true">&#9662;</span>
         </button>
 
+        <div class="list-tools">
+          <input id="boneFilterInput" class="list-tools__search" type="search"
+            placeholder="Filter bones…" aria-label="Filter bones by name" />
+          <button id="boneSelectModeBtn" class="btn btn--sm" type="button" aria-pressed="false">Select</button>
+        </div>
+
+        <!-- Shown only while the bone list is in selection mode. Every
+             batch action here writes to each chosen bone's own fields --
+             six hair bones given one stiffness each keep their own copy
+             of it and stay independently editable. -->
+        <div id="boneBatchBar" class="batch-bar" hidden>
+          <p id="boneBatchCount" class="batch-bar__count" role="status"></p>
+          <div class="batch-bar__row">
+            <button id="boneBatchAllBtn" class="btn btn--sm" type="button">All</button>
+            <button id="boneBatchNoneBtn" class="btn btn--sm" type="button">None</button>
+          </div>
+
+          <p class="batch-bar__label">Relationship</p>
+          <div class="batch-bar__row">
+            <button id="boneBatchRigidBtn" class="btn btn--sm" type="button">Rigid</button>
+            <button id="boneBatchPhysicsBtn" class="btn btn--sm" type="button">Physics</button>
+            <button id="boneBatchPivotBtn" class="btn btn--sm" type="button">Pivot</button>
+          </div>
+
+          <p class="batch-bar__label">Physics parameters</p>
+          <label class="batch-bar__field">
+            <span>Stiffness</span>
+            <input id="boneBatchStiffness" class="slider" type="range" min="10" max="600" step="5" value="180" />
+            <output id="boneBatchStiffnessOut">180</output>
+          </label>
+          <label class="batch-bar__field">
+            <span>Damping</span>
+            <input id="boneBatchDamping" class="slider" type="range" min="0.5" max="40" step="0.5" value="8" />
+            <output id="boneBatchDampingOut">8</output>
+          </label>
+          <label class="batch-bar__field">
+            <span>Gravity</span>
+            <input id="boneBatchGravity" class="slider" type="range" min="0" max="60" step="1" value="0" />
+            <output id="boneBatchGravityOut">0</output>
+          </label>
+          <button id="boneBatchApplyPhysicsBtn" class="btn btn--sm btn--flourish" type="button">
+            Apply physics to selected
+          </button>
+        </div>
+
         <ul id="boneList" class="scene-parts"></ul>
+        <p id="boneFilterEmpty" class="list-tools__empty" hidden>No bone matches that name.</p>
       </div>
 
       <div id="rigControls" class="control-row" hidden>
@@ -221,6 +292,7 @@
             <input id="strengthSlider" class="slider" type="range" min="0.05" max="1" step="0.05" />
           </label>
         </div>
+        <div id="weightBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
 
         <label id="debugRotateField" class="slider-field slider-field--wide" hidden>
           <span>Debug: rotate <b id="debugBoneName">—</b> <b id="debugRotateValue">0°</b></span>
@@ -634,6 +706,7 @@
           <button id="pxpinBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pxpinBrushMenu">1 × 1 ⌄</button>
         </div>
         <div id="pxpinBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <div id="pxpinBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
         <label class="slider-field slider-field--wide">
           <span>Above opacity <b id="pxpinAboveOpacityValue">100%</b></span>
           <input id="pxpinAboveOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
@@ -671,6 +744,7 @@
           <button id="pierceBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pierceBrushMenu">1 × 1 ⌄</button>
         </div>
         <div id="pierceBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <div id="pierceBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
         <p id="pierceTargetHint" class="joint-hint" hidden></p>
         <label class="slider-field slider-field--wide">
           <span>Piercer opacity <b id="piercePiercerOpacityValue">100%</b></span>

@@ -738,6 +738,43 @@ class PartsStore {
     this._emit('structure');
   }
 
+  // ---- Batch edits ------------------------------------------------------
+  //
+  // Applying one value to several layers at once, by CALLING THE SAME
+  // PER-LAYER SETTER several times. That is the whole implementation, and
+  // it is deliberate: there is no shared object, no linked group and no
+  // reference between the layers afterward. Each one ends up holding its
+  // own copy of the value, editable on its own, exactly as if the user had
+  // set it on each layer by hand.
+  //
+  // Returns how many layers actually changed, so the confirmation can say
+  // a number the user can check rather than repeating what was asked for.
+  // A layer already in the requested state is not counted, because it was
+  // not affected.
+  batchSetVisible(ids, visible) {
+    let changed = 0;
+    for (const id of ids) {
+      const part = this._parts.find((candidate) => candidate.id === id);
+      if (!part || part.visible === visible) continue;
+      part.visible = visible;
+      changed++;
+    }
+    if (changed) this._emit('structure');
+    return changed;
+  }
+
+  batchSetLocked(ids, locked) {
+    let changed = 0;
+    for (const id of ids) {
+      const part = this._parts.find((candidate) => candidate.id === id);
+      if (!part || part.locked === locked) continue;
+      part.locked = locked;
+      changed++;
+    }
+    if (changed) this._emit('structure');
+    return changed;
+  }
+
   // Replaces the whole scene at once -- used by project load and by undo,
   // which both rebuild parts from a serialized snapshot.
   replaceAll(parts, selectedId = null) {

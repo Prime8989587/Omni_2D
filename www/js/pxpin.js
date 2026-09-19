@@ -28,6 +28,8 @@ import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 import { getSetting } from './settings.js';
+import { haptic } from './haptics.js';
+import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
 
 const ACCENT = '#FF2E93';
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
@@ -43,7 +45,7 @@ function cacheElements() {
     'pxpinOpenBtn', 'pxpinPickerModal', 'pxpinAboveSelect', 'pxpinBelowSelect',
     'pxpinStartBtn', 'pxpinCancelBtn', 'pxpinModal', 'pxpinAboveName',
     'pxpinStatus', 'pxpinDoneBtn', 'pxpinCanvas', 'pxpinToolPinBtn',
-    'pxpinToolEraseBtn', 'pxpinBrushBtn', 'pxpinBrushMenu', 'pxpinAboveOpacity',
+    'pxpinToolEraseBtn', 'pxpinBrushBtn', 'pxpinBrushMenu', 'pxpinBrushPresets', 'pxpinAboveOpacity',
     'pxpinBelowOpacity', 'pxpinAboveOpacityValue', 'pxpinBelowOpacityValue',
   ]) {
     els[id] = document.getElementById(id);
@@ -299,6 +301,13 @@ function renderTools() {
     });
     els.pxpinBrushMenu.appendChild(button);
   }
+
+  renderBrushPresets(els.pxpinBrushPresets, {
+    key: 'pxPinBrushPresets',
+    current: () => session.brush,
+    apply: (size) => { session.brush = size; session.brushMenuOpen = false; renderTools(); },
+    format: SQUARE_FORMAT,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +371,10 @@ function stamp(texels) {
 
   for (const index of indices) if (!stroke.touched.has(index)) stroke.touched.set(index, !pinning);
   partsStore.setPins(above.id, [...indices], pinning);
+  // Confirmation that the pin landed on the texel that was aimed at. The
+  // eye is on the artwork here, not on a counter, and haptics.js throttles
+  // this so a stroke across many texels ticks rather than buzzing.
+  haptic(pinning ? 'pin' : 'snap');
   stroke.changed = true;
 }
 

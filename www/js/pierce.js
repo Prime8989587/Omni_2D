@@ -97,6 +97,7 @@ import { pierceStateFor, peekPierceState } from './pierceState.js';
 import {
   dentTriangleAt, dentCutMask, dentCutArea, writeBunch, resetDentCache,
 } from './dent.js';
+import { haptic } from './haptics.js';
 
 export { pierceOffsets, resetPierceState } from './pierceState.js';
 
@@ -256,6 +257,9 @@ function sweepContain(from, to, walls) {
 // disengaged piercer is not being contained by anything, and keeping a
 // stale point would teleport it on re-entry.
 const containedTips = new Map();
+// Whether each piercer/pierced pair's tip was against a barrier last frame,
+// so the haptic marks the crossing rather than repeating while it leans.
+const wallContact = new Map();
 
 // WHOSE MOVEMENT COUNTS
 //
@@ -593,6 +597,18 @@ export function contactOf(piercer, pierced, transforms) {
     if (ahead > 0) {
       held = { x: held.x - axis.x * ahead, y: held.y - axis.y * ahead };
     }
+
+    // A BARRIER CROSSING, felt once per crossing.
+    //
+    // "Contained" means the sweep was stopped by a painted wall: the tip
+    // tried to go somewhere the barrier does not allow. What is worth
+    // feeling is the CROSSING -- the frame the tip first meets the wall --
+    // not the leaning, which can go on for as long as a finger holds it
+    // there. So this fires on the transition into contact and stays quiet
+    // until the tip has come off the wall again.
+    const blocked = Math.hypot(held.x - target.x, held.y - target.y) > 0.5;
+    if (blocked && !wallContact.get(pair)) haptic('barrier');
+    wallContact.set(pair, blocked);
 
     contained = { x: held.x - leadX, y: held.y - leadY };
     containedTips.set(pair, held);

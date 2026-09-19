@@ -26,6 +26,48 @@ import { history } from './history.js';
 const pointers = new Map();
 let gesture = null;
 
+// ---- Long-press to jump to a layer in the list ----------------------------
+//
+// Finding a layer in a list of twenty by name means already knowing which
+// name you are after. Touching the artwork is the other direction: point at
+// the thing on screen and have the list come to it.
+//
+// Deliberately forgiving. The topmost layer under the finger wins -- no
+// disambiguation UI for overlapping layers, because the shortcut is for
+// "which one is this?" and a picker would cost more than scrolling the
+// list did. The press also does not cancel the drag it may become: it
+// fires, and if the finger then moves, the drag carries on from there.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
+let longPress = null;
+let onLongPressPart = null;
+
+// ui.js registers here rather than this module reaching into the DOM: a
+// gesture layer has no business knowing a Scene Parts list exists.
+export function setLongPressPartHandler(handler) {
+  onLongPressPart = handler;
+}
+
+function cancelLongPress() {
+  if (!longPress) return;
+  clearTimeout(longPress.timer);
+  longPress = null;
+}
+
+function armLongPress(screenPoint, scenePoint) {
+  cancelLongPress();
+  const part = partsStore.hitTest(scenePoint.x, scenePoint.y, atDrawnPosition);
+  if (!part) return; // empty grid has no layer to jump to
+  longPress = {
+    origin: screenPoint,
+    timer: setTimeout(() => {
+      longPress = null;
+      partsStore.select(part.id);
+      if (onLongPressPart) onLongPressPart(part.id);
+    }, LONG_PRESS_MS),
+  };
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -154,6 +196,7 @@ export function initGestures(canvasEl) {
         ? selected
         : partsStore.hitTest(scenePoint.x, scenePoint.y, atDrawnPosition);
       partsStore.select(hit ? hit.id : null);
+      armLongPress(screenPoint, scenePoint);
       // A locked layer can be selected and inspected but not moved, so the
       // touch drives the camera instead of the artwork.
       if (hit && !hit.locked) {
@@ -166,6 +209,7 @@ export function initGestures(canvasEl) {
     }
 
     if (pointers.size === 2) {
+      cancelLongPress(); // two fingers is a camera gesture, not a hold
       // A second finger joins whatever the first one started: a part
       // gesture becomes a part transform, a camera gesture becomes a pinch.
       const onPart = gesture && (gesture.type === 'drag' || gesture.type === 'transform');
@@ -187,6 +231,14 @@ export function initGestures(canvasEl) {
     const previous = pointers.get(event.pointerId);
     const current = pointFromEvent(canvasEl, event);
     pointers.set(event.pointerId, current);
+
+    // A finger that travels was aiming to drag, not to hold. The slop is
+    // what lets a real thumb tremble through a half-second press without
+    // losing it.
+    if (longPress && Math.hypot(current.x - longPress.origin.x, current.y - longPress.origin.y)
+      > LONG_PRESS_SLOP_PX) {
+      cancelLongPress();
+    }
     if (!gesture) return;
 
     if (gesture.type === 'drag' && pointers.size === 1) {
@@ -246,6 +298,7 @@ export function initGestures(canvasEl) {
 
   const endPointer = (event) => {
     if (!pointers.delete(event.pointerId)) return;
+    cancelLongPress();
 
     if (gesture && gesture.type === 'pinchView' && pointers.size < 2) {
       // Anchored on the fingers, for the reason spelled out in view.js:
