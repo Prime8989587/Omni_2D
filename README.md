@@ -5876,6 +5876,83 @@ One existing check had to be re-pointed rather than kept: it asserted that the
 bone's *head* moves, which is the detachment it was meant to be testing
 against. It now asserts the tail swings and the head does not.
 
+## The rotation shipped, then rotated itself on the very first real pinch
+
+Within an hour of the previous round shipping, a screenshot came back: the
+whole view stuck at roughly a 45-degree diamond, from what was meant as an
+ordinary pinch to zoom. The screenshot alone told most of the story --
+`ctx.fillRect` paints the canvas's own black backdrop *before* the camera's
+rotation is applied, so a rotated rectangular checkerboard sitting inside an
+unrotated black rectangle is unambiguously the app's own camera rotation
+engaging, not a native OS gesture or a rendering artifact.
+
+The previous round's own verification had exercised rotation and found it
+exact -- round-trip error 0px, the held point drifting 0.45px. All of that
+was true, and none of it caught this, because the synthetic pinch driving it
+was **mathematically perfect**: two points diametrically opposed, spreading
+along one shared radial line, with zero tangential motion by construction.
+A real hand cannot do that. Two independently controlled fingers carry their
+own tremor, and a wrist spreading them apart naturally arcs a little as it
+does -- and that arc is *correlated* with the zoom motion, not the zero-mean
+noise a longer test would average away.
+
+Reproducing it meant building a pinch that could actually lie the way a real
+hand does: two fingers, each perturbed by a few pixels of independent
+jitter, tracing a gentle *quadratic* arc (a slow, accelerating wrist pivot,
+not a deliberate circular twist) while spreading through an ordinary 5x
+zoom range.
+
+```
+rotation: 0.0deg -> 24.6deg   (zoom now 2.50)
+FALSE ROTATION TRIGGERED by an intended zoom-only gesture
+```
+
+24.6 degrees, from nothing that was ever meant as a twist -- and a longer or
+looser real zoom would carry it further, which is consistent with the ~45
+degrees in the screenshot.
+
+Raising the existing 8-degree dead zone would only have bought a little
+room before the next slow zoom crossed it again, because the actual defect
+was in what the dead zone was measuring: total accumulated angle, with no
+regard for whether the fingers were also moving apart. That conflates two
+gestures that are supposed to be different inputs. A pinch-to-zoom moves the
+fingers a *long way* apart or together; a deliberate twist holds them
+*roughly the same distance* apart and turns. Span, not angle, is what tells
+the two apart.
+
+So the two gestures now get a proper mode lock. Once a gesture's span has
+moved far enough (in log space, so 1.4x in and 1.4x out count the same)
+from where the gesture started, that gesture is locked to "zoom" and can
+never engage rotation afterward, however much incidental angle keeps piling
+up -- because that accumulation is now a known quantity: correlated wrist
+noise riding along with an intentional zoom, not intent of its own.
+
+```js
+if (!rotationLocked
+  && Math.abs(Math.log(currentDistance / pinchStartDistance)) > ZOOM_LOCK_LOG_RATIO) {
+  rotationLocked = true;
+}
+```
+
+Re-run against the exact scenario that failed, plus a longer and noisier
+one, plus the case that has to keep working -- a genuine hold-the-span-
+steady twist:
+
+```
+CASE A (big noisy zoom, 20px -> 200px span, up to 34deg of wrist arc):
+  rotation stayed at 0.00deg (PASS)
+CASE B (deliberate twist, span held roughly steady, 40deg sweep):
+  rotation = 38.9deg (PASS - engaged)
+```
+
+Same fix, same reasoning, in PCreate's own separate camera. Both noise
+scenarios are now permanent checks in the regression suite -- with the
+previous round's mathematically-perfect synthetic pinch kept alongside them
+rather than replaced, since a clean, deliberate twist still has to engage
+reliably too, and now both are proven: **31/31**, including the two new
+noisy-gesture checks that a perfectly radial synthetic pinch could never
+have exercised.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

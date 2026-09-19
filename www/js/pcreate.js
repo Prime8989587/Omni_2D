@@ -689,6 +689,15 @@ function sizeCanvas() {
 // context is turned once per frame so everything drawn goes round together.
 const ROTATE_DEAD_ZONE = 0.14; // ~8 degrees, so ordinary hand roll is ignored
 const ROTATE_MIN_SPAN_PX = 40; // two close fingers give a useless angle
+// See view.js's own ZOOM_LOCK_LOG_RATIO for why this exists: a real
+// pinch-to-zoom's span changes by a lot while the fingers naturally arc a
+// little as the wrist spreads them -- correlated noise, not jitter, so it
+// does not average out and can carry an ordinary zoom's angle right past
+// the dead zone. Once a gesture's span has moved this far (log-scaled, so
+// zooming in or out count the same) from where it started, it reads as an
+// intentional zoom and can never engage rotation, however much angle
+// keeps piling up.
+const ZOOM_LOCK_LOG_RATIO = Math.log(1.4);
 
 function rotateAbout(x, y, angle) {
   const cos = Math.cos(angle);
@@ -1133,6 +1142,7 @@ function onPointerDown(event) {
       held: texelPointAt(mid),
       twist: 0,
       twisting: false,
+      rotationLocked: false,
     };
   }
 }
@@ -1155,8 +1165,14 @@ function onPointerMove(event) {
     // The twist, once the gesture has clearly asked for one rather than
     // simply rolled a little while spreading.
     if (distance >= ROTATE_MIN_SPAN_PX && pinch.distance >= ROTATE_MIN_SPAN_PX) {
+      if (!pinch.twisting
+        && Math.abs(Math.log(distance / pinch.distance)) > ZOOM_LOCK_LOG_RATIO) {
+        pinch.rotationLocked = true;
+      }
       pinch.twist = shortestAngle(Math.atan2(b.y - a.y, b.x - a.x) - pinch.angle);
-      if (!pinch.twisting && Math.abs(pinch.twist) >= ROTATE_DEAD_ZONE) pinch.twisting = true;
+      if (!pinch.rotationLocked && !pinch.twisting && Math.abs(pinch.twist) >= ROTATE_DEAD_ZONE) {
+        pinch.twisting = true;
+      }
       if (pinch.twisting) session.cam.rotation = shortestAngle(pinch.rotation + pinch.twist);
     }
 

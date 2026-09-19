@@ -39,8 +39,29 @@ let rotation = 0;
 const ROTATE_DEAD_ZONE = 0.14; // ~8 degrees
 // Two fingers close together give a wildly unstable angle between them.
 const ROTATE_MIN_SPAN_PX = 40;
+// A real pinch-to-zoom is not perfectly radial: a hand's wrist naturally
+// arcs a little as it spreads two fingers apart, and that arc is
+// CORRELATED with the zoom motion, not zero-mean jitter, so it does not
+// average out -- a synthetic test with realistic per-finger noise and a
+// gentle wrist arc measured 24.6 degrees of accumulated angle from a
+// single ordinary zoom gesture (5x span change), comfortably past the
+// dead zone above. Raising the dead zone only buys a little room before
+// the next longer or looser zoom crosses it too.
+//
+// The actual distinguishing fact between "zooming" and "twisting" is not
+// how much angle piled up, it is whether the SPAN changed meanwhile: a
+// zoom moves the fingers apart or together by a lot; a deliberate twist
+// holds them roughly the same distance apart and turns. So once a
+// gesture's span has moved this far (in log space, so 1.4x in and 1.4x
+// out count the same) from where the gesture started, it is locked as a
+// zoom and cannot engage rotation for the rest of that gesture, however
+// much angle keeps accumulating -- that accumulation is now known to be
+// wrist noise correlated with the zoom, not intent.
+const ZOOM_LOCK_LOG_RATIO = Math.log(1.4);
 let pinchTwist = 0;
 let twisting = false;
+let pinchStartDistance = 0;
+let rotationLocked = false;
 let viewWidth = 0;
 let viewHeight = 0;
 let dpr = 1;
@@ -201,6 +222,8 @@ export const view = {
   beginPinch() {
     pinchTwist = 0;
     twisting = false;
+    pinchStartDistance = 0;
+    rotationLocked = false;
   },
 
   // ONE FRAME OF A TWO-FINGER GESTURE, as a single statement of intent:
@@ -231,18 +254,29 @@ export const view = {
 
     // The twist, once the gesture has clearly asked for one.
     if (prevDistance >= ROTATE_MIN_SPAN_PX && currentDistance >= ROTATE_MIN_SPAN_PX) {
+      if (pinchStartDistance === 0) pinchStartDistance = prevDistance;
       const delta = shortestAngle(
         Math.atan2(currentB.y - currentA.y, currentB.x - currentA.x) -
         Math.atan2(prevB.y - prevA.y, prevB.x - prevA.x)
       );
-      pinchTwist += delta;
-      if (!twisting && Math.abs(pinchTwist) >= ROTATE_DEAD_ZONE) {
-        twisting = true;
-        // Apply everything accumulated so far, so engaging the rotation
-        // does not jump by the dead zone.
-        rotation = shortestAngle(rotation + pinchTwist);
-      } else if (twisting) {
+      if (twisting) {
         rotation = shortestAngle(rotation + delta);
+      } else {
+        // Still deciding what this gesture is. Once the span has moved
+        // far enough from where it started, it reads as a zoom, and
+        // rotation is locked off for the rest of the gesture regardless
+        // of how much angle piles up afterward.
+        if (!rotationLocked
+          && Math.abs(Math.log(currentDistance / pinchStartDistance)) > ZOOM_LOCK_LOG_RATIO) {
+          rotationLocked = true;
+        }
+        pinchTwist += delta;
+        if (!rotationLocked && Math.abs(pinchTwist) >= ROTATE_DEAD_ZONE) {
+          twisting = true;
+          // Apply everything accumulated so far, so engaging the rotation
+          // does not jump by the dead zone.
+          rotation = shortestAngle(rotation + pinchTwist);
+        }
       }
     }
 
