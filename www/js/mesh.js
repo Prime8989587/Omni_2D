@@ -124,6 +124,56 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+// ONE vertex's weights, by the inverse-distance rule autoWeightMesh uses.
+//
+// Lifted out so that a vertex added to an existing mesh later -- by the
+// Mesh Trim tool -- is weighted by exactly this calculation rather than by
+// a second copy of it that could drift away from this one.
+function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUENCES) {
+  const ranked = segments
+    .map((segment) => ({
+      id: segment.id,
+      distance: Math.max(
+        DISTANCE_EPSILON,
+        distanceToSegment(world.x, world.y, segment.head.x, segment.head.y, segment.tail.x, segment.tail.y)
+      ),
+    }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, maxInfluences);
+
+  const raw = ranked.map((entry) => ({ id: entry.id, weight: 1 / entry.distance ** FALLOFF_EXPONENT }));
+  const total = raw.reduce((sum, entry) => sum + entry.weight, 0);
+
+  const weights = {};
+  for (const entry of raw) {
+    const normalized = entry.weight / total;
+    if (normalized > WEIGHT_EPSILON) weights[entry.id] = normalized;
+  }
+  const sum = Object.values(weights).reduce((a, b) => a + b, 0);
+  if (sum > 0) for (const id of Object.keys(weights)) weights[id] /= sum;
+  return weights;
+}
+
+// The same rule, reachable from outside, for a vertex added to a mesh that
+// is already bound: it reads the bind pose the mesh was bound against, so
+// the new vertex agrees with the ones around it rather than with wherever
+// the bones happen to be swinging now.
+export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAULT_MAX_INFLUENCES) {
+  const segments = Object.entries(mesh.bindPose || {}).map(([id, pose]) => ({
+    id,
+    head: pose.head,
+    // A bind pose stores the head and the rotation, not the tail; the tail
+    // is that rotation carried out along the bone's own length. Length is
+    // not stored per bone here, so the segment degenerates to its head --
+    // which is exactly right for the distance rule, since a head-only
+    // segment measures straight-line distance to the joint.
+    tail: pose.head,
+    rotation: pose.rotation,
+  }));
+  if (segments.length === 0) return {};
+  return weightsFromSegments(localToWorld(part, restLocal), segments, maxInfluences);
+}
+
 // Auto-weighting: every vertex is bound to its nearest few bones by
 // inverse squared distance to the bone segment, normalized to sum to 1.
 // Capping the influence count keeps deformation crisp -- letting every
@@ -175,27 +225,7 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
   }
 
   for (const vertex of mesh.vertices) {
-    const world = localToWorld(part, vertex.restLocal);
-    const ranked = segments
-      .map((segment) => ({
-        id: segment.id,
-        distance: Math.max(
-          DISTANCE_EPSILON,
-          distanceToSegment(world.x, world.y, segment.head.x, segment.head.y, segment.tail.x, segment.tail.y)
-        ),
-      }))
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, maxInfluences);
-
-    const raw = ranked.map((entry) => ({ id: entry.id, weight: 1 / entry.distance ** FALLOFF_EXPONENT }));
-    const total = raw.reduce((sum, entry) => sum + entry.weight, 0);
-
-    vertex.weights = {};
-    for (const entry of raw) {
-      const normalized = entry.weight / total;
-      if (normalized > WEIGHT_EPSILON) vertex.weights[entry.id] = normalized;
-    }
-    normalizeWeights(vertex);
+    vertex.weights = weightsFromSegments(localToWorld(part, vertex.restLocal), segments, maxInfluences);
   }
 
   return mesh;

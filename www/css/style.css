@@ -876,6 +876,25 @@ button, input, select {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Mesh Trim reuses the .px-pin window wholesale -- same full-bleed shell,
+   same bar, same canvas, same footer. The only thing it needs of its own is
+   a touch-action rule on its canvas, because it handles its own pinch and
+   pan rather than letting the browser scroll the page underneath. */
+.mesh-trim #meshTrimCanvas {
+  touch-action: none;
+  image-rendering: pixelated;
+}
+
+/* The tool strip has four entries and one is two words, so it wraps rather
+   than squeezing the labels illegibly narrow on a phone. */
+.mesh-trim #meshTrimToolRow {
+  flex-wrap: wrap;
+}
+
+.mesh-trim #meshTrimToolRow .segmented__btn {
+  flex: 1 1 40%;
+}
+
 .px-pin__bar {
   display: flex;
   align-items: center;

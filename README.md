@@ -5569,6 +5569,148 @@ Plus: the menu lists every layer under its real name, a rename shows through
 on the next open, the Warning and Tip match the specified wording exactly,
 and switching between all of those happens without leaving Free Move.
 
+## Mesh Trim: editing the mesh itself, and cutting the artwork to a drawn edge
+
+Auto-weight builds a rectangular grid over the layer's bounding box. That is
+a fine starting mesh and a poor finishing one: a diagonal silhouette leaves
+half the grid sitting on transparent pixels, a narrow limb gets one column of
+vertices where it needs three, and a stray corner of artwork you never wanted
+drags the whole bounding box outward. **Mesh Trim** is the Bind-mode window
+that fixes both halves of that — the mesh, and the artwork it was built for.
+
+It opens from Bind mode's panel and is **off by default**. That matters more
+than it sounds: the wireframe is drawn *only* inside this window, on its own
+canvas, so Bind mode's view is left exactly as it was. There is no "just for a
+second" overlay leaking pink triangles over artwork you are trying to look at.
+Inside, pinch-zoom and pan work the way they do everywhere else in the app.
+
+### Add, Move, Remove — and why re-triangulation is the whole problem
+
+A vertex is not a dot you can drop anywhere. It belongs to triangles, and
+those triangles have to stay a valid tessellation afterwards: no holes, no
+zero-area slivers, no triangle referring to a vertex that no longer exists.
+`www/js/meshedit.js` is the pure module that guarantees this, with no DOM and
+no store access, so it can be proven headlessly (`tests/meshedit.mjs`, 48
+checks) before any of it is wired to a button.
+
+**Move** is the easy one. The topology never changes, so the vertex just gets
+new coordinates — snapped to whole texels, like every other coordinate in this
+app — and keeps its weights untouched.
+
+**Add** splits whatever the tap landed on. Inside a triangle, one triangle
+becomes three, fanning out from the new vertex. On an *edge*, that naive split
+would leave a T-junction: the triangle on the other side of the edge still
+runs straight past the new vertex, and the seam pulls open the moment the mesh
+deforms. So an edge tap splits *both* adjacent triangles, two each:
+
+```js
+if (onEdge) {
+  for (let k = 0; k < 3; k++) {
+    const p = t[k]; const q = t[(k + 1) % 3]; const r = t[(k + 2) % 3];
+    if ((p !== onEdge[0] || q !== onEdge[1]) && (p !== onEdge[1] || q !== onEdge[0])) continue;
+    kept.push(p, newIndex, r, newIndex, q, r);
+    break;
+  }
+}
+```
+
+The new vertex gets weights from the same inverse-distance rule auto-weighting
+uses. That rule was extracted out of `mesh.js` as `autoWeightOneVertex` rather
+than copied, so a hand-added vertex and an auto-weighted one can never drift
+apart as the rule is tuned.
+
+**Remove** is the hard one. Deleting a vertex deletes every triangle touching
+it, which leaves a polygonal hole — the one-ring. The far edges of those
+triangles are collected, ordered into a ring, and the hole is ear-clipped
+shut. The removed vertex's weights are redistributed across the ring by
+inverse distance, so the influence it carried is not simply lost. Then every
+triangle index above the removed one slides down, because an index list with a
+stale reference in it is a crash waiting for the next frame.
+
+Area is the honest test of "no gap left behind", and it is exact:
+
+```
+A untouched remove: true 4096.000 -> 4096.000
+```
+
+### The hit radius has to scale with the mesh
+
+The first version used a fixed 3-texel tap radius, and Add became impossible
+on exactly the meshes that need it most. A density-14 mesh on a 64px layer has
+4.6-texel cells — so nearly every point you can tap is within 3 texels of an
+existing vertex, and every Add is refused as "already a vertex". The radius is
+now a fraction of the cell:
+
+```js
+export function hitRadius(mesh, part) {
+  if (!mesh || !part) return VERTEX_HIT_TEXELS;
+  const cols = Math.max(1, mesh.cols || 1);
+  const rows = Math.max(1, mesh.rows || 1);
+  const cell = Math.min(part.naturalWidth / cols, part.naturalHeight / rows);
+  return Math.max(0.75, Math.min(VERTEX_HIT_TEXELS, cell * 0.35));
+}
+```
+
+### Trim Boundary: draw what to keep
+
+The fourth tool reuses CLayer's freehand mechanic rather than inventing a
+second one. Draw a closed loop around what you want to **keep**; everything
+outside it is discarded. "Closed" is tested the way CLayer tests it — flood
+fill from a seed and see whether the fill can reach the image border. If it
+can, the loop has a gap in it, and the trim is refused rather than silently
+eating the layer.
+
+Afterwards the layer is cropped to its new content bounds, so a trim genuinely
+*reshapes* the layer instead of leaving the kept artwork floating in the old
+frame with transparent margins. `part.x`/`part.y` shift by the same amount the
+crop removed, so nothing jumps on screen:
+
+```
+and the layer was genuinely reshaped to the drawn boundary   64x64 -> 27x43
+```
+
+`naturalWidth`/`naturalHeight` are read-only getters over `sourceWidth`/
+`sourceHeight`, so the crop writes the backing fields — and drops the decoded
+`image`, because Part's own rule is that it is kept only while it still
+matches the pixels.
+
+Then the mesh is rebuilt against the new silhouette immediately, rather than
+waiting for the next Auto-weight. A mesh shaped for the old outline sitting on
+the new one is precisely the stale state this feature exists to avoid. The old
+weights are carried across by barycentric lookup: each new vertex reads the
+old mesh at the *same physical pixel* — which is why the crop offset is passed
+in — and takes what it finds, with a nearest-vertex fallback for anything the
+old mesh did not cover.
+
+### The safety toggle defaults to the safe option
+
+The trim is destructive by nature, so it ships with a toggle that **defaults
+to "Trim onto a copy"**. The original layer is left byte-for-byte untouched
+and the trimmed result lands as a new layer. Choosing "Trim the original
+directly" is an explicit act, never the default:
+
+```js
+// settings.js
+{ key: 'meshTrimInPlace', section: 'rig', kind: 'choice', default: false }
+//                                                        ^ false = trim onto a copy
+```
+
+Verified in the browser, on the real app:
+
+```
+and it reads as the safe option by default          Trim onto a copy
+SAFETY DEFAULT IN ACTION: the trim landed on a NEW layer   1 -> 2 layers
+and the original layer is byte-for-byte untouched   3015 px, 64x64 — unchanged
+the copy kept only what was inside the loop         3015 px -> 810 px
+the mesh was REGENERATED against the new boundary   150 vertices, no problems
+with weight data carried across for the retained area  150/150 vertices weighted
+```
+
+One subtlety worth stating: on the copy path the window stays on the layer it
+was opened on — which is the *original*, now untouched — so the working view
+is put back to the original's pixels rather than left showing a trim that did
+not happen to it.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

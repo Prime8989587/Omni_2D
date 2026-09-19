@@ -38,6 +38,23 @@ const TOPICS = {
       '• Both -- either one deepens it, and the two add together rather ' +
       'than competing.',
   },
+  'mesh-trim': {
+    title: 'Mesh Trim',
+    body: 'Two different jobs in one window, and it is worth knowing which ' +
+      'one you are doing.\n\n' +
+      '• Move, Add and Remove edit the MESH -- the invisible grid the ' +
+      'deformation runs on. Nothing about the picture changes; you are ' +
+      'changing how it bends. Every vertex snaps to whole pixels, and ' +
+      'removing one re-fills the hole so the artwork never opens up.\n\n' +
+      '• Trim Boundary edits the PICTURE. Draw a closed loop around what ' +
+      'you want to keep and press Trim: everything outside it is discarded ' +
+      'and the layer is reshaped to what you drew. The mesh is rebuilt ' +
+      'against the new shape afterwards, carrying your weight painting ' +
+      'across wherever the artwork survived.\n\n' +
+      'Trim defaults to working on a COPY, leaving the original untouched. ' +
+      'The toggle switches it to trimming in place, which cannot be undone ' +
+      'by redrawing -- only by Undo.',
+  },
   'pierce-depths': {
     title: 'Enter, Dent & End points',
     body: 'All three are measured in scene pixels, from the piercer’s ' +

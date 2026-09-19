@@ -210,6 +210,22 @@ export const SCHEMA = [
     format: (v) => v.toFixed(2),
   },
   {
+    key: 'meshTrimInPlace',
+    section: 'rig',
+    kind: 'choice',
+    label: 'Mesh Trim behaviour',
+    // Defaults to the COPY, for the same reason PCreate's own edit setting
+    // does: a boundary trim permanently discards artwork, and a trim that
+    // ate the wrong layer is a strictly worse failure than one extra layer
+    // in the list. The user opts in to destructive, never out of it.
+    hint: 'Whether trimming a boundary reshapes the layer itself or lands on a copy.',
+    default: false,
+    options: [
+      { value: false, label: 'Trim onto a copy' },
+      { value: true, label: 'Trim the original' },
+    ],
+  },
+  {
     key: 'gridSnap',
     section: 'rig',
     kind: 'toggle',

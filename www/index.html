@@ -200,6 +200,7 @@
         </div>
 
         <button id="pxpinOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Px Pin — pin single pixels…</button>
+        <button id="meshTrimOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Mesh Trim — edit vertices &amp; trim the boundary…</button>
 
         <div class="field-label-row">
           <div class="field-label">Weight tool</div>
@@ -981,6 +982,45 @@
       </div>
     </div>
 
+  </section>
+
+  <!-- ==================== Mesh Trim ====================
+       A top-level sibling, like PCreate and Settings, so Bind mode is fully
+       hidden behind it rather than showing through. The wireframe is drawn
+       ONLY in here -- Bind mode's own canvas is untouched, which is what
+       makes the toggle mean what it says. -->
+
+  <section id="meshTrimScreen" class="px-pin mesh-trim" hidden>
+    <header class="px-pin__bar">
+      <span class="px-pin__title">Mesh Trim — <b id="meshTrimTitle"></b></span>
+      <span id="meshTrimStatus" class="px-pin__status"></span>
+      <button id="meshTrimDoneBtn" class="btn btn--sm" type="button">Done</button>
+    </header>
+
+    <canvas id="meshTrimCanvas" class="px-pin__canvas"></canvas>
+
+    <footer class="px-pin__controls">
+      <div class="px-pin__row-label">
+        <span>Tool</span>
+        <button class="info-btn" type="button" data-info="mesh-trim" aria-haspopup="true" aria-expanded="false" aria-label="What does Mesh Trim do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+      </div>
+      <div id="meshTrimToolRow" class="segmented" role="group" aria-label="Mesh Trim tool">
+        <button id="meshTrimMoveBtn" class="segmented__btn" type="button" aria-pressed="true">Move</button>
+        <button id="meshTrimAddBtn" class="segmented__btn" type="button" aria-pressed="false">Add</button>
+        <button id="meshTrimRemoveBtn" class="segmented__btn" type="button" aria-pressed="false">Remove</button>
+        <button id="meshTrimBoundaryBtn" class="segmented__btn" type="button" aria-pressed="false">Trim Boundary</button>
+      </div>
+
+      <div id="meshTrimActionRow" class="control-row">
+        <button id="meshTrimRemoveVertexBtn" class="btn btn--sm btn--danger" type="button" hidden>Remove vertex</button>
+        <button id="meshTrimClearBoundaryBtn" class="btn btn--sm btn--cancel" type="button" hidden>Clear boundary</button>
+        <button id="meshTrimTrimBtn" class="btn btn--sm btn--flourish" type="button" hidden>Trim</button>
+      </div>
+
+      <button id="meshTrimEditModeToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false" hidden>Trim onto a copy</button>
+
+      <p id="meshTrimHint" class="px-pin__hint"></p>
+    </footer>
   </section>
 
   <!-- ==================== Settings ====================

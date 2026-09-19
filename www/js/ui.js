@@ -30,6 +30,7 @@ import * as storage from './storage.js';
 import { initAutoSave, setAutoSaveSource, autoSaveNow, setAutoSaveInterval } from './autosave.js';
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
+import { initMeshTrim } from './meshtrim.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { initClayer, openClayer } from './clayer.js';
 import { initPCreate, openPCreate } from './pcreate.js';
@@ -2997,6 +2998,7 @@ export function initUI() {
   history.subscribe(renderHistoryChrome);
 
   initPxPin();
+  initMeshTrim();
   initPierceTool();
   initPierceDepthCanvas();
   initClayer();
