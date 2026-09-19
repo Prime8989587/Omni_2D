@@ -1816,8 +1816,8 @@ button, input, select {
 /* ---------- Free Move: which layer's bone a drag moves ---------- */
 
 .pose-layer {
-  position: relative; /* the menu hangs off this */
   display: flex;
+  flex-wrap: wrap; /* so the open list takes a row of its own below the button */
   align-items: center;
   gap: 8px;
   padding: 4px 0;
@@ -1834,19 +1834,33 @@ button, input, select {
   text-align: left;
 }
 
-/* Opens UPWARD: this row lives in the footer, and a menu dropping down
-   from it would run off the bottom of the screen. Capped and scrollable
-   for the same reason .modal is -- a project with many layers must not
-   produce a menu taller than the phone. */
+/* INLINE, not a popover -- and that is the fix for two bugs at once.
+   As an absolutely positioned menu opening upward out of .controls, which
+   is itself a scroll container, it broke twice over:
+
+     * a scroll container only lets you reach overflow past its END edge,
+       so the 148px of menu that sat ABOVE the footer's top was clipped and
+       unhittable -- the first five layers could never be seen or tapped,
+       however far you scrolled the menu's own 962px of content;
+     * at z-index 70 it covered the Body/Piercer tabs directly above it, so
+       a tap meant for Body landed on a menu item and silently switched the
+       drag target instead. The tabs looked dead because the thing eating
+       the taps was the half of the menu that was clipped out of sight.
+
+   Sitting in the footer's own flow fixes both by construction: the footer
+   scrolls to it, so every row is reachable, and it PUSHES the tabs rather
+   than covering them, so there is no touch-target overlap to arbitrate.
+   Same shape as .pcreate-layer-list, which is a capped scrolling list
+   inside an already-scrolling footer for the same reason. */
 .pose-layer__menu {
-  top: auto;
-  bottom: calc(100% - 4px);
-  right: 0;
-  left: 0;
+  position: static;
+  flex: 1 0 100%;
   min-width: 0;
-  max-height: min(50vh, 320px);
+  margin-top: 8px;
+  max-height: 240px;
   overflow-y: auto;
   overscroll-behavior: contain;
+  filter: none; /* a drop-shadow is for something floating over the page */
 }
 
 /* The chosen layer, so reopening the menu shows where you already are. */

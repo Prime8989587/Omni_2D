@@ -2566,7 +2566,23 @@ let poseLayerMenuOpen = false;
 function closePoseLayerMenu() {
   if (!poseLayerMenuOpen) return;
   poseLayerMenuOpen = false;
-  renderPoseLayerChrome();
+  withStableFooter(renderPoseLayerChrome);
+}
+
+// Collapsing the inline layer list removes ~240px from a footer that
+// SCROLLS, so the browser clamps its scrollTop and everything above the
+// list lurches down -- measured at 92px, which was enough to move the
+// Piercer tab out from under a finger between press and release and land
+// the tap on the hint text instead. Holding one row still across the
+// reflow keeps the controls where the user is already aiming.
+function withStableFooter(change) {
+  const footer = els.poseTargetRow ? els.poseTargetRow.closest('.controls') : null;
+  const anchor = els.poseTargetRow && !els.poseTargetRow.hidden ? els.poseTargetRow : els.poseLayerRow;
+  if (!footer || !anchor) { change(); return; }
+  const before = anchor.getBoundingClientRect().top;
+  change();
+  const after = anchor.getBoundingClientRect().top;
+  footer.scrollTop += after - before;
 }
 
 function selectPoseLayer(partId) {
@@ -2634,6 +2650,16 @@ function renderPoseLayerChrome() {
   for (const part of partsStore.parts) {
     addItem(part.name, part.id, bonesStore.bonesAttachedTo(part.id).length > 0);
   }
+
+  // The list is inline in a footer that scrolls, so opening it near the
+  // bottom can leave it below the fold. Bring it into view once, after
+  // layout has the real height, rather than leaving the user to discover
+  // that the thing they just opened is off-screen.
+  requestAnimationFrame(() => {
+    if (!poseLayerMenuOpen) return;
+    els.poseLayerMenu.scrollTop = 0;
+    els.poseLayerMenu.scrollIntoView({ block: 'nearest' });
+  });
 }
 
 function askState({ title, message, confirmLabel, danger, onConfirm }) {
@@ -2876,10 +2902,16 @@ function bindEvents() {
     poseLayerMenuOpen = !poseLayerMenuOpen;
     renderPoseLayerChrome();
   });
-  // Tapping anywhere else puts the menu away, the same courtesy the app
-  // menu already extends. The canvas is included on purpose: a tap there
-  // is the start of a drag, and the menu must not be sitting over it.
-  document.addEventListener('pointerdown', (event) => {
+  // Tapping anywhere else puts the list away, the same courtesy the app
+  // menu already extends -- and on CLICK, like the app menu, not on
+  // pointerdown. Closing on pointerdown reflowed the footer between a
+  // tap's press and its release, so the control being tapped moved out
+  // from under the finger and the tap was delivered somewhere else (or
+  // nowhere). Closing after the click means a tap always completes on the
+  // thing it started on. The list is inline now, so the old reason for
+  // pointerdown -- that it sat over the canvas where a drag begins -- no
+  // longer applies: it sits over nothing.
+  document.addEventListener('click', (event) => {
     if (!poseLayerMenuOpen) return;
     if (els.poseLayerRow.contains(event.target)) return;
     closePoseLayerMenu();

@@ -583,6 +583,8 @@ export function meshTrimDebug() {
     tool: session.tool,
     selected: session.selected,
     zoom: session.cam.zoom,
+    panX: session.cam.panX,
+    panY: session.cam.panY,
     boundarySize: session.boundary.size,
     vertices: mesh ? mesh.vertices.length : 0,
     triangles: mesh ? mesh.triangles.length / 3 : 0,

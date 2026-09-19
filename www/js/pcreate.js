@@ -481,7 +481,7 @@ function startSession({ kind, name, width, height, pixels, bitmap, layers = null
     activeLayerId: null,
     openLayerMenuId: null,
     renamingLayerId: null,
-    cam: { zoom: 1, panX: 0, panY: 0 },
+    cam: { zoom: 1, panX: 0, panY: 0, rotation: 0 },
     pointers: new Map(),
     pinch: null,
     pan: null,
@@ -684,6 +684,25 @@ function sizeCanvas() {
   session.dpr = dpr;
 }
 
+// Two-finger viewport rotation, the same idea as the main canvas's (see
+// view.js): camera only, so not one texel of artwork is touched, and the
+// context is turned once per frame so everything drawn goes round together.
+const ROTATE_DEAD_ZONE = 0.14; // ~8 degrees, so ordinary hand roll is ignored
+const ROTATE_MIN_SPAN_PX = 40; // two close fingers give a useless angle
+
+function rotateAbout(x, y, angle) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: x * cos - y * sin, y: x * sin + y * cos };
+}
+
+function shortestAngle(radians) {
+  let angle = radians;
+  while (angle > Math.PI) angle -= Math.PI * 2;
+  while (angle < -Math.PI) angle += Math.PI * 2;
+  return angle;
+}
+
 function fitCamera() {
   const { width, height, cam } = session;
   const zoom = Math.min(session.cssWidth / width, session.cssHeight / height) * 0.9;
@@ -691,6 +710,9 @@ function fitCamera() {
   session.minZoom = cam.zoom * 0.5;
   cam.panX = (session.cssWidth - width * cam.zoom) / 2;
   cam.panY = (session.cssHeight - height * cam.zoom) / 2;
+  // Fit means "put the view back", so it straightens it too -- the same
+  // way out of a rotation the main canvas offers.
+  cam.rotation = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -753,6 +775,15 @@ function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#101014';
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
+
+  // The camera's angle, applied once to the context so the checkerboard,
+  // every layer, the texel grid and the tool previews all turn together.
+  // The backdrop above is outside it, so a turned view has no bare corners.
+  if (cam.rotation !== 0) {
+    ctx.translate(session.cssWidth / 2, session.cssHeight / 2);
+    ctx.rotate(cam.rotation);
+    ctx.translate(-session.cssWidth / 2, -session.cssHeight / 2);
+  }
 
   drawGrid(ctx);
 
@@ -931,11 +962,39 @@ function canvasPoint(event) {
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
+// texelAt floors to a whole texel, which is what painting wants. The pinch
+// anchor needs the exact fractional position instead, or the view creeps by
+// up to a texel every frame of a long gesture.
+function texelPointAt(point) {
+  const { cam } = session;
+  let { x, y } = point;
+  if (cam.rotation !== 0) {
+    const cx = session.cssWidth / 2;
+    const cy = session.cssHeight / 2;
+    const p = rotateAbout(x - cx, y - cy, -cam.rotation);
+    x = p.x + cx;
+    y = p.y + cy;
+  }
+  return { x: (x - cam.panX) / cam.zoom, y: (y - cam.panY) / cam.zoom };
+}
+
 function texelAt(point) {
   const { cam } = session;
+  let { x, y } = point;
+  // A tap is on the glass; the camera's pan and zoom live in the unturned
+  // frame the renderer draws in, so the tap is turned back before it is
+  // measured. Without this, painting on a rotated view lands somewhere
+  // other than under the finger.
+  if (cam.rotation !== 0) {
+    const cx = session.cssWidth / 2;
+    const cy = session.cssHeight / 2;
+    const p = rotateAbout(x - cx, y - cy, -cam.rotation);
+    x = p.x + cx;
+    y = p.y + cy;
+  }
   return {
-    u: Math.floor((point.x - cam.panX) / cam.zoom),
-    v: Math.floor((point.y - cam.panY) / cam.zoom),
+    u: Math.floor((x - cam.panX) / cam.zoom),
+    v: Math.floor((y - cam.panY) / cam.zoom),
   };
 }
 
@@ -1060,12 +1119,20 @@ function onPointerDown(event) {
     // started is rolled back rather than committed as a stray mark.
     abandonGesture();
     const [a, b] = [...session.pointers.values()];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     session.pinch = {
       distance: Math.hypot(b.x - a.x, b.y - a.y),
+      angle: Math.atan2(b.y - a.y, b.x - a.x),
       zoom: session.cam.zoom,
-      mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      rotation: session.cam.rotation,
+      mid,
       panX: session.cam.panX,
       panY: session.cam.panY,
+      // The texel under the fingers when the gesture began. Everything the
+      // gesture does is then expressed as "keep this one under them".
+      held: texelPointAt(mid),
+      twist: 0,
+      twisting: false,
     };
   }
 }
@@ -1078,14 +1145,29 @@ function onPointerMove(event) {
 
   if (session.pointers.size === 2 && session.pinch) {
     const [a, b] = [...session.pointers.values()];
+    const pinch = session.pinch;
     const distance = Math.hypot(b.x - a.x, b.y - a.y);
-    const factor = distance / Math.max(1, session.pinch.distance);
-    const zoom = Math.min(MAX_ZOOM, Math.max(session.minZoom, session.pinch.zoom * factor));
+    const factor = distance / Math.max(1, pinch.distance);
+    const zoom = Math.min(MAX_ZOOM, Math.max(session.minZoom, pinch.zoom * factor));
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    const scale = zoom / session.pinch.zoom;
     session.cam.zoom = zoom;
-    session.cam.panX = mid.x - (session.pinch.mid.x - session.pinch.panX) * scale;
-    session.cam.panY = mid.y - (session.pinch.mid.y - session.pinch.panY) * scale;
+
+    // The twist, once the gesture has clearly asked for one rather than
+    // simply rolled a little while spreading.
+    if (distance >= ROTATE_MIN_SPAN_PX && pinch.distance >= ROTATE_MIN_SPAN_PX) {
+      pinch.twist = shortestAngle(Math.atan2(b.y - a.y, b.x - a.x) - pinch.angle);
+      if (!pinch.twisting && Math.abs(pinch.twist) >= ROTATE_DEAD_ZONE) pinch.twisting = true;
+      if (pinch.twisting) session.cam.rotation = shortestAngle(pinch.rotation + pinch.twist);
+    }
+
+    // Solve pan LAST, from the texel that has to stay under the fingers:
+    // one statement covers scaling about them, turning about them and
+    // following them, with no step left to undo another step's drift.
+    const cx = session.cssWidth / 2;
+    const cy = session.cssHeight / 2;
+    const back = rotateAbout(mid.x - cx, mid.y - cy, -session.cam.rotation);
+    session.cam.panX = back.x + cx - pinch.held.x * zoom;
+    session.cam.panY = back.y + cy - pinch.held.y * zoom;
     render();
     return;
   }
@@ -1555,9 +1637,12 @@ function blendNear(point) {
   const texel = texelAt(point);
   if (!inCanvas(texel)) return;
 
-  const { cam } = session;
-  const fracU = (point.x - cam.panX) / cam.zoom - texel.u;
-  const fracV = (point.y - cam.panY) / cam.zoom - texel.v;
+  // Through texelPointAt, not the raw point: on a rotated view the screen
+  // point and the camera frame no longer share axes, and picking the seam
+  // from unturned coordinates would name the wrong neighbour.
+  const exact = texelPointAt(point);
+  const fracU = exact.x - texel.u;
+  const fracV = exact.y - texel.v;
   // Distance to each of the four edges; the nearest one names the neighbour.
   const toLeft = fracU;
   const toRight = 1 - fracU;
@@ -3087,6 +3172,7 @@ export function pcreateDebug() {
     zoom: session.cam.zoom,
     panX: session.cam.panX,
     panY: session.cam.panY,
+    rotation: session.cam.rotation,
     hsv: { ...session.hsv },
     hex: currentHex(),
     loadedPaletteName: session.loadedPaletteName,
@@ -3184,6 +3270,14 @@ export async function pcreateListPalettes() {
 // proving a camera move (zoom/pan) never touches the pixels themselves,
 // the same non-destructive guarantee Px Pin, the Pierce painter and CLayer
 // all already give their own camera.
+// The exact (fractional) texel a canvas-relative point sits over, rotation
+// included -- what the tools themselves see, so a test can check that a tap
+// on a turned canvas still resolves to the texel under the finger.
+export function pcreatePointDebug(x, y) {
+  if (!session) return null;
+  return texelPointAt({ x, y });
+}
+
 export function pcreatePixelAt(u, v) {
   if (!session) return null;
   const index = (v * session.width + u) * 4;

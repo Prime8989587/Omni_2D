@@ -5711,6 +5711,171 @@ was opened on — which is the *original*, now untouched — so the working view
 is put back to the original's pixels rather than left showing a trim that did
 not happen to it.
 
+## Five fixes: a trapped menu, a stolen tap, a snapping zoom, a turning camera, and a limb that came off
+
+Five reports, and the interesting thing is how many of them turned out to be
+something other than what they looked like.
+
+### The layer list was trapped inside a scrolling footer
+
+Free Move's layer picker opened as an absolutely positioned menu, upward, out
+of `.controls` -- which is itself `overflow-y: auto`. A scroll container only
+lets you reach overflow past its **end** edge. Overflow past its start is
+clipped and unreachable, however much you scroll. Measured with 18 layers: the
+menu's box ran from y=329 to y=649 while the footer's top edge was at y=477, so
+**148px of menu -- its first five rows -- was clipped away**. `elementFromPoint`
+at the first row's centre returned `canvas`. The menu's own scrolling worked
+perfectly; you simply could not see or touch the thing it scrolled to.
+
+### ...and it was eating the Body tab's taps
+
+Reported separately, same root cause. At `z-index: 70` the open menu covered
+the Body/Piercer tabs sitting directly above it. `elementsFromPoint` at the
+Body tab's centre came back:
+
+```
+["app-menu__item app-menu__item--boneless", "poseLayerMenu", "poseTargetBodyBtn", "poseTargetRow"]
+```
+
+Tapping Body silently selected the layer `extra_04` instead. The tabs looked
+dead because the thing eating the taps was the half of the menu that the
+clipping above had made invisible.
+
+Both die to one change: the list is now **inline in the footer's own flow**,
+not a popover. The footer scrolls to it, so every row is reachable, and it
+*pushes* the tabs rather than covering them, so there is no touch-target
+overlap left to arbitrate. It is the same shape as `.pcreate-layer-list`, which
+is a capped scrolling list inside an already-scrolling footer for the same
+reason.
+
+That fix then produced a third bug, which is worth recording because it is the
+same class again. Collapsing a 240px inline list removes 240px from a
+scrolling footer, so the browser clamps `scrollTop` -- measured 109 to 17 --
+and everything above the list lurches **92px** down. Between a tap's press and
+its release, the Piercer tab moved out from under the finger and the tap landed
+on the hint text. So closing now happens on `click` rather than `pointerdown`,
+so a tap always completes on what it started on, and the collapse holds one row
+still across the reflow:
+
+```js
+function withStableFooter(change) {
+  const before = anchor.getBoundingClientRect().top;
+  change();
+  const after = anchor.getBoundingClientRect().top;
+  footer.scrollTop += after - before;
+}
+```
+
+### The zoom that "snapped to a fixed anchor" -- and did, literally
+
+The pinch math was already correct. Instrumenting `zoomAround` showed it
+receiving exactly the right anchors -- the live finger midpoints, (72,96),
+(177,226), (282,346) -- and the product of its scale factors was exactly the
+finger-distance ratio, 2.750. Yet zoom came out at 1.500 from 0.500: **3.0x, not
+2.75x.**
+
+The extra jump was `snapToDevicePixels()` at the end of every gesture. It
+rounds zoom to a whole number of device pixels per scene pixel, for crispness,
+and left pan alone. But pan *is* where scene (0,0) lands, so rounding zoom
+without touching pan rescales about the scene origin -- a genuinely fixed
+anchor. The error is the scene coordinate under the fingers times the rounding,
+which is why it grew across the screen:
+
+| pinch at | scene point under the fingers | predicted drift | measured |
+| --- | --- | --- | --- |
+| top-left | (46, 47) | 8.2px | **8.1px** |
+| centre | (256, 307) | 50.0px | **49.7px** |
+| bottom-right | (466, 547) | 89.8px | **89.8px** |
+
+The snap is now anchored on the gesture's own centre. Same three positions
+after the fix: **0.5px, 0.5px, 0.5px** -- and that residual is one device pixel
+at dpr 2, which is the crispness snap doing its job, not drift.
+
+The five dedicated tool windows were measured too, since they have their own
+cameras. They use an absolute, gesture-start-anchored formulation and never
+snapped, and they were already exact: CLayer, Px Pin, Mesh Trim and the Pierce
+painter all held the texel under the fingers to **0.00px** at three positions
+each.
+
+### Two-finger rotation
+
+A camera-only viewport angle, so not one texel of artwork, no part's rotation
+and no bone's angle changes with it -- exactly like zoom and pan. It is applied
+as **one transform on the context, once per frame**, which is what lets the
+checkerboard, the artwork, the contour, the skeleton, the handles and the mesh
+overlay all turn together as one picture. Turning each of them separately would
+mean every drawing call growing a rotation it could get subtly wrong.
+
+That split the two frames apart, so they are now named:
+
+* `toCanvas` is the plain `scene*zoom + pan` the renderer draws in, inside the
+  turned context.
+* `toScreen` is where a scene point really lands on the glass, and `toScene` is
+  its exact inverse. Those are the two the tools want, because a tap is on the
+  glass and hit-testing has to agree with what the user can see. Verified
+  round-tripping at **0px error** while rotated 51.6 degrees.
+
+The pinch was rewritten as a single statement of intent: *whatever scene point
+was under the fingers stays under the fingers*. That one rule covers all three
+things two fingers can ask for -- spread them and it scales about them, twist
+them and it turns about them, move them and it follows. Written as three
+separate steps, each has to undo the drift the previous one introduced, and the
+anchor ends up being whatever survives. Solving for pan **last**, from the point
+that has to be held, leaves no drift to undo.
+
+A twist needs an 8-degree dead zone before it engages, because fingers roll a
+little while pinching and that is hand noise rather than intent; the whole
+accumulated twist applies at the moment it engages, so the view never lurches
+by the dead zone's worth. `fit()` resets the angle, so Fit is the way out of a
+rotation and there is no separate control to go hunting for.
+
+Same treatment in PCreate, whose camera is deliberately its own. Verified: a
+twist rotates the drawing view 51.6 degrees, the texel under the fingers stays
+at exactly (32.0, 32.0), and a tap on the rotated canvas still paints the texel
+under the finger.
+
+### The limb that came off at the joint
+
+This one was reported as possibly the same class as the mesh-continuity bugs --
+the rest-offset drift, the positional sync, the Px Pin tearing. It is not.
+Every mesh involved is internally perfect. Two measurements say what it
+actually is.
+
+First, the weights. A layer with an explicit "Controls layer" bone is
+auto-weighted to **that bone alone** -- measured average weight exactly 1.000
+`armBone` across every vertex of the arm layer. That is deliberate and correct:
+distance alone would hand a slice of a hand resting on a chest to the chest
+bone. But it means there is no shared influence at the seam that could stretch
+to cover anything.
+
+Second, the motion. `nudgePosition` moved the bone's **head** -- and the head is
+the joint, the very point that has to stay attached to the parent. Measured
+**33.12 scene px of joint travel** while the parent sat at 0.00. On screen that
+is the hand floating off the arm with a gap exactly as wide as the drag. No
+weighting could hide it, and none should.
+
+The fix keeps the rule about *which* bones move -- itself and its children, the
+parent chain fixed -- and changes the *kind* of motion. Skinning maps
+`p -> R(angle)*p + (head - R(angle)*bindHead)`, so with the head unmoved, the
+bind head maps exactly onto itself: **the joint is a fixed point of the
+transform**, not a tolerance. The bone is also grabbed by its tail now, not its
+head, because anchoring the finger on the joint gives a zero-length lever --
+that first version turned a 72px drag into 2.3 degrees of swing.
+
+Measured after:
+
+```
+NON-ROOT DRAG: the joint does not travel        joint moved 0 scene px
+the seam with the parent is unchanged           24 -> 24
+the limb genuinely swings from that joint       tail moved 19.912
+its child comes with it                         handBone moved 18.667
+the PARENT CHAIN is still exactly fixed         rootBone moved 0
+```
+
+One existing check had to be re-pointed rather than kept: it asserted that the
+bone's *head* moves, which is the detachment it was meant to be testing
+against. It now asserts the tail swings and the head does not.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

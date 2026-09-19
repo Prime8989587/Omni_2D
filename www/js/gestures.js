@@ -175,6 +175,7 @@ export function initGestures(canvasEl) {
         beginTransform(part);
       } else {
         gesture = { type: 'pinchView' };
+        view.beginPinch(); // fresh twist dead zone for this gesture
       }
     }
   });
@@ -208,6 +209,7 @@ export function initGestures(canvasEl) {
 
     if (gesture.type === 'pinchView' && pointers.size === 2) {
       const other = [...pointers.entries()].find(([id]) => id !== event.pointerId)[1];
+      gesture.lastPinchCenter = { x: (current.x + other.x) / 2, y: (current.y + other.y) / 2 };
       view.pinch(previous, other, current, other);
       return;
     }
@@ -246,7 +248,11 @@ export function initGestures(canvasEl) {
     if (!pointers.delete(event.pointerId)) return;
 
     if (gesture && gesture.type === 'pinchView' && pointers.size < 2) {
-      view.snapToDevicePixels();
+      // Anchored on the fingers, for the reason spelled out in view.js:
+      // an unanchored rounding rescales about the scene origin.
+      const c = gesture.lastPinchCenter;
+      if (c) view.snapToDevicePixels(c.x, c.y);
+      else view.snapToDevicePixels();
     }
 
     if (pointers.size === 0) {

@@ -50,6 +50,20 @@ import { getSetting } from './settings.js';
 import { history } from './history.js';
 import { appState, AppState } from './state.js';
 
+// A swing needs a lever. Closer to the joint than this and the angle a
+// drag describes is dominated by grid snapping rather than by the user's
+// hand, so the bone waits instead of spinning.
+const MIN_SWING_RADIUS = 2; // scene pixels
+
+// Shortest way round, so a swing across the +/-pi seam turns a few degrees
+// rather than most of a full circle back the other way.
+function normalizeAngle(radians) {
+  let angle = radians;
+  while (angle > Math.PI) angle -= Math.PI * 2;
+  while (angle < -Math.PI) angle += Math.PI * 2;
+  return angle;
+}
+
 let drag = null;
 
 // WHAT A DRAG IS AIMED AT
@@ -196,7 +210,16 @@ export function beginPoseDrag(bone, scenePoint) {
   // with no bones at all it is just the finger, so unbound artwork can
   // still be pushed around.
   const anchorBone = piercing ? piercerBones()[0] : bone;
-  const anchor = anchorBone ? bonesStore.restWorldHead(anchorBone) : snapToCell(scenePoint);
+  // A NON-ROOT bone is grabbed by its TAIL, not its head. Its head is the
+  // joint, which is exactly the point that is going to stay still -- anchor
+  // the finger there and the lever starts at zero length, so a long drag
+  // turns the bone barely at all (measured: 72px of drag for 2.3 degrees).
+  // The tail is the far end, the hand at the end of the arm, and that is
+  // what the user is reaching for when they drag a limb.
+  const grabTail = !piercing && anchorBone && anchorBone.parentId !== null;
+  const anchor = anchorBone
+    ? (grabTail ? bonesStore.restWorldTail(anchorBone) : bonesStore.restWorldHead(anchorBone))
+    : snapToCell(scenePoint);
   drag = {
     offsetX: anchor.x - scenePoint.x,
     offsetY: anchor.y - scenePoint.y,
@@ -233,10 +256,46 @@ export function updatePoseDrag(scenePoint) {
     const target = targetBone();
     if (target && target.parentId !== null) {
       // A non-root bone: it and its children move, its parent chain stays
-      // put. Exactly the rule the Piercer drag above uses, on a different
-      // bone -- children follow for free because their positions are
-      // stored relative to this one.
-      bonesStore.nudgePosition(target, dx, dy);
+      // put. That rule is unchanged. What changed is the KIND of motion.
+      //
+      // WHY THIS SWINGS INSTEAD OF SLIDING
+      //
+      // nudgePosition moves the bone's HEAD, and the head is the joint --
+      // the very point that has to stay attached to the parent. Dragging a
+      // hand therefore carried the wrist away with it: measured at 33.12
+      // scene px of joint travel while the parent sat at 0.00, which on
+      // screen is the hand floating off the arm with a gap exactly as wide
+      // as the drag.
+      //
+      // No amount of weight blending can hide that, and it should not: a
+      // layer with an explicit "Controls layer" bone is auto-weighted to
+      // that bone ALONE (measured: every vertex of the arm layer 100%
+      // armBone), on purpose, so a hand resting on a chest does not get
+      // handed to the chest bone. There is no shared influence at the seam
+      // to stretch, so a translated joint can only separate.
+      //
+      // Rotating about the head instead makes the joint a FIXED POINT.
+      // Skinning maps p -> R(angle)*p + (head - R(angle)*bindHead), so with
+      // the head unmoved the bind head maps exactly onto itself: the layer
+      // pivots at its joint and stays attached, no tolerance involved. The
+      // bone still moves only itself and its children, and the parent chain
+      // still does not move -- the rule is untouched, the limb just bends
+      // from the joint the way an arm does rather than sliding off it.
+      const joint = bonesStore.restWorldHead(target);
+      const tail = bonesStore.restWorldTail(target);
+      const reachX = drag.lastX - joint.x;
+      const reachY = drag.lastY - joint.y;
+      // Right on top of the joint there is no direction to point in, so a
+      // finger that lands there waits rather than spinning the limb wildly.
+      if (Math.hypot(reachX, reachY) >= MIN_SWING_RADIUS) {
+        // Aim the bone AT the finger rather than integrating little angle
+        // steps: the tail tracks the finger exactly, the drag cannot drift
+        // away from it over a long gesture, and the joint never moves.
+        const facing = Math.atan2(tail.y - joint.y, tail.x - joint.x);
+        const wanted = Math.atan2(reachY, reachX);
+        const delta = normalizeAngle(wanted - facing);
+        if (delta !== 0) bonesStore.nudgeRotation(target, delta);
+      }
     } else {
       // The root, whether by default or because the chosen layer's bone
       // IS the root: the whole character, untouched from what the master

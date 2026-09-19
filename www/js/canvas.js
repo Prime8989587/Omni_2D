@@ -282,7 +282,7 @@ function paintContourEdges(edges, color, thickness) {
   for (const index of edges) {
     const x = index % sceneWidth;
     const y = (index - x) / sceneWidth;
-    const p = view.toScreen(x, y);
+    const p = view.toCanvas(x, y);
     ctx.fillRect(p.x - inset, p.y - inset, size, size);
   }
 }
@@ -397,7 +397,7 @@ function checkerPattern() {
 }
 
 function drawGrid() {
-  const origin = view.toScreen(0, 0);
+  const origin = view.toCanvas(0, 0);
   const width = sceneStore.width * view.zoom;
   const height = sceneStore.height * view.zoom;
 
@@ -412,7 +412,7 @@ function drawGrid() {
 // Highlights one grid cell -- the pixel a bone endpoint is snapped to --
 // so it is unmistakable that snapping happened.
 function drawSnapCell(cell) {
-  const p = view.toScreen(cell.x, cell.y);
+  const p = view.toCanvas(cell.x, cell.y);
   ctx.fillStyle = SNAP_CELL_FILL;
   ctx.fillRect(p.x, p.y, view.zoom, view.zoom);
   ctx.strokeStyle = ACCENT;
@@ -433,7 +433,7 @@ function drawPartOutline(part) {
   const placed = back
     ? quad.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
     : quad;
-  const corners = placed.map((p) => view.toScreen(p.x, p.y));
+  const corners = placed.map((p) => view.toCanvas(p.x, p.y));
   ctx.beginPath();
   ctx.moveTo(corners[0].x, corners[0].y);
   for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
@@ -446,8 +446,8 @@ function drawPartOutline(part) {
 // A bone is drawn as a tapered wedge: widest just past the head, tapering
 // to a point at the tail, so its direction is obvious at a glance.
 function drawBone(bone, isSelected) {
-  const head = view.toScreen(...Object.values(bonesStore.worldHead(bone)));
-  const tail = view.toScreen(...Object.values(bonesStore.worldTail(bone)));
+  const head = view.toCanvas(...Object.values(bonesStore.worldHead(bone)));
+  const tail = view.toCanvas(...Object.values(bonesStore.worldTail(bone)));
   const length = Math.hypot(tail.x - head.x, tail.y - head.y);
   if (length < 0.5) return;
 
@@ -494,8 +494,8 @@ function drawParentLink(bone) {
   const head = bonesStore.worldHead(bone);
   if (Math.hypot(head.x - parentTail.x, head.y - parentTail.y) < 0.5) return;
 
-  const from = view.toScreen(parentTail.x, parentTail.y);
-  const to = view.toScreen(head.x, head.y);
+  const from = view.toCanvas(parentTail.x, parentTail.y);
+  const to = view.toCanvas(head.x, head.y);
   ctx.save();
   ctx.beginPath();
   ctx.setLineDash([4, 4]);
@@ -508,7 +508,7 @@ function drawParentLink(bone) {
 }
 
 function drawSkeleton() {
-  const origin = view.toScreen(0, 0);
+  const origin = view.toCanvas(0, 0);
   ctx.fillStyle = RIG_VEIL;
   ctx.fillRect(origin.x, origin.y, sceneStore.width * view.zoom, sceneStore.height * view.zoom);
 
@@ -526,7 +526,7 @@ function drawSkeleton() {
   // A bone mid-placement: ring the head while we wait for the tail tap.
   const placement = getPlacement();
   if (placement && placement.head) {
-    const p = view.toScreen(placement.head.x, placement.head.y);
+    const p = view.toCanvas(placement.head.x, placement.head.y);
     ctx.beginPath();
     ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
     ctx.strokeStyle = ACCENT;
@@ -539,7 +539,7 @@ function drawSkeleton() {
 // strongly the selected bone influences each vertex.
 function drawMeshOverlay(part, boneTransforms, boneId) {
   const { vertices, triangles } = part.mesh;
-  const points = deformVerticesSnapped(part.mesh, part, boneTransforms).map((p) => view.toScreen(p.x, p.y));
+  const points = deformVerticesSnapped(part.mesh, part, boneTransforms).map((p) => view.toCanvas(p.x, p.y));
 
   ctx.save();
   ctx.beginPath();
@@ -584,6 +584,22 @@ function render() {
 
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, viewWidth, viewHeight);
+
+  // THE CAMERA'S ANGLE, applied once, here, to the context.
+  //
+  // Everything below draws in the unrotated frame through view.toCanvas,
+  // and this carries the whole picture round together -- checkerboard,
+  // artwork, contour, skeleton, handles, mesh overlay. Turning each of
+  // them separately would mean every drawing call growing a rotation it
+  // could get subtly wrong; turning the context means none of them can.
+  // The black backdrop above is deliberately outside it, so a rotated
+  // view has no unpainted corners.
+  const angle = view.rotation;
+  if (angle !== 0) {
+    ctx.translate(viewWidth / 2, viewHeight / 2);
+    ctx.rotate(angle);
+    ctx.translate(-viewWidth / 2, -viewHeight / 2);
+  }
 
   drawGrid();
 

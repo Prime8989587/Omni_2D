@@ -15,6 +15,11 @@ import { appState, AppState } from './state.js';
 
 const pointers = new Map(); // pointerId -> screen point
 let pinching = false;
+// Where the fingers were when the gesture last had two of them. The
+// end-of-gesture device-pixel snap is anchored there, so the rounding
+// holds the point the user was actually pinching around rather than
+// rescaling about the scene origin.
+let lastPinchCenter = null;
 
 function pointFromEvent(canvasEl, event) {
   const rect = canvasEl.getBoundingClientRect();
@@ -34,6 +39,7 @@ export function initViewGestures(canvasEl) {
       event.preventDefault();
       canvasEl.setPointerCapture(event.pointerId);
       pinching = true;
+      view.beginPinch(); // fresh twist dead zone for this gesture
     }
   });
 
@@ -49,6 +55,7 @@ export function initViewGestures(canvasEl) {
 
     // The other finger hasn't moved this event, so it is its own "previous".
     const other = [...pointers.entries()].find(([id]) => id !== event.pointerId)[1];
+    lastPinchCenter = { x: (current.x + other.x) / 2, y: (current.y + other.y) / 2 };
     view.pinch(previous, other, current, other);
   });
 
@@ -58,8 +65,12 @@ export function initViewGestures(canvasEl) {
 
     if (pinching && pointers.size < 2) {
       pinching = false;
-      // Settle on whole device pixels per cell so the grid is crisp again.
-      view.snapToDevicePixels();
+      // Settle on whole device pixels per cell so the grid is crisp again,
+      // about where the fingers were -- an unanchored snap rescales about
+      // the scene origin and yanks the view away from the pinch.
+      if (lastPinchCenter) view.snapToDevicePixels(lastPinchCenter.x, lastPinchCenter.y);
+      else view.snapToDevicePixels();
+      lastPinchCenter = null;
     }
   };
 
