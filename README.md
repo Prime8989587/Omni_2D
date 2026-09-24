@@ -5503,6 +5503,14 @@ has to go somewhere. Pinning the scalp rather than the mid-band, or a
 stiffer spring, is the modelling answer to that; it is not something the
 renderer can decide.
 
+> **Later:** the three-cell widening described here was reverted the same
+> day (it held a thin pinned stripe far too tightly even at rest), and this
+> chapter was never updated -- so for a week it described a fix the code no
+> longer had, and the tear it fixed was back. The transform blend was later
+> found origin-dependent and replaced by the mathematical audit. The band
+> now widens with the pull instead, one cell at rest exactly as before: see
+> *Two bugs that kept coming back*, below.
+
 ## Free Move: choosing which layer's bone a drag moves
 
 Free Move had one target: the character's root, via the master handle. This
@@ -5875,6 +5883,12 @@ the PARENT CHAIN is still exactly fixed         rootBone moved 0
 One existing check had to be re-pointed rather than kept: it asserted that the
 bone's *head* moves, which is the detachment it was meant to be testing
 against. It now asserts the tail swings and the head does not.
+
+> **Later:** this fixed the *bone's* joint, and every number above is about
+> the bone. The *artwork* on either side of that joint still came apart --
+> 9.45px at the wrist, measured on the pixels drawn -- because two separately
+> skinned layers had nothing asking them to agree at the seam. See
+> *Two bugs that kept coming back*, below.
 
 ## The rotation shipped, then rotated itself on the very first real pinch
 
@@ -6311,6 +6325,160 @@ off-origin rig (18 checks), `tests/meshedit.mjs` gained a refused-fold
 check (49), and a browser suite drives every item through the real app on a
 multi-limb character, including a live Free-Move drag for item 5 (16
 checks). All nine headless suites and all twelve browser suites pass.
+
+## Two bugs that kept coming back: a limb coming off at its joint, and pinned hair tearing
+
+Both had been reported, "fixed" and reported again more than once, and they
+share one look: artwork that should deform as one surface rips apart
+mid-drag. The audit above had just fixed foundational skinning maths that
+could plausibly have been the real cause of both all along. So before
+touching anything, each bug was reproduced to see whether it was still there.
+
+### How they were tested, and why the earlier checks missed them
+
+The real app, in a phone-sized Chromium (390x844 at DPR 3, the engine
+Android's WebView runs), driven by real touch events: Free Move's own layer
+menu to pick the hand, its master handle to throw the character. Slow drags
+and abrupt ones. Every frame measured -- the whole drag and the settle after
+it, not the ends.
+
+Measured on the **artwork**, not the skeleton. Take pairs of source texels
+that touch at rest -- the cuff's last row and the wrist's first, a pinned
+hair texel and the unpinned one below it -- push each through exactly the
+geometry the renderer draws, and ask how far apart they land. At rest, 1px.
+A gap is anything more.
+
+That is the difference from before. The joint-gap fix was verified on the
+bone's joint, which never moved while the artwork beside it parted. The pin
+fix was verified by counting separate blobs of a flat-colour layer, which a
+stretched or folded seam never splits. Two more measurement traps turned up
+this time and were closed: a one-pixel transparent line in the art aliases
+into enclosed "holes" under any rotation, and a count of enclosed holes can
+never see a gap that is open to the outside.
+
+**Was it one code path missing a fix?** Specifically ruled out, not assumed.
+Every frame, every texel of the top layer was checked against the screen:
+its exact colour at the pixel the measurement put it on (or beside it). At
+least 97.9% on every frame of every drag, before and after -- what Free
+Move draws is this geometry, through the one path every consumer shares.
+
+### Bug 1 -- a layer coming off at its joint: STILL OCCURRING, a new cause
+
+On a layered arm (Torso / UpperArm / Forearm / Hand, each its own "Controls
+layer"), dragging the Hand from Free Move's menu:
+
+| | wrist seam, slow | wrist seam, fast | first passes 1.5px |
+| --- | --- | --- | --- |
+| pre-audit build | 9.45px | 9.44px | at 7 degrees |
+| after the audit | 9.45px | 9.44px | at 7 degrees |
+
+Identical to the decimal: the audit did not touch it. Every Hand vertex was
+100% hand bone and every Forearm vertex 100% forearm bone, so the audit's
+blending fix -- which only matters where a vertex has two bones -- had
+nothing to act on. The hand turned as a rigid body about one point of the
+wrist, and everything else on the seam swung away from the cuff by
+2 t sin(angle / 2).
+
+The blue-jacket observation (torso and both sleeves in one layer, the hand
+separate) was two things. The audit **did** fix one of them: on the
+pre-audit build the sleeve tore inside itself, texels that touched landing
+6.38px apart, the jacket inflating from 2,228 to 2,947 pixels and the cuff
+flung off as a separate shard -- the origin-dependent blend. After the audit
+the sleeve held together (worst 1.31px) but the hand still parted from the
+cuff by 7.55px: the same joint gap as above.
+
+**The fix: one rule for the seam, whoever's artwork is there.** At a joint
+between a parent and its child, the weights across the seam are now a
+function of position alone -- a band straddling the joint, perpendicular to
+the limb, all-parent on one side, all-child on the other, 50/50 on the joint
+line. Every layer with artwork on that seam is weighted by the same rule, so
+they move every point of it identically and cannot part. Beyond the band
+each layer is exactly what it was, 100% its own bone. Only at *serial*
+joints (a child starting at its parent's tail), where "which side of the
+seam" has an answer; an arm hung off the side of a torso bone keeps the old
+rule. Details in `mesh.js`, `withSeams`.
+
+Two further pieces were needed, each found by measuring:
+
+- **Snapping.** Each layer rounds its own vertices to whole pixels, so two
+  edges following the identical line wandered up to half a pixel apart and
+  left 1-3 background pixels showing in ten frames of a slow swing. Seam
+  vertices are left unsnapped -- the two edges are then the one line.
+- **Mesh too coarse to hold the seam.** The jacket's default cells were
+  9.3px across, wider than the 7px band, so the blend fell between vertices
+  and the cuff still parted by 4.0px. A layer with artwork on a seam is now
+  bound at least as finely as the seam needs (the toast says when).
+
+The seams are stored with the mesh, so Mesh Trim, undo and saved projects
+all keep them. A spring bone taken only through a seam is read live, as its
+own layer reads it, so the two sides never sit on two poses of one bone.
+
+| | before | after |
+| --- | --- | --- |
+| wrist seam, slow / fast | 9.45 / 9.44px | **1.40 / 1.40px** |
+| elbow seam (forearm dragged) | 9.53px | **1.13px** |
+| jacket cuff-to-hand seam | 7.55px, 60 frames over 2px | **1.27px, none** |
+| background showing at the wrist, layered arm | open notch | **0 pixels, every frame** |
+
+A layer bound by an older build keeps its old weights until **Auto-weight**
+is run on it again -- weights are the user's data, and nothing rewrites
+them behind their back.
+
+### Bug 2 -- pinned pixels tearing from their neighbours: STILL OCCURRING, at loose springs
+
+A textured hair layer on a spring bone, pinned at the scalp, the whole
+character dragged by the master handle, across the spring range the
+sliders allow:
+
+| spring | peak lag | pin edge, before | anywhere in the hair, before |
+| --- | --- | --- | --- |
+| default (180 / 8 / 1) | 17 deg | 1.32px | 1.62px |
+| floppy (30 / 2 / 2) | 56 deg | 2.08px | 3.08px |
+| loosest (10 / 0.5 / 3) | whole turns | **4.35px, 125 of 158 frames over 2px** | 5.28px |
+
+At the default spring it held. At loose ones the hair peeled off its pinned
+scalp -- a kink at the band's edge, then the band left behind as a cap.
+Before and after the audit the same: pinned-band vertices have one bone, so
+the audit had nothing to change here either.
+
+The cause was already known, and so was a fix. The pin's transition band
+spans one mesh cell and has to absorb the whole pull between held and free
+artwork. An earlier round widened it to three cells; it was reverted the
+same day because a thin pinned stripe then held most of a layer rigid even
+at rest -- and the chapter describing the widening was never updated.
+
+**The fix: the band follows the pull.** One cell whenever the bones are
+barely pulling on the pins -- bit-for-bit what it always was, which is what
+the thin-stripe objection was about -- and wider in proportion to the pull
+when they pull hard, so the bend is carried over a distance long enough to
+carry it. Pinned texels still sit exactly where the pin holds them (0.00px
+drift on every frame).
+
+| spring, throw | pin edge | anywhere | frames over 2px |
+| --- | --- | --- | --- |
+| floppy | 2.08 -> **1.51px** | 3.08 -> **2.15px** | 30 -> 11 |
+| loosest | 4.35 -> **1.51px** | 5.28 -> **2.76px** | pin edge: 125 -> **0** |
+| thin stripe down a whole edge, loosest | 1.05 -> 1.05px | **12.45 -> 1.95px** | 143 -> **0** |
+
+**The honest limit.** On the loosest spring the hair whirls through whole
+turns, and at 135 degrees and beyond from its rest it bunches over the
+pinned band with a narrow twist up to the flipped tips: continuous, one
+piece, nothing torn from the pin, but not pretty. Following an arc instead
+of a straight line would avoid the bunching, and was rejected: at 180
+degrees the short way round flips sides, and the curl would visibly pop
+direction twice per turn.
+
+Found on the way: the pin cache was keyed on the pins alone, so a vertex
+added to a pinned layer by Mesh Trim read an influence that did not exist
+and deformed to NaN. It is keyed on the mesh's vertices too now.
+
+### Verification
+
+`tests/seams.mjs` (27 checks) and `tests/pins.mjs` (10) guard both, on the
+artwork and through the renderer's own geometry -- each with a control that
+removes the fix and shows the same measure catching the failure, so neither
+can go blind the way the earlier checks did. All eleven headless suites and
+all twelve browser suites pass.
 
 ## What's next
 

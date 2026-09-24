@@ -71,6 +71,7 @@ export class PartMesh {
     this.vertices = vertices;
     this.triangles = triangles; // flat list of vertex-index triples
     this.bindPose = {}; // { boneId: { head: {x,y}, rotation } } at bind time
+    this.joints = []; // joint seams this layer's artwork sits on (withSeams)
   }
 
   get isBound() {
@@ -186,6 +187,224 @@ function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUE
   return weights;
 }
 
+// ---------------------------------------------------------------------------
+// Joint seams: two layers that meet at a joint stay joined there.
+//
+// WHY A LAYER CAME OFF AT ITS JOINT
+//
+// Skinning is worked out one layer at a time, and a layer with a "Controls
+// layer" bone is weighted to that bone alone -- on purpose, so a hand resting
+// on a chest never answers to the chest. Measured on a layered arm: every
+// Hand vertex 100% hand bone, every Forearm vertex 100% forearm bone. So the
+// two layers are two rigid bodies that merely touch. Swing the hand and it
+// turns about the wrist point, and everything that was touching the forearm
+// at a distance t from that point is carried 2 t sin(angle / 2) away from it.
+// Measured in Free Move, on the pixels actually drawn: the wrist seam opened
+// past 1.5px at 7 degrees and reached 9.45px at 145, at any drag speed --
+// the hand pivoting over the cuff, joined at one point and nowhere else.
+//
+// The earlier joint-gap fix (swing about the head instead of sliding the
+// head) was right, and its test was right about what it measured: the BONE
+// joint does not travel. But the artwork on either side of it is two
+// separately-skinned layers, and nothing asked them to agree at the seam.
+//
+// THE FIX: ONE RULE FOR THE SEAM, WHOEVER'S ARTWORK IS THERE
+//
+// Two layers can only stay joined along a seam if they move every point of
+// that seam identically -- which, with skinning, means they give it the same
+// weights. So at a joint between a parent and its child, the weights across
+// the seam are a function of POSITION alone, the same for every layer: a band
+// straddling the joint, perpendicular to the limb, easing from all-parent on
+// one side to all-child on the other, 50/50 on the joint line itself. The
+// Forearm layer's cuff and the Hand layer's wrist, drawn side by side, are
+// weighted by the identical rule, so they are moved identically and cannot
+// part. Beyond the band each layer is exactly what it was: 100% its own bone.
+//
+// Weights that vary only ACROSS the seam are constant ALONG it, so the map is
+// affine along any line parallel to the seam. Two layers whose edges meet
+// along the joint line therefore land on exactly the same pixels however
+// differently their meshes happen to be triangulated.
+//
+// WHERE IT APPLIES, AND WHERE IT DELIBERATELY DOES NOT
+//
+// Only at SERIAL joints: a child whose head sits on its parent's tail (elbow,
+// wrist, knee, a chain of hair segments). There the parent's artwork is on one
+// side of the joint and the child's on the other, and "which side of the
+// seam" is the right question. A child hung off the SIDE of its parent -- an
+// arm on a torso bone that runs down the middle of the body -- has no such
+// line: the torso's own artwork continues right past the shoulder, so a band
+// there would hand torso pixels to the arm. Those keep the existing rule.
+//
+// Only near the limb: the band stops a mesh cell beyond the layer's own
+// artwork on the seam, measured across the limb, and only for a vertex whose
+// own bone is one of the two -- so a torso drawn at wrist height beside a
+// hanging hand is not touched. And it brings in exactly one extra bone, the
+// one jointed to the layer's own; the audit's rule that weight never reaches
+// an unrelated bone still holds.
+
+const SEAM_BAND_FRACTION = 0.35; // half-width of the band, x the shorter bone
+const SEAM_BAND_MIN = 1.5;
+const SEAM_BAND_MAX = 8;
+// How close a child's head must be to its parent's tail to count as serial:
+// endpoints tap-placed on pixel centres, so within a pixel or so.
+const SERIAL_JOINT_TOLERANCE = 1.5;
+
+function smoothstep01(x) {
+  const t = Math.max(0, Math.min(1, x));
+  return t * t * (3 - 2 * t);
+}
+
+// Every serial joint one of `boneIds` takes part in, in the REST pose -- the
+// same pose the bind pose is captured in.
+function serialJoints(bonesStore, boneIds) {
+  const joints = [];
+  for (const child of bonesStore.bones) {
+    const parent = child.parentId ? bonesStore.byId(child.parentId) : null;
+    if (!parent) continue;
+    if (!boneIds.has(child.id) && !boneIds.has(parent.id)) continue;
+    const head = bonesStore.restWorldHead(child);
+    const parentTail = bonesStore.restWorldTail(parent);
+    const offset = Math.hypot(head.x - parentTail.x, head.y - parentTail.y);
+    if (offset > Math.max(SERIAL_JOINT_TOLERANCE, parent.length * 0.1)) continue;
+    // The seam runs perpendicular to the limb through the joint: along the
+    // bisector of the two bones, so a bent rest pose splits the bend evenly.
+    const a = bonesStore.restWorldRotation(parent);
+    const c = bonesStore.restWorldRotation(child);
+    let nx = Math.cos(a) + Math.cos(c);
+    let ny = Math.sin(a) + Math.sin(c);
+    let length = Math.hypot(nx, ny);
+    if (length < 0.2) { nx = Math.cos(c); ny = Math.sin(c); length = 1; } // folded back on itself
+    joints.push({
+      parentId: parent.id,
+      childId: child.id,
+      head: { x: head.x, y: head.y },
+      normal: { x: nx / length, y: ny / length },
+      band: Math.min(SEAM_BAND_MAX, Math.max(SEAM_BAND_MIN,
+        SEAM_BAND_FRACTION * Math.min(parent.length, child.length))),
+      parentLength: parent.length,
+      childLength: child.length,
+      reach: 0,
+    });
+  }
+  return joints;
+}
+
+// A point in the joint's frame: s along the limb (negative on the parent's
+// side), t across it.
+function seamFrame(joint, point) {
+  const dx = point.x - joint.head.x;
+  const dy = point.y - joint.head.y;
+  return {
+    s: dx * joint.normal.x + dy * joint.normal.y,
+    t: -dx * joint.normal.y + dy * joint.normal.x,
+  };
+}
+
+function homeBone(weights) {
+  let home = null;
+  let best = 0;
+  for (const [id, weight] of Object.entries(weights)) {
+    if (weight > best) { best = weight; home = id; }
+  }
+  return home;
+}
+
+// The joint whose seam a point lies on, if any, for a vertex whose own bone
+// is `home`. A vertex on the child's side keeps the seam rule all the way
+// back across the parent's length (a hand drawn tucked into its sleeve moves
+// with the sleeve), and one on the parent's side likewise into the child's.
+function seamAt(world, home, joints) {
+  let chosen = null;
+  let chosenScore = Infinity;
+  for (const joint of joints) {
+    const isChild = joint.childId === home;
+    if (!isChild && joint.parentId !== home) continue;
+    if (!(joint.reach > 0)) continue;
+    const { s, t } = seamFrame(joint, world);
+    if (Math.abs(t) > joint.reach) continue;
+    if (isChild ? (s >= joint.band || s < -joint.parentLength) : (s <= -joint.band || s > joint.childLength)) {
+      continue;
+    }
+    const score = Math.abs(s) / joint.band;
+    if (score < chosenScore) { chosenScore = score; chosen = { joint, s }; }
+  }
+  return chosen;
+}
+
+// Weights for a point, with any joint seam it lies on taking over. The
+// seam's weights depend on nothing but the point's position, which is the
+// whole guarantee: every layer computes the same ones.
+function withSeams(world, weights, joints) {
+  if (!joints || joints.length === 0) return weights;
+  const seam = seamAt(world, homeBone(weights), joints);
+  if (!seam) return weights;
+  const { joint, s } = seam;
+  const child = smoothstep01((s + joint.band) / (2 * joint.band));
+  const out = {};
+  if (1 - child > WEIGHT_EPSILON) out[joint.parentId] = 1 - child;
+  if (child > WEIGHT_EPSILON) out[joint.childId] = child;
+  const total = Object.values(out).reduce((sum, weight) => sum + weight, 0);
+  for (const id of Object.keys(out)) out[id] /= total;
+  return out;
+}
+
+// How far across the limb this layer's seam must reach at a joint: its own
+// opaque artwork within the band, whose own bone is one of the joint's two,
+// plus `margin` -- one mesh cell, so every triangle holding seam artwork has
+// all three corners on the seam rule. Zero when the layer has no artwork
+// there, which leaves that joint out of this layer entirely.
+function seamReach(part, joint, segments, margin) {
+  const width = part.naturalWidth;
+  const height = part.naturalHeight;
+  let widest = -1;
+  for (let v = 0; v < height; v++) {
+    for (let u = 0; u < width; u++) {
+      if (part.pixels[(v * width + u) * 4 + 3] === 0) continue;
+      const world = localToWorld(part, { x: u + 0.5 - width / 2, y: v + 0.5 - height / 2 });
+      const { s, t } = seamFrame(joint, world);
+      if (Math.abs(s) > joint.band || Math.abs(t) <= widest) continue;
+      const home = homeBone(weightsFromSegments(world, segments));
+      if (home !== joint.parentId && home !== joint.childId) continue;
+      widest = Math.abs(t);
+    }
+  }
+  if (widest < 0) return 0;
+  return widest + margin + 1e-9;
+}
+
+// The bones a layer may be bound to, as segments in the REST pose.
+//
+// If the user has said which bones control this layer -- the "Controls
+// layer" choice in the bone editor -- then those are the only candidates,
+// and distance decides nothing but how the weight is shared between them.
+// Distance alone is not good enough once parts overlap, which on a character
+// they constantly do: a hand resting against the chest has a chest bone
+// closer to some of its pixels than its own hand bone. With no explicit
+// assignment there is nothing to go on but distance, and every bone is a
+// candidate. (Joint seams then add, near a joint only, the one bone jointed
+// to the layer's own; see withSeams.)
+//
+// The REST skeleton, not wherever a spring bone happens to be swinging right
+// now: the bind pose is the reference the deformation is measured against,
+// so capturing a mid-jiggle pose would leave the artwork permanently skewed
+// once the bone came back to rest. The hierarchy is taken from the WHOLE
+// rig, then narrowed to the candidates: a bone's parent may not itself be a
+// candidate (a layer assigned only to a forearm), and then that bone simply
+// has no jointed neighbour among them -- which is correct, not an error.
+function bindingSegments(part, bonesStore) {
+  const assigned = part && part.id ? bonesStore.bonesAttachedTo(part.id) : [];
+  const bones = assigned.length > 0 ? assigned : bonesStore.bones;
+  const candidateIds = new Set(bones.map((bone) => bone.id));
+  const segments = bones.map((bone) => ({
+    id: bone.id,
+    head: bonesStore.restWorldHead(bone),
+    tail: bonesStore.restWorldTail(bone),
+    rotation: bonesStore.restWorldRotation(bone),
+    parentId: bone.parentId && candidateIds.has(bone.parentId) ? bone.parentId : null,
+  }));
+  return { candidateIds, segments };
+}
+
 // The same rule, reachable from outside, for a vertex added to a mesh that
 // is already bound: it reads the bind pose the mesh was bound against, so
 // the new vertex agrees with the ones around it rather than with wherever
@@ -203,13 +422,20 @@ export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAU
   // arm. Binding now records the tail and parent, so an added vertex is
   // weighted exactly as its neighbours were. A mesh bound by an older build
   // has neither, and keeps the old head-only behaviour rather than a guess.
-  const segments = Object.entries(mesh.bindPose || {}).map(([id, pose]) => {
-    const segment = { id, head: pose.head, tail: pose.tail || pose.head, rotation: pose.rotation };
-    if ('parentId' in pose) segment.parentId = pose.parentId;
-    return segment;
-  });
+  //
+  // Bones the bind pose holds only for a joint seam are not candidates for
+  // the ordinary rule -- they were never chosen to drive this layer -- and
+  // come back in through the seam rule, exactly as they did at bind time.
+  const segments = Object.entries(mesh.bindPose || {})
+    .filter(([, pose]) => !pose.jointOnly)
+    .map(([id, pose]) => {
+      const segment = { id, head: pose.head, tail: pose.tail || pose.head, rotation: pose.rotation };
+      if ('parentId' in pose) segment.parentId = pose.parentId;
+      return segment;
+    });
   if (segments.length === 0) return {};
-  return weightsFromSegments(localToWorld(part, restLocal), segments, maxInfluences);
+  const world = localToWorld(part, restLocal);
+  return withSeams(world, weightsFromSegments(world, segments, maxInfluences), mesh.joints);
 }
 
 // Auto-weighting: every vertex is bound to its nearest few bones by
@@ -217,49 +443,16 @@ export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAU
 // Capping the influence count keeps deformation crisp -- letting every
 // bone touch every vertex produces mush.
 export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_MAX_INFLUENCES) {
-  // WHICH BONES ARE ALLOWED TO DRIVE THIS LAYER
-  //
-  // If the user has said which bones control this layer -- the "Controls
-  // layer" choice in the bone editor -- then those are the only
-  // candidates, and distance decides nothing but how the weight is shared
-  // between them.
-  //
-  // Distance alone is not good enough once parts overlap, which on a
-  // character they constantly do. A hand resting against the chest has a
-  // chest bone closer to some of its pixels than its own hand bone, so
-  // proximity would hand a slice of the hand over to the chest and the
-  // hand would then swing whenever the chest did. That is not a weighting
-  // subtlety the user can tune around; it is the wrong bone.
-  //
-  // With no explicit assignment there is nothing to go on but distance,
-  // so the old behaviour stands and every bone is a candidate. Note that a
+  // Which bones may drive this layer: see bindingSegments. Note that a
   // SPRING bone may well win a share of a layer it was never meant to
-  // drive; deformVertices below is what stops that share from jiggling.
-  const assigned = part && part.id ? bonesStore.bonesAttachedTo(part.id) : [];
-  const bones = assigned.length > 0 ? assigned : bonesStore.bones;
+  // drive; deformRaw is what stops that share from jiggling.
+  const { candidateIds, segments } = bindingSegments(part, bonesStore);
   mesh.bindPose = {};
-  if (bones.length === 0) {
+  mesh.joints = [];
+  if (segments.length === 0) {
     for (const vertex of mesh.vertices) vertex.weights = {};
     return mesh;
   }
-
-  // The REST skeleton, not wherever a spring bone happens to be swinging
-  // right now. The bind pose is the reference the deformation is measured
-  // against, so capturing a mid-jiggle pose would leave the artwork
-  // permanently skewed once the bone came back to rest -- and would break
-  // the invariant that a freshly bound part renders identically at rest.
-  // The hierarchy is taken from the WHOLE rig, then narrowed to the
-  // candidates: a bone's parent may not itself be a candidate (a layer
-  // assigned only to a forearm), and then that bone simply has no jointed
-  // neighbour among them -- which is correct, not an error.
-  const candidateIds = new Set(bones.map((bone) => bone.id));
-  const segments = bones.map((bone) => ({
-    id: bone.id,
-    head: bonesStore.restWorldHead(bone),
-    tail: bonesStore.restWorldTail(bone),
-    rotation: bonesStore.restWorldRotation(bone),
-    parentId: bone.parentId && candidateIds.has(bone.parentId) ? bone.parentId : null,
-  }));
 
   // Recorded with the tail and the parent too, so a vertex ADDED to this
   // mesh later (Mesh Trim) can be weighted by the identical rule without
@@ -273,8 +466,36 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
     };
   }
 
+  // The joint seams this layer's artwork sits on (see withSeams). Kept on
+  // the mesh, with the bind pose, so Mesh Trim, undo and a saved project all
+  // weight by the same seams the layer was bound with.
+  const cell = Math.hypot(part.naturalWidth / Math.max(1, mesh.cols),
+    part.naturalHeight / Math.max(1, mesh.rows)) * (part.scale || 1);
+  const joints = serialJoints(bonesStore, candidateIds);
+  for (const joint of joints) joint.reach = seamReach(part, joint, segments, cell);
+  mesh.joints = joints.filter((joint) => joint.reach > 0);
+  // A seam may bring in the one bone jointed to this layer's own -- the
+  // forearm, for a Hand layer. Its bind transform is needed to skin by it;
+  // `jointOnly` records that it drives this layer only through the seam.
+  for (const joint of mesh.joints) {
+    for (const id of [joint.parentId, joint.childId]) {
+      if (mesh.bindPose[id]) continue;
+      const bone = bonesStore.byId(id);
+      const head = bonesStore.restWorldHead(bone);
+      const tail = bonesStore.restWorldTail(bone);
+      mesh.bindPose[id] = {
+        head: { x: head.x, y: head.y },
+        tail: { x: tail.x, y: tail.y },
+        rotation: bonesStore.restWorldRotation(bone),
+        parentId: bone.parentId || null,
+        jointOnly: true,
+      };
+    }
+  }
+
   for (const vertex of mesh.vertices) {
-    vertex.weights = weightsFromSegments(localToWorld(part, vertex.restLocal), segments, maxInfluences);
+    const world = localToWorld(part, vertex.restLocal);
+    vertex.weights = withSeams(world, weightsFromSegments(world, segments, maxInfluences), mesh.joints);
   }
 
   return mesh;
@@ -325,9 +546,35 @@ function carryBoneOffsetIntoOrigin(part, bonesStore) {
   part.y += dy;
 }
 
+// THE COARSEST MESH THAT CAN HOLD A LAYER'S SEAMS
+//
+// A joint seam blends across a band a few pixels wide, and a mesh can only
+// express what happens at its vertices. With cells wider than the band, the
+// blend falls between vertices: one triangle then spans the seam AND the
+// artwork beside it, and drags the seam's corner toward whatever those far
+// vertices are weighted to. Measured on a one-layer jacket at its default
+// density (cells 9.3px across, the wrist band 7px): the cuff still parted
+// 4.0px from the hand. At density 10 it closed to 1.8px, at 14 to 2.0px.
+//
+// So a layer with artwork on a seam is bound at least as finely as its
+// narrowest seam needs -- one cell per band -- and never coarser than asked.
+// Capped at the density slider's own maximum. A layer with no seam artwork
+// is untouched.
+export function seamDensity(part, bonesStore) {
+  const { candidateIds, segments } = bindingSegments(part, bonesStore);
+  if (segments.length === 0) return 0;
+  const longest = Math.max(part.naturalWidth, part.naturalHeight) * (part.scale || 1);
+  let needed = 0;
+  for (const joint of serialJoints(bonesStore, candidateIds)) {
+    if (seamReach(part, joint, segments, 0) <= 0) continue;
+    needed = Math.max(needed, Math.ceil(longest / (2 * joint.band)));
+  }
+  return Math.min(MAX_DENSITY, needed);
+}
+
 export function bindPart(part, bonesStore, density) {
-  const resolved = density || defaultDensity(part);
   carryBoneOffsetIntoOrigin(part, bonesStore);
+  const resolved = Math.max(density || defaultDensity(part), seamDensity(part, bonesStore));
   part.mesh = autoWeightMesh(generateMesh(part, resolved), part, bonesStore);
   return part.mesh;
 }
@@ -485,7 +732,14 @@ function deformRaw(mesh, part, boneTransforms) {
       // that way and stayed pinned where it was imported while the rest of
       // the character was dragged off. Every bone now contributes
       // something, so that fallback stays unreachable.
-      const springElsewhere = current.physics && current.partId !== (part && part.id);
+      //
+      // A bone this layer takes ONLY through a joint seam is the exception,
+      // and is always read live. The seam exists to move exactly as the
+      // neighbouring layer moves -- and that layer, owning the bone, reads it
+      // live. Reading it rigidly here would put the two sides of the seam on
+      // two different poses of the same bone and reopen the gap whenever it
+      // swung.
+      const springElsewhere = !bind.jointOnly && current.physics && current.partId !== (part && part.id);
       const head = springElsewhere ? current.rigidHead : current.head;
       const rotation = springElsewhere ? current.rigidRotation : current.rotation;
 
@@ -521,8 +775,47 @@ export function snapToGrid(positions) {
   return positions.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) }));
 }
 
+// EXCEPT ON A JOINT SEAM.
+//
+// Two layers meeting at a joint are weighted identically across the seam
+// (withSeams), so their shared edge follows the SAME continuous line in both.
+// Rounding then pulls them apart again: each layer has its own vertices along
+// that edge, each rounded on its own, so the two snapped edges wander up to
+// half a pixel apart in opposite directions -- measured, the seam still left
+// 1-3 background pixels showing between cuff and hand in ten frames of a slow
+// wrist swing. Left unsnapped, the two edges are the one line, and a pixel
+// centre cannot fall between them.
+//
+// The band is a bend -- it stretches and turns by design -- so whole-pixel
+// stepping has nothing to protect there. And at rest an unsnapped vertex maps
+// the texture by the identity, so the art is still drawn exactly as authored.
 export function deformVerticesSnapped(mesh, part, boneTransforms) {
-  return snapToGrid(deformVertices(mesh, part, boneTransforms));
+  const positions = deformVertices(mesh, part, boneTransforms);
+  const onSeam = seamVertices(mesh, part);
+  return positions.map((p, i) => (onSeam[i] ? p : { x: Math.round(p.x), y: Math.round(p.y) }));
+}
+
+// Which vertices lie in a joint seam's band, in the bind pose. Cached
+// against the joints and the vertices, which change only on a re-bind or a
+// Mesh Trim edit.
+function seamVertices(mesh, part) {
+  const joints = mesh.joints || [];
+  if (joints.length === 0) return [];
+  const key = `${vertexSignature(mesh)}|${part.x}|${part.y}|${part.scale}|${part.rotation}`;
+  if (mesh._seamVertices && mesh._seamVerticesKey === key && mesh._seamVerticesJoints === joints) {
+    return mesh._seamVertices;
+  }
+  const flags = mesh.vertices.map((vertex) => {
+    const world = localToWorld(part, vertex.restLocal);
+    return joints.some((joint) => {
+      const { s, t } = seamFrame(joint, world);
+      return Math.abs(s) < joint.band && Math.abs(t) <= joint.reach;
+    });
+  });
+  mesh._seamVertices = flags;
+  mesh._seamVerticesKey = key;
+  mesh._seamVerticesJoints = joints;
+  return flags;
 }
 
 // ---------------------------------------------------------------------------
@@ -559,47 +852,66 @@ export function deformVerticesSnapped(mesh, part, boneTransforms) {
 // to shrink that neighbourhood.
 
 //
-// Per-vertex pin influence, cached against the layer's pin version: pins
-// change on a tap, the mesh's rest shape never does, so this is computed
-// when the pin set actually changes rather than every frame.
-export function pinInfluence(mesh, part) {
-  const version = part.pinsVersion || 0;
-  if (mesh._pinInfluence && mesh._pinInfluenceVersion === version) return mesh._pinInfluence;
+// HOW WIDE THE TRANSITION IS -- AND WHY IT IS NOT A CONSTANT
+//
+// The band between held artwork and free artwork is the only thing that
+// bridges the two, so it absorbs the WHOLE difference between where the pin
+// holds a vertex and where the bone would put it. Spread over a width w, a
+// difference D stretches neighbouring texels apart by roughly D / w each.
+//
+// Any FIXED width therefore tears at some swing. One cell (about six texels
+// on a default mesh) held at the default spring -- measured 1.3px worst
+// between a pinned texel and its neighbour at 17 degrees of lag -- and tore
+// at the loosest spring the sliders allow: 55 degrees of lag on a slow sway,
+// whole turns on a throw, pinned and unpinned texels landing 4.4px apart and
+// the hair peeling off the pinned scalp as a separate cap.
+//
+// Widening it to a fixed three cells was tried and reverted, correctly: for
+// a thin pinned stripe, which touches a staircase of cells right across a
+// layer, three cells at ALL times held 73% of a layer instead of 30%, even
+// at rest, where there was no shear to absorb.
+//
+// Both measurements say the same thing: the width has to follow the pull,
+// not be chosen once. So it is one cell -- exactly as before -- whenever the
+// bones are barely pulling on the pins, and widens in proportion to the pull
+// when they pull hard (deformVertices, PIN_BAND_PER_PULL). A layer at rest,
+// or on a stiff spring, is held exactly as tightly as it always was; a layer
+// being whirled round on a loose one bends away from its pins over a
+// distance long enough to carry the bend instead of tearing at the edge.
+
+// Texels of transition band per scene pixel the bones are pulling the held
+// region away from its pins. 1.5 keeps the smoothstep's steepest slope -- 1.5x
+// its average -- to about one extra pixel of stretch per pixel crossed, which
+// is where nearest-neighbour texels stop reading as detached.
+const PIN_BAND_PER_PULL = 1.5;
+
+// A cheap fingerprint of a mesh's rest shape, for caches that must notice
+// Mesh Trim editing the vertex list in place: a vertex added or removed
+// changes the count, one dragged changes the sums.
+function vertexSignature(mesh) {
+  let sumX = 0;
+  let sumY = 0;
+  for (const vertex of mesh.vertices) { sumX += vertex.restLocal.x; sumY += vertex.restLocal.y; }
+  return `${mesh.vertices.length}|${sumX}|${sumY}`;
+}
+
+// Distance from every vertex to the nearest held cell, in texels. Pins change
+// on a tap and the rest shape only under Mesh Trim, so this is computed when
+// either actually changes rather than every frame; the per-frame band width
+// is applied on top in pinInfluence. `cell` is one mesh cell, the narrowest
+// band.
+function pinDistances(mesh, part) {
+  // Keyed on the mesh's vertices as well as the pins: Mesh Trim adds, moves
+  // and removes vertices IN PLACE, and a cache keyed on the pins alone would
+  // then hand back an array for a different mesh -- the wrong length, so a
+  // new vertex read an undefined influence and deformed to NaN.
+  const key = `${part.pinsVersion || 0}|${vertexSignature(mesh)}`;
+  if (mesh._pinDistances && mesh._pinDistancesKey === key) return mesh._pinDistances;
 
   const width = part.naturalWidth;
   const height = part.naturalHeight;
   const cellW = width / Math.max(1, mesh.cols);
   const cellH = height / Math.max(1, mesh.rows);
-  // The width of the transition band, in texels.
-  //
-  // This was ONE mesh cell, and that is what made a pinned layer look torn
-  // during a Free-Move drag. The band is the only thing bridging held
-  // artwork and artwork that has swung away with its bone, so it has to
-  // absorb the WHOLE difference between them. One cell can do that while
-  // the difference is small -- at the 5-30 degrees a debug slider produces,
-  // which is what pins were originally verified against, the band stretches
-  // by at most its own width and nothing shows. A real drag is not small: a
-  // spring bone trails its rigid parent by a measured 58 degrees on a
-  // moderate throw and 137 on an abrupt one, which asks that single cell to
-  // span 1.9x to 3.7x its own width. Stretched that far, nearest-neighbour
-  // sampling smears a handful of texels across dozens of cells, and the
-  // boundary reads as jagged pixels detaching from their neighbours.
-  //
-  // Widening the band was tried and REVERTED, and the reason is worth
-  // keeping: spreading the shear over three cells does divide the stretch
-  // by three, but how much of the layer that holds depends entirely on the
-  // SHAPE of the pin. For a fat band it is a few percent. For a thin stripe
-  // -- a line traced along a silhouette edge, which is how pins actually
-  // get painted -- the stripe already touches a staircase of cells all the
-  // way across the layer, and widening its band took the held fraction from
-  // 30% to 73% of a 128x128 layer's vertices. That does not reduce shear,
-  // it relocates it: most of the layer goes rigid and everything still free
-  // shears against a much bigger held mass.
-  //
-  // So the band stays at one cell, which is what the mesh can actually
-  // express, and the real lever for a layer that needs finer pin control
-  // stays the one the note below names: raise Mesh density in Bind mode.
-  const radius = Math.max(1, Math.max(cellW, cellH));
 
   // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
   // what its vertices can express, and the vertices are cell corners -- so
@@ -619,7 +931,7 @@ export function pinInfluence(mesh, part) {
     return [cu * cellW, cv * cellH, (cu + 1) * cellW, (cv + 1) * cellH];
   });
 
-  const influence = mesh.vertices.map((vertex) => {
+  const distances = mesh.vertices.map((vertex) => {
     // The vertex in texel coordinates; pins are texel-indexed.
     const u = vertex.restLocal.x + width / 2;
     const v = vertex.restLocal.y + height / 2;
@@ -633,13 +945,33 @@ export function pinInfluence(mesh, part) {
       if (d < nearest) nearest = d;
       if (nearest === 0) break;
     }
-    if (nearest === Infinity) return 0;
-    const t = Math.max(0, Math.min(1, 1 - nearest / radius));
-    return t * t * (3 - 2 * t); // smoothstep: no crease at either end
+    return nearest;
   });
 
-  mesh._pinInfluence = influence;
-  mesh._pinInfluenceVersion = version;
+  mesh._pinDistances = { distances, cell: Math.max(1, Math.max(cellW, cellH)) };
+  mesh._pinDistancesKey = key;
+  return mesh._pinDistances;
+}
+
+// Per-vertex pin influence in 0..1: 1 on held cells, easing to 0 across a
+// band `radius` texels wide (never narrower than one mesh cell). With no
+// radius given it is the one-cell band -- the influence at rest, which is
+// also what the pierce solver masks by.
+export function pinInfluence(mesh, part, radius = 0) {
+  const { distances, cell } = pinDistances(mesh, part);
+  const band = Math.max(cell, radius);
+  if (band === cell && mesh._pinInfluence && mesh._pinInfluenceFor === mesh._pinDistances) {
+    return mesh._pinInfluence;
+  }
+  const influence = distances.map((nearest) => {
+    if (nearest === Infinity) return 0;
+    const t = Math.max(0, Math.min(1, 1 - nearest / band));
+    return t * t * (3 - 2 * t); // smoothstep: no crease at either end
+  });
+  if (band === cell) {
+    mesh._pinInfluence = influence;
+    mesh._pinInfluenceFor = mesh._pinDistances;
+  }
   return influence;
 }
 
@@ -668,21 +1000,37 @@ export function deformVertices(mesh, part, boneTransforms) {
 
   if (!part || !part.pins || part.pins.size === 0) return out;
 
-  const influence = pinInfluence(mesh, part);
   // Pinned artwork holds still relative to its LAYER, not to the canvas:
   // a Free-Move drag or a rigid/pivot chain still carries it, and this is
   // how far it has been carried.
   const carriage = pinCarriageOffset(part, boneTransforms);
+  const anchors = mesh.vertices.map((vertex) => {
+    const rest = localToWorld(part, vertex.restLocal);
+    return { x: rest.x + carriage.x, y: rest.y + carriage.y };
+  });
+
+  // How hard the bones are pulling the held region off its pins right now:
+  // the furthest any fully held vertex would have gone without them. Read
+  // from the skinned result BEFORE the pins act, so it measures the pull and
+  // cannot feed back on itself. The band widens with it (see the note on
+  // pinInfluence); a pull of a pixel or two leaves it at its one-cell rest
+  // width, exactly as it has always been.
+  const atRest = pinInfluence(mesh, part);
+  let pull = 0;
+  for (let i = 0; i < out.length; i++) {
+    if (atRest[i] < 1) continue;
+    const d = Math.hypot(out[i].x - anchors[i].x, out[i].y - anchors[i].y);
+    if (d > pull) pull = d;
+  }
+  const scale = part.scale || 1;
+  const influence = pinInfluence(mesh, part, (PIN_BAND_PER_PULL * pull) / scale);
 
   for (let i = 0; i < out.length; i++) {
     const k = influence[i];
     if (k <= 0) continue;
-    const rest = localToWorld(part, mesh.vertices[i].restLocal);
-    const anchorX = rest.x + carriage.x;
-    const anchorY = rest.y + carriage.y;
     out[i] = {
-      x: out[i].x + (anchorX - out[i].x) * k,
-      y: out[i].y + (anchorY - out[i].y) * k,
+      x: out[i].x + (anchors[i].x - out[i].x) * k,
+      y: out[i].y + (anchors[i].y - out[i].y) * k,
     };
   }
   return out;

@@ -900,12 +900,28 @@ function handleAutoWeight() {
     return;
   }
 
+  const requested = Number(els.densitySlider.value);
   history.run('Auto-weight', () => {
-    bindPart(part, bonesStore, Number(els.densitySlider.value));
+    bindPart(part, bonesStore, requested);
     partsStore.notifyTransformed();
   });
+  const refined = showBoundDensity(part, requested);
   renderChrome();
-  showToast(`Auto-weighted "${part.name}" (${part.mesh.vertices.length} vertices).`);
+  showToast(`Auto-weighted "${part.name}" (${part.mesh.vertices.length} vertices)${refined}.`);
+}
+
+// Binding may build a finer mesh than the slider asked for: a layer with
+// artwork on a joint seam needs at least one cell per seam band, or the seam
+// can open (mesh.js, seamDensity). The slider then shows the density the
+// mesh was actually built at, and the toast says why, rather than the
+// slider quietly claiming a mesh that does not exist.
+function showBoundDensity(part, requested) {
+  const built = part.mesh ? part.mesh.density : requested;
+  if (built === requested) return '';
+  els.densitySlider.value = String(built);
+  els.densityValue.textContent = String(built);
+  densitySyncedFor = part.id;
+  return ` — mesh density raised to ${built} so its joints stay joined`;
 }
 
 function handleDensityInput() {
@@ -920,9 +936,11 @@ function handleDensityChange() {
   // The density slider's own capture (registered first in bindEvents)
   // already brackets this interaction, so the rebuild must not open a
   // second entry of its own.
-  bindPart(part, bonesStore, Number(els.densitySlider.value));
+  const requested = Number(els.densitySlider.value);
+  bindPart(part, bonesStore, requested);
   partsStore.notifyTransformed();
-  showToast('Mesh rebuilt at the new density — weights were auto-assigned again.');
+  const refined = showBoundDensity(part, requested);
+  showToast(`Mesh rebuilt at the new density — weights were auto-assigned again${refined}.`);
 }
 
 function handleBrushInput() {

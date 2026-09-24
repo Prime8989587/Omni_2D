@@ -50,10 +50,37 @@ function serializeMesh(mesh) {
         // by an older build round-trips unchanged.
         if (pose.tail) out.tail = { x: pose.tail.x, y: pose.tail.y };
         if ('parentId' in pose) out.parentId = pose.parentId;
+        if (pose.jointOnly) out.jointOnly = true;
         return [boneId, out];
       })
     ),
+    // The joint seams the layer was bound with (mesh.js, withSeams). This
+    // same function serves undo, so dropping them here would quietly unbind
+    // the seams on the first undo, not just on the next load.
+    joints: (mesh.joints || []).map(copyJoint),
   };
+}
+
+function copyJoint(joint) {
+  return {
+    parentId: joint.parentId,
+    childId: joint.childId,
+    head: { x: joint.head.x, y: joint.head.y },
+    normal: { x: joint.normal.x, y: joint.normal.y },
+    band: joint.band,
+    parentLength: joint.parentLength,
+    childLength: joint.childLength,
+    reach: joint.reach,
+  };
+}
+
+// A joint from a file is outside data: keep it only if every number in it
+// is usable, rather than let one bad field put NaN into a seam's weights.
+function validJoint(joint) {
+  if (!joint || typeof joint.parentId !== 'string' || typeof joint.childId !== 'string') return false;
+  const numbers = [joint.head?.x, joint.head?.y, joint.normal?.x, joint.normal?.y,
+    joint.band, joint.parentLength, joint.childLength, joint.reach];
+  return numbers.every((n) => Number.isFinite(n)) && joint.band > 0;
 }
 
 function deserializeMesh(data) {
@@ -78,9 +105,13 @@ function deserializeMesh(data) {
       const out = { head: { x: pose.head.x, y: pose.head.y }, rotation: pose.rotation };
       if (pose.tail) out.tail = { x: pose.tail.x, y: pose.tail.y };
       if ('parentId' in pose) out.parentId = pose.parentId;
+      if (pose.jointOnly) out.jointOnly = true;
       return [boneId, out];
     })
   );
+  // A mesh bound before seams existed has none, and behaves exactly as it
+  // did -- re-running Auto-weight is what gives it seams.
+  mesh.joints = (Array.isArray(data.joints) ? data.joints : []).filter(validJoint).map(copyJoint);
   return mesh;
 }
 
