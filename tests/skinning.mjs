@@ -98,28 +98,87 @@ const restArea = meshArea(part.mesh, deformVertices(part.mesh, part, transformsA
 say(restArea > 0, 'the test mesh has a real area to start with', `${restArea.toFixed(1)}`);
 
 // ---------------------------------------------------------------------------
-// The headline: area is preserved at every angle, including the ones that
-// used to destroy it.
+// The headline: the implementation IS the stated formula,
+//   v' = sum_i w_i * M_now,i * inv(M_bind,i) * v
+// checked against an independent reference at every angle.
+//
+// This section used to assert that AREA was preserved at every angle, for a
+// "transform blending" that averaged rotations about scene (0,0). Those
+// checks passed only because every bone here sits exactly AT (0,0) -- the
+// one layout where that pivot and the joint coincide. Away from the origin
+// the same blend inflated a bent elbow to 573% of its area. So the checks
+// below test the formula itself, and origin invariance separately.
 
-for (const deg of [0, 15, 30, 58, 90, 128, 179]) {
-  const area = meshArea(part.mesh, deformVertices(part.mesh, part, transformsAt(0, deg)));
-  const kept = area / restArea;
-  const lbsWouldKeep = Math.cos(deg * Math.PI / 360) ** 2;
-  say(Math.abs(kept - 1) < 0.02,
-    `area is preserved with the bones ${deg} degrees apart`,
-    `kept ${(kept * 100).toFixed(1)}%  (the old linear blend kept ${(lbsWouldKeep * 100).toFixed(0)}%)`);
+function reference(vertex, transforms) {
+  const vx = vertex.restLocal.x + part.centerX;
+  const vy = vertex.restLocal.y + part.centerY;
+  let x = 0; let y = 0; let t = 0;
+  for (const [id, w] of Object.entries(vertex.weights)) {
+    const bind = part.mesh.bindPose[id];
+    const now = transforms[id];
+    const a = now.rotation - bind.rotation;
+    const dx = vx - bind.head.x; const dy = vy - bind.head.y;
+    x += w * (dx * Math.cos(a) - dy * Math.sin(a) + now.head.x);
+    y += w * (dx * Math.sin(a) + dy * Math.cos(a) + now.head.y);
+    t += w;
+  }
+  return { x: x / t, y: y / t };
 }
 
-// 180 degrees exactly: the mean rotation is genuinely undefined, so the
-// heaviest bone decides. It must still produce a real, un-collapsed layer
-// rather than NaN or a point.
+for (const deg of [0, 15, 30, 58, 90, 128, 179]) {
+  const tr = transformsAt(0, deg);
+  const positions = deformVertices(part.mesh, part, tr);
+  let worst = 0;
+  part.mesh.vertices.forEach((vertex, i) => {
+    const r = reference(vertex, tr);
+    worst = Math.max(worst, Math.hypot(positions[i].x - r.x, positions[i].y - r.y));
+  });
+  near(worst, 0, 1e-9, `with the bones ${deg} degrees apart it equals sum w_i M_now inv(M_bind) v`,
+    `worst ${worst.toExponential(2)} px off the reference`);
+}
+
+// Linear blending's known cost, stated rather than hidden: a vertex split
+// EVENLY between two bones an angle theta apart keeps cos^2(theta/2) of its
+// area. This mesh is the worst case -- 50/50 on every vertex -- which real
+// auto-weights never are (a realistic falloff across a joint keeps 88.5% at
+// 90 degrees, not the 50% below).
+for (const deg of [30, 90]) {
+  const area = meshArea(part.mesh, deformVertices(part.mesh, part, transformsAt(0, deg)));
+  const expected = Math.cos(deg * Math.PI / 360) ** 2;
+  near(area / restArea, expected, 1e-9,
+    `a 50/50 vertex set ${deg} degrees apart keeps exactly cos^2(theta/2) of its area, as the formula says`,
+    `kept ${((area / restArea) * 100).toFixed(1)}%, formula ${(expected * 100).toFixed(1)}%`);
+}
+
+// ORIGIN INVARIANCE -- the property the old blend failed. Same pose, the
+// whole scene moved: every vertex must move by exactly that and no more.
+{
+  const S = 300;
+  const shiftT = (t) => Object.fromEntries(Object.entries(t).map(([id, v]) => [id, {
+    ...v, head: { x: v.head.x + S, y: v.head.y + S }, rigidHead: { x: v.rigidHead.x + S, y: v.rigidHead.y + S },
+  }]));
+  const moved = { ...part, x: part.x + S, y: part.y + S,
+    get centerX() { return part.centerX + S; }, get centerY() { return part.centerY + S; } };
+  const savedBind = part.mesh.bindPose;
+  const base = deformVertices(part.mesh, part, transformsAt(10, 100));
+  part.mesh.bindPose = Object.fromEntries(Object.entries(savedBind).map(([id, b]) => [id,
+    { ...b, head: { x: b.head.x + S, y: b.head.y + S } }]));
+  const shifted = deformVertices(part.mesh, moved, shiftT(transformsAt(10, 100)));
+  part.mesh.bindPose = savedBind;
+  let worst = 0;
+  base.forEach((p, i) => { worst = Math.max(worst, Math.hypot(shifted[i].x - S - p.x, shifted[i].y - S - p.y)); });
+  near(worst, 0, 1e-9, 'ORIGIN INVARIANT: the same pose moved 300px lands exactly 300px away, nothing more',
+    `worst ${worst.toExponential(2)} px of drift (the old blend: tens to hundreds)`);
+}
+
+// 180 degrees exactly, 50/50: the formula's own degenerate case -- each
+// vertex's two candidate positions are mirror images through the joint and
+// average onto it. That is what the formula says; it must still produce
+// FINITE positions, never NaN.
 {
   const positions = deformVertices(part.mesh, part, transformsAt(0, 180));
-  const area = meshArea(part.mesh, positions);
   say(positions.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)),
     'a clean 180-degree opposition still produces finite positions');
-  say(Math.abs(area / restArea - 1) < 0.02,
-    'and it does not collapse the layer', `kept ${((area / restArea) * 100).toFixed(1)}%`);
 }
 
 // ---------------------------------------------------------------------------
@@ -175,17 +234,29 @@ for (const deg of [0, 15, 30, 58, 90, 128, 179]) {
 
 {
   for (const vertex of part.mesh.vertices) vertex.weights = { A: 0.9, B: 0.1 };
-  const positions = deformVertices(part.mesh, part, transformsAt(0, 120));
+  const tr = transformsAt(0, 120);
+  const positions = deformVertices(part.mesh, part, tr);
   const area = meshArea(part.mesh, positions);
-  say(Math.abs(area / restArea - 1) < 0.02,
-    'a 90/10 split across a 120-degree gap keeps its area too',
-    `kept ${((area / restArea) * 100).toFixed(1)}%`);
+  // The blended linear part is 0.9*I + 0.1*R(120deg); its determinant is
+  // the area factor, exactly.
+  const c = Math.cos(120 * Math.PI / 180); const sn = Math.sin(120 * Math.PI / 180);
+  const det = (0.9 + 0.1 * c) ** 2 + (0.1 * sn) ** 2;
+  near(area / restArea, det, 1e-9,
+    'a 90/10 split across a 120-degree gap keeps exactly the area the formula predicts',
+    `kept ${((area / restArea) * 100).toFixed(1)}%, formula ${(det * 100).toFixed(1)}%`);
 
-  // The blended rotation should sit near the heavy bone, not halfway.
-  const meanDeg = Math.atan2(0.1 * Math.sin(120 * Math.PI / 180), 0.9 + 0.1 * Math.cos(120 * Math.PI / 180)) * 180 / Math.PI;
-  say(meanDeg > 0 && meanDeg < 20,
-    'and the blended rotation leans to the heavier bone rather than splitting the difference',
-    `${meanDeg.toFixed(1)} degrees`);
+  // The heavier bone dominates: each vertex lands far closer to where bone
+  // A alone would put it than to where B would.
+  let closerToHeavy = 0;
+  part.mesh.vertices.forEach((vertex, i) => {
+    const onlyA = reference({ ...vertex, weights: { A: 1 } }, tr);
+    const onlyB = reference({ ...vertex, weights: { B: 1 } }, tr);
+    const p = positions[i];
+    if (Math.hypot(p.x - onlyA.x, p.y - onlyA.y) <= Math.hypot(p.x - onlyB.x, p.y - onlyB.y)) closerToHeavy++;
+  });
+  say(closerToHeavy === part.mesh.vertices.length,
+    'and every vertex sits nearer the heavier bone\'s answer than the lighter one\'s',
+    `${closerToHeavy}/${part.mesh.vertices.length}`);
 }
 
 // ---------------------------------------------------------------------------

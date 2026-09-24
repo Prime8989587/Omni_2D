@@ -129,8 +129,29 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
 // Lifted out so that a vertex added to an existing mesh later -- by the
 // Mesh Trim tool -- is weighted by exactly this calculation rather than by
 // a second copy of it that could drift away from this one.
+//
+// INFLUENCE STAYS ON THE LIMB
+//
+// Distance alone does not know anatomy. With the arms hanging, a hand sits
+// beside its own thigh, and the thigh is close enough to win a share of it:
+// measured, hand vertices carried up to 4.2% thigh weight, so a kick moved
+// the hand. Nothing about the distances is wrong -- the thigh really is that
+// close. What is wrong is asking the question of every bone in the rig.
+//
+// So a vertex is first given to the bone it sits on (the nearest segment),
+// and may then blend only with the bones JOINTED DIRECTLY to that one: its
+// parent and its children. That is where skin genuinely shares motion -- at
+// a joint, between two segments that meet there -- and it rules out a hand
+// ever answering to a thigh, a torso or the other arm, however near they
+// happen to be drawn. A shoulder vertex still blends torso and upper arm; an
+// elbow vertex still blends upper arm and forearm.
+//
+// Segments carry `parentId` for this. When NONE of them does -- a mesh bound
+// by an older build, whose bind pose never recorded the hierarchy -- there is
+// no topology to go on and the rule falls back to plain distance, exactly as
+// it always was, rather than guessing at a skeleton it cannot see.
 function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUENCES) {
-  const ranked = segments
+  const measured = segments
     .map((segment) => ({
       id: segment.id,
       distance: Math.max(
@@ -138,8 +159,19 @@ function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUE
         distanceToSegment(world.x, world.y, segment.head.x, segment.head.y, segment.tail.x, segment.tail.y)
       ),
     }))
-    .sort((a, b) => a.distance - b.distance)
-    .slice(0, maxInfluences);
+    .sort((a, b) => a.distance - b.distance);
+  if (measured.length === 0) return {};
+
+  let candidates = measured;
+  if (segments.some((segment) => 'parentId' in segment)) {
+    const home = measured[0].id;
+    const homeSegment = segments.find((segment) => segment.id === home);
+    const jointed = new Set([home]);
+    if (homeSegment && homeSegment.parentId) jointed.add(homeSegment.parentId);
+    for (const segment of segments) if (segment.parentId === home) jointed.add(segment.id);
+    candidates = measured.filter((entry) => jointed.has(entry.id));
+  }
+  const ranked = candidates.slice(0, maxInfluences);
 
   const raw = ranked.map((entry) => ({ id: entry.id, weight: 1 / entry.distance ** FALLOFF_EXPONENT }));
   const total = raw.reduce((sum, entry) => sum + entry.weight, 0);
@@ -159,17 +191,23 @@ function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUE
 // the new vertex agrees with the ones around it rather than with wherever
 // the bones happen to be swinging now.
 export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAULT_MAX_INFLUENCES) {
-  const segments = Object.entries(mesh.bindPose || {}).map(([id, pose]) => ({
-    id,
-    head: pose.head,
-    // A bind pose stores the head and the rotation, not the tail; the tail
-    // is that rotation carried out along the bone's own length. Length is
-    // not stored per bone here, so the segment degenerates to its head --
-    // which is exactly right for the distance rule, since a head-only
-    // segment measures straight-line distance to the joint.
-    tail: pose.head,
-    rotation: pose.rotation,
-  }));
+  // The SAME segments autoWeightMesh measured against, read back from the
+  // bind pose: head AND tail, and the hierarchy.
+  //
+  // This used to measure to the bone's head alone, because the bind pose
+  // did not store a tail -- and its comment called that "exactly right".
+  // It was not. A point near a bone's far end is close to the bone but far
+  // from its head, and close to the head of the CHILD that starts there. A
+  // vertex added 0.3px from the upper arm, near the elbow, came out 95%
+  // forearm, 3% thigh and 2% upper arm, where the full rule gives 97% upper
+  // arm. Binding now records the tail and parent, so an added vertex is
+  // weighted exactly as its neighbours were. A mesh bound by an older build
+  // has neither, and keeps the old head-only behaviour rather than a guess.
+  const segments = Object.entries(mesh.bindPose || {}).map(([id, pose]) => {
+    const segment = { id, head: pose.head, tail: pose.tail || pose.head, rotation: pose.rotation };
+    if ('parentId' in pose) segment.parentId = pose.parentId;
+    return segment;
+  });
   if (segments.length === 0) return {};
   return weightsFromSegments(localToWorld(part, restLocal), segments, maxInfluences);
 }
@@ -210,17 +248,28 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
   // against, so capturing a mid-jiggle pose would leave the artwork
   // permanently skewed once the bone came back to rest -- and would break
   // the invariant that a freshly bound part renders identically at rest.
+  // The hierarchy is taken from the WHOLE rig, then narrowed to the
+  // candidates: a bone's parent may not itself be a candidate (a layer
+  // assigned only to a forearm), and then that bone simply has no jointed
+  // neighbour among them -- which is correct, not an error.
+  const candidateIds = new Set(bones.map((bone) => bone.id));
   const segments = bones.map((bone) => ({
     id: bone.id,
     head: bonesStore.restWorldHead(bone),
     tail: bonesStore.restWorldTail(bone),
     rotation: bonesStore.restWorldRotation(bone),
+    parentId: bone.parentId && candidateIds.has(bone.parentId) ? bone.parentId : null,
   }));
 
+  // Recorded with the tail and the parent too, so a vertex ADDED to this
+  // mesh later (Mesh Trim) can be weighted by the identical rule without
+  // consulting the live rig, which may have moved on since.
   for (const segment of segments) {
     mesh.bindPose[segment.id] = {
       head: { x: segment.head.x, y: segment.head.y },
+      tail: { x: segment.tail.x, y: segment.tail.y },
       rotation: segment.rotation,
+      parentId: segment.parentId,
     };
   }
 
@@ -283,6 +332,28 @@ export function bindPart(part, bonesStore, density) {
   return part.mesh;
 }
 
+// The weight invariant, applied to a weight set of unknown provenance:
+// every weight finite and positive, the set summing to 1, or empty. Used
+// where weights arrive from OUTSIDE this module's own arithmetic -- a saved
+// project, which may be hand-edited, shared, or written by an older build --
+// so nothing downstream ever has to wonder whether the numbers it was handed
+// obey the rule. Non-positive and non-numeric entries are dropped rather
+// than clamped: a negative weight has no meaning to recover, and keeping it
+// as 0 would only leave an empty key behind.
+export function sanitizeWeights(weights) {
+  const out = {};
+  let total = 0;
+  for (const [id, raw] of Object.entries(weights || {})) {
+    const w = Number(raw);
+    if (!Number.isFinite(w) || w <= 0) continue;
+    out[id] = w;
+    total += w;
+  }
+  if (total <= 0) return {};
+  for (const id of Object.keys(out)) out[id] /= total;
+  return out;
+}
+
 function normalizeWeights(vertex) {
   const total = Object.values(vertex.weights).reduce((sum, weight) => sum + weight, 0);
   if (total <= 0) return;
@@ -324,47 +395,53 @@ export function applyWeightDelta(vertex, boneId, delta) {
   normalizeWeights(vertex);
 }
 
-// Skinning: blend the bones' TRANSFORMS, not the positions they produce.
+// Skinning: the inverse bind transform, blended LINEARLY.
 //
-// WHY NOT THE OBVIOUS WAY
+//   v' = sum_i w_i * M_now,i * inv(M_bind,i) * v
 //
-// The obvious way -- and what this did originally -- is linear blend
-// skinning: ask each influencing bone where it would carry the vertex, and
-// average those answers.
+// M_bind,i is bone i's world transform AT BIND TIME, stored per mesh in
+// mesh.bindPose when the layer was bound and never touched by posing.
+// inv(M_bind,i) takes the rest vertex into that bone's own frame as it was
+// then; M_now,i carries it back out along wherever the bone is now. So each
+// term is "where this bone has MOVED the vertex since binding", and a bone
+// that has not moved hands the vertex back exactly where it started.
 //
-//   deformed = sum_b w_b * ( R(theta_b_now - theta_b_bind) * (p - head_b_bind) + head_b_now )
+// For one bone, in 2D, that term is
 //
-// That is correct only while the bones roughly agree. Average two POSITIONS
-// produced by rotations an angle apart and the answer lands on the chord
-// between them rather than on the arc, so the vertex falls toward the
-// pivot: the layer keeps cos^2(theta/2) of its area, and at 180 degrees it
-// collapses to a point. This is the classic "candy wrapper" of linear blend
-// skinning, and the numbers are brutal -- 93% of the area left at 30
-// degrees, 50% at 90, 19% at 128.
+//   R(theta_now - theta_bind) * (v - head_bind) + head_now
 //
-// Which is fine at a debug slider's pace and catastrophic during a real
-// drag. A spring bone LAGS its rigid parent by however hard the character
-// was thrown: a measured 58 degrees on a moderate Free-Move drag and 128 on
-// an abrupt one. Any vertex auto-weighted across both -- which is most of
-// them -- was being crushed to a fraction of its size every time the
-// character was flung about, which is what read on screen as a layer
-// tearing into jagged, detached pieces. A pinned band made it plainer
-// still: the pins held their pixels exactly where they belonged (they were
-// never the broken part) against a neighbourhood that was collapsing
-// around them, so the pinned artwork looked like it was detaching from
-// everything next to it.
+// and the weighted SUM of those terms is the whole formula. It is an affine
+// combination of affine maps with weights summing to 1, which is what makes
+// it independent of where scene (0,0) happens to be.
 //
-// So blend the MOTIONS and apply the result once. Each bone contributes a
-// rigid motion -- a rotation delta and a translation -- the rotations are
-// averaged as angles (a weighted circular mean) and the translations as
-// vectors. A blend of rigid motions built this way is ITSELF rigid, so it
-// cannot lose area at any angle, however far the bones disagree. Where the
-// bones do agree it reduces to exactly the old formula, so nothing that
-// worked before moves by so much as a pixel.
+// WHY THIS REPLACED THE "TRANSFORM BLENDING" THAT WAS HERE
 //
-// With no bone moved, every delta is zero and every translation is zero, so
-// the mesh sits exactly at rest and renders identically to the undeformed
-// sprite.
+// This briefly blended the bones' motions instead: a circular mean of the
+// rotation deltas plus a mean of the translations, applied once. The aim was
+// to avoid linear blending's thinning at a strongly bent joint. It was
+// wrong, and wrong in a way its own tests could not see. Each bone's motion
+// was written as "rotate about the ORIGIN, then translate", so averaging
+// them averaged rotations about scene (0,0) -- an arbitrary point, often
+// hundreds of pixels from the joint. Measured on an elbow away from the
+// origin, a vertex shared by two bones:
+//
+//   same pose, character moved +300px      122.8px of error (should be 0)
+//   joint area, forearm bent 58 / 90 / 128  142% / 281% / 573% (should be ~100)
+//
+// -- vertices flung outward along arcs about a point nowhere near the bone,
+// growing with distance from the canvas origin and with the bend. Its tests
+// put both bone heads exactly AT (0,0), the one layout where the pivot and
+// the joint coincide and the error vanishes.
+//
+// The linear blend, on the same elbow: 0.0000px of origin error, exact for
+// every single-bone vertex, and joint area 98.5% / 94.6% / 88.5% / 81.4% at
+// 30 / 58 / 90 / 128 degrees with a realistic weight falloff across the
+// joint. That thinning at a hard bend is the known, bounded behaviour of
+// standard linear blend skinning -- a very different thing from a layer
+// inflating five-fold.
+//
+// With no bone moved, every term is the vertex itself, so the mesh sits
+// exactly at rest and renders identically to the undeformed sprite.
 function deformRaw(mesh, part, boneTransforms) {
   const out = new Array(mesh.vertices.length);
 
@@ -372,21 +449,12 @@ function deformRaw(mesh, part, boneTransforms) {
     const vertex = mesh.vertices[i];
     const rest = localToWorld(part, vertex.restLocal);
 
-    // The circular mean is accumulated as a vector -- summing the angles
-    // directly would be wrong the moment one crosses +/-pi.
-    let sumCos = 0;
-    let sumSin = 0;
-    let tx = 0;
-    let ty = 0;
+    let x = 0;
+    let y = 0;
     let totalWeight = 0;
-    // The fallback if the rotations cancel exactly (two bones a clean 180
-    // degrees apart, equally weighted). The mean direction is genuinely
-    // undefined there, so the heaviest bone decides rather than the
-    // vertex jumping to whatever atan2(0, 0) happens to return.
-    let heaviest = null;
-    let heaviestWeight = -1;
 
     for (const [boneId, weight] of Object.entries(vertex.weights)) {
+      if (!(weight > 0)) continue;
       const bind = mesh.bindPose[boneId];
       const current = boneTransforms[boneId];
       // A bone deleted since binding simply drops out; the remaining
@@ -421,42 +489,24 @@ function deformRaw(mesh, part, boneTransforms) {
       const head = springElsewhere ? current.rigidHead : current.head;
       const rotation = springElsewhere ? current.rigidRotation : current.rotation;
 
+      // inv(M_bind): into the bone's frame as it was at bind time...
+      const dx = rest.x - bind.head.x;
+      const dy = rest.y - bind.head.y;
+      // ...then M_now: turned by how far the bone has rotated since, and
+      // carried to where its head is now.
       const angle = rotation - bind.rotation;
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-
-      // This bone's motion written as "rotate about the origin, then
-      // translate" rather than "rotate about the bind head": the same map,
-      // in the form the two halves can be averaged separately.
-      //   p -> R(angle) * p + t,  where t = head - R(angle) * bindHead
-      sumCos += weight * cos;
-      sumSin += weight * sin;
-      tx += weight * (head.x - (bind.head.x * cos - bind.head.y * sin));
-      ty += weight * (head.y - (bind.head.x * sin + bind.head.y * cos));
+      x += weight * (dx * cos - dy * sin + head.x);
+      y += weight * (dx * sin + dy * cos + head.y);
       totalWeight += weight;
-
-      if (weight > heaviestWeight) {
-        heaviestWeight = weight;
-        heaviest = angle;
-      }
     }
 
-    if (totalWeight <= 0) {
-      out[i] = rest;
-      continue;
-    }
-
-    // The mean rotation, and the mean translation, applied ONCE. Both sums
-    // are divided by the same total weight, which is what renormalizes a
-    // vertex whose bones do not sum to 1 (one having been deleted since
-    // binding, say).
-    const meanAngle = (sumCos === 0 && sumSin === 0) ? heaviest : Math.atan2(sumSin, sumCos);
-    const mc = Math.cos(meanAngle);
-    const ms = Math.sin(meanAngle);
-    out[i] = {
-      x: rest.x * mc - rest.y * ms + tx / totalWeight,
-      y: rest.x * ms + rest.y * mc + ty / totalWeight,
-    };
+    // Dividing by the weight actually used is what renormalizes a vertex
+    // whose surviving bones no longer sum to 1 (one having been deleted
+    // since binding, say). With nothing usable left, the vertex stays at
+    // rest rather than collapsing to the origin.
+    out[i] = totalWeight > 0 ? { x: x / totalWeight, y: y / totalWeight } : rest;
   }
 
   return out;

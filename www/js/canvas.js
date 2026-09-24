@@ -695,16 +695,45 @@ function drawPierceProbe() {
 // change that never reaches the screen at all.
 const renderRateToken = { name: 'scene' };
 
+// ONE FRAME, IN ORDER: simulate, THEN draw.
+//
+// The springs and the pierce solver used to run in a requestAnimationFrame
+// loop of their own, separate from this one. Two rAF callbacks in one frame
+// run in the order they were registered, and the render's was registered
+// first -- by the pointermove that started the frame -- so every frame drew
+// BEFORE it simulated. Measured during a live Free-Move drag: in 16 frames
+// out of 16 the renderer read the bones before that frame's physics step.
+// What reached the screen was this frame's rigid bones, moved by the
+// finger, wearing LAST frame's spring angles: the simulation's answer for a
+// frame was never shown in that frame, only in the next, by which time the
+// rigid bones had moved on again. A stale pose every frame, stitched onto a
+// current one.
+//
+// So there is one driver. physics.js registers its step here, and each
+// frame runs it first and renders second, both inside the same callback:
+// bone transforms, including spring settling and contact, are fully
+// resolved before skinning reads them, and skinning is resolved before a
+// pixel is drawn. Nothing in a frame reads anything from the frame before.
+let frameStep = null;
+
+export function setFrameStep(step) {
+  frameStep = step;
+}
+
 export function requestRender() {
   if (frameRequested) return;
   frameRequested = true;
-  const attempt = () => {
-    if (!shouldRenderFrame(renderRateToken)) {
+  const attempt = (timestamp) => {
+    if (!shouldRenderFrame(renderRateToken, timestamp)) {
       requestAnimationFrame(attempt);
       return;
     }
     frameRequested = false;
+    const stillMoving = frameStep ? frameStep(timestamp) : false;
     render();
+    // A simulation still settling needs the next frame whether or not
+    // anything else asks for one.
+    if (stillMoving) requestRender();
   };
   requestAnimationFrame(attempt);
 }

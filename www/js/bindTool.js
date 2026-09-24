@@ -42,6 +42,10 @@ let brushStrength = 0.35;
 let painting = false;
 let strokeHistory = null; // undo snapshot for the whole brush stroke
 let strokePainted = false;
+// How much of a SOLELY-OWNED vertex's influence this stroke has erased so
+// far, keyed by vertex index. Kept here rather than in vertex.weights: see
+// the comment in paintAt for why the weights themselves never hold it.
+let soleErase = new Map();
 
 export function getBrush() {
   return { radius: brushRadius, strength: brushStrength };
@@ -106,23 +110,36 @@ function paintAt(scenePoint) {
     // nothing at all, however long you scrubbed. Measured: a stroke that
     // moved shared vertices by 0.1 moved these by exactly 0.
     //
-    // There is nothing to redistribute TO here, so the invariant is not
-    // the question; what the user is asking for is for this bone to stop
-    // moving this vertex. So the weight is allowed to decay on its own and
-    // the influence is dropped once it reaches the floor, leaving the
-    // vertex unweighted -- which skinning already reads as "stay at rest".
-    // Partial values in between are invisible either way, because skinning
-    // renormalizes by the total it finds.
+    // There is nothing to redistribute TO here, and with one bone the ONLY
+    // weightings that sum to 1 are {bone: 1} and "unweighted" -- nothing in
+    // between is valid. This used to count down by storing a partial
+    // weight on the vertex ({bone: 0.65}, summing to 0.65), relying on the
+    // skinning dividing by the total to keep it invisible. It was
+    // invisible, but it was invalid stored data: every other reader of the
+    // weights -- the Bind overlay, the Mesh Trim transfer, a saved project
+    // -- saw a vertex whose weights did not sum to 1.
+    //
+    // So the countdown lives in the stroke instead, and the stored weight
+    // stays exactly 1 until the stroke has erased enough to drop the
+    // influence outright, leaving the vertex unweighted -- which skinning
+    // reads as "stay at rest". What the user sees is unchanged: nothing, then
+    // the vertex lets go. The one difference is that the count starts over
+    // with each stroke, so a vertex is released by one deliberate scrub
+    // rather than by several light ones that happened to add up.
     if (delta < 0) {
       let others = 0;
       for (const [id, weight] of Object.entries(vertex.weights)) {
         if (id !== boneId) others += weight;
       }
       if (others <= 0) {
-        const next = vertex.weights[boneId] + delta;
-        if (next <= WEIGHT_FLOOR) delete vertex.weights[boneId];
-        else vertex.weights[boneId] = next;
-        changed = true;
+        const remaining = (soleErase.has(i) ? soleErase.get(i) : 1) + delta;
+        if (remaining <= WEIGHT_FLOOR) {
+          delete vertex.weights[boneId];
+          soleErase.delete(i);
+          changed = true;
+        } else {
+          soleErase.set(i, remaining);
+        }
         continue;
       }
     }
@@ -157,6 +174,7 @@ export function initBindTool(canvasEl) {
       weightTool === WeightTool.ERASE ? 'Erase weights' : 'Paint weights'
     );
     strokePainted = false;
+    soleErase = new Map();
     paintAt(sceneFromEvent(canvasEl, event));
   });
 
@@ -178,6 +196,7 @@ export function initBindTool(canvasEl) {
     history.commitCapture(strokeHistory, strokePainted);
     strokeHistory = null;
     strokePainted = false;
+    soleErase = new Map();
   };
 
   canvasEl.addEventListener('pointerup', endPointer);

@@ -77,6 +77,32 @@ function triangleArea2(a, b, c) {
   return cross(a.u, a.v, b.u, b.v, c.u, c.v);
 }
 
+// WHAT COUNTS AS A REAL TRIANGLE
+//
+// Twice-area below this is "flat". Comparing to exactly 0 -- which is what
+// this module used to do -- misses the case that actually occurs: three grid
+// vertices at coordinates like 6.4*k lie on one line, but their float
+// cross product comes out around 1e-13, not 0, and a sliver survives.
+// Measured: 59 removals left 2 of them behind. Every legitimate triangle
+// here is at least half a texel square (twice-area >= 1 with snapped
+// vertices), so a threshold twelve orders of magnitude below that catches
+// float collinearity and can never reject a real triangle.
+const MIN_AREA2 = 1e-6;
+
+// The mesh's own winding: the sign of its total signed area. A generated
+// mesh is wound consistently, so this is the sign EVERY triangle should
+// have; one of the opposite sign has been folded over its neighbours.
+export function meshOrientation(mesh) {
+  let total = 0;
+  for (let i = 0; i < mesh.triangles.length; i += 3) {
+    const a = mesh.vertices[mesh.triangles[i]];
+    const b = mesh.vertices[mesh.triangles[i + 1]];
+    const c = mesh.vertices[mesh.triangles[i + 2]];
+    if (a && b && c) total += triangleArea2(a, b, c);
+  }
+  return total < 0 ? -1 : 1;
+}
+
 // Barycentric containment, inclusive of the edges so a point on a shared
 // edge is found rather than falling between two triangles.
 function pointInTriangle(p, a, b, c) {
@@ -129,14 +155,55 @@ export function triangleAt(mesh, u, v) {
 // still on that bone after being nudged a few texels; re-deriving them
 // would silently undo weight painting every time the mesh was tidied.
 
+// A MOVE MUST NOT FOLD THE MESH
+//
+// This used to accept any position at all. Dragged two cells across its own
+// neighbours, a vertex turned the triangles around it inside out: measured,
+// 2 of them inverted and 57.6px^2 of mesh lying on top of other mesh --
+// artwork drawn twice in one place and missing from another. Eighty random
+// moves left 85 inverted triangles and a vertex stacked on another.
+//
+// The rule that prevents all of it is local: every triangle using this
+// vertex must keep its winding and a real area after the move. A vertex
+// that stays on the same side of every opposite edge cannot have crossed
+// one, so its fan cannot fold; and it cannot sit exactly on another vertex
+// without flattening the triangle they share. A move that breaks the rule
+// is refused and the vertex stays where it was -- which, mid-drag, is the
+// vertex stopping at the edge of where it is allowed to go.
 export function moveVertex(mesh, part, index, u, v) {
   const vertex = mesh.vertices[index];
   if (!vertex) return { ok: false, reason: 'no such vertex' };
   const snapped = snapUV(u, v, part);
-  vertex.u = snapped.u;
-  vertex.v = snapped.v;
-  vertex.restLocal = restLocalForUV(snapped.u, snapped.v, part);
-  return { ok: true, index, u: snapped.u, v: snapped.v };
+  const moved = { u: snapped.u, v: snapped.v };
+
+  for (let i = 0; i < mesh.triangles.length; i += 3) {
+    const ids = [mesh.triangles[i], mesh.triangles[i + 1], mesh.triangles[i + 2]];
+    if (!ids.includes(index)) continue;
+    const [a, b, c] = ids.map((id) => mesh.vertices[id]);
+    const before = triangleArea2(a, b, c);
+    const [a2, b2, c2] = ids.map((id) => (id === index ? moved : mesh.vertices[id]));
+    const after = triangleArea2(a2, b2, c2);
+    if (Math.abs(after) < MIN_AREA2) {
+      return { ok: false, reason: 'that would flatten a triangle', index };
+    }
+    if (Math.sign(after) !== Math.sign(before)) {
+      return { ok: false, reason: 'that would fold the mesh over itself', index };
+    }
+  }
+  // Stacked on a vertex it shares no triangle with: no triangle flattens,
+  // but two vertices now claim one point of the artwork.
+  for (let k = 0; k < mesh.vertices.length; k++) {
+    if (k === index) continue;
+    const other = mesh.vertices[k];
+    if (other.u === moved.u && other.v === moved.v) {
+      return { ok: false, reason: 'another vertex is already there', index };
+    }
+  }
+
+  vertex.u = moved.u;
+  vertex.v = moved.v;
+  vertex.restLocal = restLocalForUV(moved.u, moved.v, part);
+  return { ok: true, index, u: moved.u, v: moved.v };
 }
 
 // ---------------------------------------------------------------------------
@@ -255,9 +322,35 @@ export function removeVertex(mesh, part, index) {
   const ring = orderRing(edges);
   if (ring.length < 3) return { ok: false, reason: 'the hole around that vertex cannot be re-filled' };
 
-  redistributeWeights(mesh, index, ring);
+  // Build and CHECK the patch before anything is changed. The ear clipper
+  // falls back to a plain fan when it finds no ear, and its own comment says
+  // that is "not correct in general" -- over a non-convex hole a fan can
+  // produce triangles wound the wrong way. So the patch must: keep the
+  // mesh's winding on every triangle, have real area, and cover exactly the
+  // polygon the ring outlines (no more, which would be overlap; no less,
+  // which would be a hole). If it cannot, the removal is refused and the
+  // mesh and its weights are left exactly as they were.
+  const orientation = meshOrientation(mesh);
+  const patch = dropDegenerate(mesh, earClip(mesh.vertices, ring));
+  let ringArea2 = 0;
+  for (let k = 0; k < ring.length; k++) {
+    const p = mesh.vertices[ring[k]];
+    const q = mesh.vertices[ring[(k + 1) % ring.length]];
+    ringArea2 += p.u * q.v - q.u * p.v;
+  }
+  let patchArea2 = 0;
+  for (let k = 0; k < patch.length; k += 3) {
+    const t = triangleArea2(mesh.vertices[patch[k]], mesh.vertices[patch[k + 1]], mesh.vertices[patch[k + 2]]);
+    if (Math.sign(t) !== orientation) {
+      return { ok: false, reason: 'removing that vertex would fold the mesh', index };
+    }
+    patchArea2 += t;
+  }
+  if (Math.abs(patchArea2 - ringArea2) > 1e-6 * Math.max(1, Math.abs(ringArea2))) {
+    return { ok: false, reason: 'the hole around that vertex cannot be re-filled cleanly', index };
+  }
 
-  const patch = earClip(mesh.vertices, ring);
+  redistributeWeights(mesh, index, ring);
   const rebuilt = dropDegenerate(mesh, [...untouched, ...patch]);
 
   // Drop the vertex and slide every later index down one.
@@ -400,7 +493,7 @@ function dropDegenerate(mesh, triangles) {
     const b = mesh.vertices[ids[1]];
     const c = mesh.vertices[ids[2]];
     if (!a || !b || !c) continue;
-    if (triangleArea2(a, b, c) === 0) continue;
+    if (Math.abs(triangleArea2(a, b, c)) < MIN_AREA2) continue;
     const key = [...ids].sort((x, y) => x - y).join(',');
     if (seen.has(key)) continue;
     seen.add(key);
@@ -417,6 +510,7 @@ export function meshProblems(mesh) {
   const problems = [];
   const used = new Set();
   const seen = new Set();
+  const orientation = meshOrientation(mesh);
   for (let i = 0; i < mesh.triangles.length; i += 3) {
     const ids = [mesh.triangles[i], mesh.triangles[i + 1], mesh.triangles[i + 2]];
     for (const id of ids) {
@@ -425,10 +519,25 @@ export function meshProblems(mesh) {
     }
     if (new Set(ids).size !== 3) problems.push(`triangle ${i / 3} repeats a vertex`);
     const [a, b, c] = ids.map((id) => mesh.vertices[id]);
-    if (a && b && c && triangleArea2(a, b, c) === 0) problems.push(`triangle ${i / 3} is degenerate`);
+    if (a && b && c) {
+      const area2 = triangleArea2(a, b, c);
+      if (Math.abs(area2) < MIN_AREA2) problems.push(`triangle ${i / 3} is degenerate`);
+      // Wound against the rest of the mesh: folded over its neighbours.
+      else if (Math.sign(area2) !== orientation) problems.push(`triangle ${i / 3} is inverted`);
+    }
     const key = [...ids].sort((x, y) => x - y).join(',');
     if (seen.has(key)) problems.push(`triangle ${i / 3} duplicates another`);
     seen.add(key);
+  }
+  // Two used vertices at one point: nothing flattens, but the artwork at
+  // that point is claimed twice and the two copies can pull apart.
+  const at = new Map();
+  for (const id of used) {
+    const v = mesh.vertices[id];
+    if (!v) continue;
+    const key = `${v.u},${v.v}`;
+    if (at.has(key)) problems.push(`vertices ${at.get(key)} and ${id} share one position`);
+    else at.set(key, id);
   }
   return problems;
 }

@@ -23,7 +23,7 @@ import {
   PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
-import { MeshVertex, PartMesh } from './mesh.js';
+import { MeshVertex, PartMesh, sanitizeWeights } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { resetPierceContainment } from './pierce.js';
 
@@ -43,10 +43,15 @@ function serializeMesh(mesh) {
       weights: { ...vertex.weights },
     })),
     bindPose: Object.fromEntries(
-      Object.entries(mesh.bindPose).map(([boneId, pose]) => [
-        boneId,
-        { head: { x: pose.head.x, y: pose.head.y }, rotation: pose.rotation },
-      ])
+      Object.entries(mesh.bindPose).map(([boneId, pose]) => {
+        const out = { head: { x: pose.head.x, y: pose.head.y }, rotation: pose.rotation };
+        // Tail and parent let a vertex added later be weighted by the same
+        // rule its neighbours were. Written only when known, so a mesh bound
+        // by an older build round-trips unchanged.
+        if (pose.tail) out.tail = { x: pose.tail.x, y: pose.tail.y };
+        if ('parentId' in pose) out.parentId = pose.parentId;
+        return [boneId, out];
+      })
     ),
   };
 }
@@ -55,7 +60,10 @@ function deserializeMesh(data) {
   if (!data) return null;
   const vertices = data.vertices.map((v) => {
     const vertex = new MeshVertex(v.u, v.v, { x: v.restLocal.x, y: v.restLocal.y });
-    vertex.weights = { ...v.weights };
+    // Through the invariant on the way in: a project file is outside data.
+    // It may have been hand-edited, shared from another device, or written
+    // before a rule was tightened, and it used to be copied in verbatim.
+    vertex.weights = sanitizeWeights(v.weights);
     return vertex;
   });
   const mesh = new PartMesh({
@@ -66,10 +74,12 @@ function deserializeMesh(data) {
     triangles: [...data.triangles],
   });
   mesh.bindPose = Object.fromEntries(
-    Object.entries(data.bindPose || {}).map(([boneId, pose]) => [
-      boneId,
-      { head: { x: pose.head.x, y: pose.head.y }, rotation: pose.rotation },
-    ])
+    Object.entries(data.bindPose || {}).map(([boneId, pose]) => {
+      const out = { head: { x: pose.head.x, y: pose.head.y }, rotation: pose.rotation };
+      if (pose.tail) out.tail = { x: pose.tail.x, y: pose.tail.y };
+      if ('parentId' in pose) out.parentId = pose.parentId;
+      return [boneId, out];
+    })
   );
   return mesh;
 }

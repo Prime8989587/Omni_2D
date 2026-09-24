@@ -241,14 +241,32 @@ const fresh = () => {
     const r = addVertex(mesh, part, 7 + i * 3.3, 11 + i * 2.7);
     if (r.ok) ops++;
   }
+  // Moves are DRAGS: a texel or two from where each vertex already is,
+  // which is what a finger does. These used to teleport each vertex to a
+  // fixed point across the mesh -- (20+i, 40-i) whatever the vertex -- and
+  // most of those folded the mesh over itself. They were accepted, and the
+  // "still valid" check below passed only because meshProblems could not
+  // see a fold. It can now, and moveVertex refuses a fold outright; a
+  // teleport of that kind is checked separately, as a refusal.
   for (let i = 0; i < 12; i++) {
     const index = 30 + i * 3;
     attempted++;
-    if (index < mesh.vertices.length) { if (moveVertex(mesh, part, index, 20 + i, 40 - i).ok) ops++; }
+    if (index < mesh.vertices.length) {
+      const v = mesh.vertices[index];
+      if (moveVertex(mesh, part, index, Math.round(v.u) + 1, Math.round(v.v)).ok) ops++;
+    }
   }
   for (let i = 0; i < 14; i++) {
     attempted++;
     if (mesh.vertices.length > 4 && removeVertex(mesh, part, 40).ok) ops++;
+  }
+  {
+    const probe = fresh();
+    const far = probe.vertices[probe.vertices.length - 1];
+    const r = moveVertex(probe, part, 0, far.u, far.v - 1);
+    say(!r.ok && meshProblems(probe).length === 0,
+      'a move that would fold the mesh across itself is REFUSED, and leaves it valid',
+      JSON.stringify(r));
   }
   say(ops >= 30, 'a long mixed run of Add / Move / Remove applied',
     `${ops} of ${attempted} applied; the rest were correctly refused`);

@@ -6127,6 +6127,191 @@ the three tools keep SEPARATE favourites, in their own units:
 
 Verified across 63 headless checks and 54 browser checks in the real app.
 
+## A mathematical audit of the skinning pipeline
+
+Five properties, each checked against the code before anything was
+touched, and each reported as CORRECT, INCORRECT or MISSING on the evidence
+rather than on the assumption that a thing asked about must be broken. Four
+were partly wrong and one was missing a whole class of check. The parts
+that were correct were left alone.
+
+| # | Property | Audit result | Fixed |
+|---|----------|--------------|-------|
+| 1 | Inverse bind transform | Single-bone path CORRECT; multi-bone blend INCORRECT | yes |
+| 2 | Weights sum to 1, never negative | Pure paths CORRECT; brush eraser INCORRECT; project load MISSING | yes |
+| 3 | Weights stay off unrelated bones | Auto-weight INCORRECT; Mesh Trim Add INCORRECT | yes |
+| 4 | Triangle validity | Generation + Add CORRECT; Remove INCORRECT; Move MISSING | yes |
+| 5 | Per-frame order | INCORRECT: rendered before physics every frame | yes |
+
+### 1. The inverse bind transform
+
+The per-bone transform was right: each bone maps a vertex through
+`M_now · inv(M_bind)`, i.e. `R(θnow − θbind)(v − bindHead) + headNow`. A
+single-bone vertex swung 150° and moved 80px keeps its distance to its bone
+to 8.9e-15px, and matches the literal matrix product exactly.
+
+The **blend** was not. Where several bones share a vertex, the code blended
+the bones' *transforms* (rotation angle and translation) and then applied
+the result -- and the translation part of a rotation is measured from scene
+(0, 0), so the answer depended on where the character stood on the canvas:
+
+```
+the same character, same pose, moved to a different place on the canvas:
+  character moved +100px: result drifts  20.856 px from where it should be
+  character moved +300px: result drifts  62.569 px from where it should be
+  character moved +600px: result drifts 125.137 px from where it should be
+```
+
+That blend was mine, from the joint-gap work, and it was wrong. It is
+replaced by linear blend skinning written out literally -- transform the
+vertex by each bone, then take the weighted average of the *positions*:
+
+```js
+const dx = rest.x - bind.head.x;
+const dy = rest.y - bind.head.y;
+const angle = rotation - bind.rotation;
+x += weight * (dx * cos - dy * sin + head.x);
+y += weight * (dx * sin + dy * cos + head.y);
+```
+
+A weighted average of points is independent of where the origin is, so the
+drift is gone by construction, not by tuning:
+
+```
+ITEM 1: forearm swung 150deg far from bind       99 vertices, worst stretch 1.07e-14 px
+  every vertex equals sum w_i M_now inv(M_bind) v  worst 0.00e+0 px
+  swung back, returns exactly to rest              worst 7.11e-15 px
+  blended body layer (624 shared vertices)         worst 0.00e+0 px vs the formula
+  same bent pose moved 300px                       worst 1.15e-13 px drift
+```
+
+The honest cost: linear blending is the textbook formula, and it has the
+textbook weakness. A vertex split 50/50 across a bent joint is pulled toward
+the joint, losing area by cos²(θ/2). With realistic weight falloff that is
+94.6% of the area kept at a 58° bend and 88.5% at 90°. The skinning tests
+now assert the cos²(θ/2) law exactly rather than pretending it away. If joints ever
+look pinched, a pivot-anchored rotation blend is the known remedy -- but it
+is a different formula from the one audited, so it would be a deliberate
+choice, not a fix.
+
+The old skinning tests had missed this because every test bone sat at the
+origin, which is the one place the bad blend happens to be right. They now
+place the rig 300px out and compare against the reference formula at every
+angle from 0° to 179°.
+
+### 2. Weight normalization
+
+Every pure weight-writing path was already exact: auto-weight, 20,000
+random paint/erase dabs, every Mesh Trim edit and weight transfer onto a
+regenerated mesh all land within 3.3e-16 of Σw = 1 with nothing negative or
+non-finite.
+
+Two paths were not. The **brush eraser**, over a vertex owned by one bone,
+deliberately stored a partial weight such as `{bone: 0.65}` -- a sum of
+0.65 on disk, hidden only because the skinning divides by the total. It now
+keeps that countdown in a stroke-local map and stores nothing until the
+weight is actually released, so no intermediate state ever violates the
+invariant. The countdown resets with each new stroke.
+
+**Loading a project** restored weight maps verbatim, so a hand-edited or
+corrupted file could bring back NaN, negative or unnormalized weights.
+`sanitizeWeights` now runs on every vertex at load: non-finite and
+non-positive entries are dropped and the rest renormalized to exactly 1, or
+the map is emptied (the vertex then stays at rest) if nothing valid is left.
+
+### 3. Weight influence boundaries
+
+Auto-weighting took the nearest bones by distance alone. On a real
+four-limb character, a hand resting near a hip could take up to **4.2% of
+its weight from the thigh** -- so a kick moved the hand. Mesh Trim's Add
+tool was worse: it weighted a new vertex from bone *heads* only, which gave
+a vertex lying on the upper arm **95% to the forearm**.
+
+The rule now: a vertex may only take weight from its nearest bone and the
+bones jointed directly to it -- the parent and children. That is exactly
+the set a joint legitimately blends across, and nothing else. The bind pose
+now stores each bone's tail and parent, so Mesh Trim measures against the
+whole bone segment and follows the same rule as a full auto-weight.
+
+```
+ITEM 3  L.hand, R.hand, L.shin, R.shin     0% weight on unrelated bones
+        full character                     0 of 625 vertices violate the rule
+        a kick moves the hand              0.00e+0 px
+joints still blend:
+        elbow     L.upper 50% | L.fore 50%
+        knee      L.thigh 50% | L.shin 50%
+        shoulder  L.upper 69% | torso 30%
+        hip       L.thigh 88% | torso 12%
+```
+
+A legacy project whose bind pose has no parent information falls back to
+the old distance rule rather than guessing at a topology it cannot see.
+
+### 4. Mesh validity
+
+Generation at every density and Mesh Trim's Add were clean. Remove and Move
+were not:
+
+```
+before  removeVertex x59           zero-area 2
+        moveVertex (across neighbours)  inverted 2   overlap    57.6px²
+        moveVertex x80 (random)         inverted 85  overlap 38733.5px²  dup-pos 1
+        -- and the mesh problem detector reported 0 for all of them
+```
+
+- **Remove** tested for degenerate triangles with `=== 0`, which a
+  floating-point sliver never equals. It now uses an area threshold, and
+  the patch that fills the hole is validated *before* anything is applied:
+  every new triangle must wind the same way as the mesh, and together they
+  must cover exactly the hole. Otherwise the removal is refused.
+- **Move** had no validation at all. It now refuses any move that would
+  flatten an incident triangle, flip its winding (folding the mesh over
+  itself), or land on another vertex.
+- **The detector** (`meshProblems`) now reports all three classes --
+  slivers, inverted triangles, duplicate positions -- so a broken mesh can
+  no longer pass a check.
+
+After: 0 of each, everywhere. Refusals are rare and correct -- 8 of 120
+removals, all at a corner or edge where no valid patch exists.
+
+### 5. Per-frame pipeline order
+
+The physics solver and the renderer each ran their own
+`requestAnimationFrame` callback, and the renderer's was registered first.
+So in every frame the renderer drew, and only *then* did physics advance
+the springs -- every frame showed the springs as they were a frame earlier:
+
+```
+before  render ran BEFORE this frame's physics step: 16 of 16 frames
+```
+
+Physics no longer has a loop of its own. The renderer's frame calls the
+physics step immediately before drawing (`setFrameStep` in `canvas.js`),
+so one frame is exactly: bone transforms → spring constraints → weights →
+deformation → draw. Sampling a live Free-Move drag:
+
+```
+ITEM 5  physics stepped BEFORE render            16 of 16 frames
+        bone angle drawn vs bone angle stepped   26 frames, 0 stale, worst 0.00e+0 rad
+        frames rendered per display frame        2 -> 1
+```
+
+The last line is a free win: with two loops, a woken simulation also
+requested a second render in the same frame.
+
+This supersedes a detail in *Screen Rate* above: physics no longer wraps
+its own `requestAnimationFrame`. It runs inside the renderer's gated frame
+instead, and still measures `dt` from the last step it actually took -- so a
+lower screen rate still makes the motion coarser, never slower.
+
+### Verification
+
+`tests/skinning.mjs` was rewritten around the reference formula and an
+off-origin rig (18 checks), `tests/meshedit.mjs` gained a refused-fold
+check (49), and a browser suite drives every item through the real app on a
+multi-limb character, including a live Free-Move drag for item 5 (16
+checks). All nine headless suites and all twelve browser suites pass.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real
