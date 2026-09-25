@@ -1019,7 +1019,10 @@ button, input, select {
 /* The active tool fills solid so "am I pinning or erasing?" is always
    answerable at a glance -- the two are separate tools, never a hidden
    toggle. */
-.px-pin__controls .segmented__btn[aria-pressed="true"] {
+.px-pin__controls .segmented__btn[aria-pressed="true"],
+/* The Pierce popup's choices -- role, physics direction, what the V's two
+   halves are -- read the same way: the one in effect is filled. */
+#pierceModal .segmented__btn[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #000000;
@@ -1407,10 +1410,10 @@ button, input, select {
   color: var(--color-text);
 }
 
-/* The dent's own starting line. Violet, the same hue the wedge is drawn in
-   over the artwork, so the mark on this bar and the shape in the Pierce
-   window read as the same setting. Its label hangs BELOW the bar because
-   the Enter mark's sits above and the two can coincide. */
+/* The Dent Trigger Distance -- where the V starts to open. Violet, the same
+   hue the seam is painted in over the artwork, so the mark on this bar and
+   the V in the Pierce window read as the same setting. Its label hangs BELOW
+   the bar because the Enter mark's sits above and the two can coincide. */
 .pierce-depth__mark--dent {
   background: #a078ff;
 }
@@ -2700,4 +2703,11 @@ button, input, select {
   .btn:active:not(:disabled) {
     transform: none;
   }
+}
+
+/* The V's "other half" picker sits in the Pierce popup, where the select
+   should take the row rather than its natural width. */
+#pierceSpreadPartnerRow .select-input {
+  flex: 1;
+  min-width: 0;
 }

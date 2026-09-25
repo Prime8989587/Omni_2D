@@ -27,13 +27,15 @@ const WEIGHT_EPSILON = 0.001;
 const DISTANCE_EPSILON = 0.5; // guards against dividing by a zero distance
 const FALLOFF_EXPONENT = 2;
 
-// The pierce solver's current displacement, read while deforming. Its own
-// state module rather than pierce.js, which imports THIS file -- routing
-// through a leaf keeps the import graph acyclic.
-import { pierceOffsets } from './pierceState.js';
+// A pierced layer's V -- its two halves swung apart about their hinges by
+// as much as the piercer's depth says (spread.js reads the depth the pierce
+// solver publishes through pierceState.js, so this file never imports the
+// solver, which imports THIS file).
+import { applySpread } from './spread.js';
 // And the PLink solver's correction, through a leaf for the same reason:
 // plink.js deforms linked layers through this file.
 import { plinkCorrection } from './plinkState.js';
+import { localToWorld } from './layerSpace.js';
 
 export const DEFAULT_MAX_INFLUENCES = 3;
 export const MIN_DENSITY = 3;
@@ -46,16 +48,9 @@ export function defaultDensity(part) {
   return Math.min(10, Math.max(6, Math.round(longest / 12)));
 }
 
-// Local image space (centre at the origin, one unit per source pixel) to
-// scene pixels. With the part's integer top-left and integer scale, an
-// unrotated local point lands on exact integers.
-export function localToWorld(part, local) {
-  const cos = Math.cos(part.rotation);
-  const sin = Math.sin(part.rotation);
-  const sx = local.x * part.scale;
-  const sy = local.y * part.scale;
-  return { x: part.centerX + sx * cos - sy * sin, y: part.centerY + sx * sin + sy * cos };
-}
+// Local image space to scene pixels -- see layerSpace.js, where it lives so
+// spread.js can use it without importing this file.
+export { localToWorld };
 
 export class MeshVertex {
   constructor(u, v, restLocal) {
@@ -798,9 +793,9 @@ export function snapToGrid(positions) {
 // continuous position, and rounding each layer's vertices on its own would
 // pull them apart again by up to a pixel. So the vertices around a link point
 // stay unsnapped too (plink.js marks them).
-export function deformVerticesSnapped(mesh, part, boneTransforms) {
+export function deformVerticesSnapped(mesh, part, boneTransforms, half = null) {
   const link = plinkCorrection(part, boneTransforms);
-  const positions = deformVertices(mesh, part, boneTransforms);
+  const positions = deformVertices(mesh, part, boneTransforms, half);
   const onSeam = seamVertices(mesh, part);
   const nearLink = link && link.mesh === mesh ? link.nearLink : null;
   return positions.map((p, i) => (
@@ -999,12 +994,14 @@ export function pinInfluence(mesh, part, radius = 0) {
 // all of them, and hands back each layer's correction -- along with the
 // uncorrected positions it already computed, so they are not worked out
 // twice in one frame.
-export function deformVertices(mesh, part, boneTransforms) {
+export function deformVertices(mesh, part, boneTransforms, half = null) {
   const link = plinkCorrection(part, boneTransforms);
-  if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms);
-  const base = link.mesh === mesh && link.uncorrected
+  if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms, half);
+  // The solve's own uncorrected positions are the single-copy answer; one
+  // half of a seam-split layer is worked out for itself.
+  const base = link.mesh === mesh && link.uncorrected && half === null
     ? link.uncorrected
-    : deformVerticesUncorrected(mesh, part, boneTransforms);
+    : deformVerticesUncorrected(mesh, part, boneTransforms, half);
   return applyLinkCorrection(mesh, base, link);
 }
 
@@ -1031,30 +1028,20 @@ function applyLinkCorrection(mesh, positions, link) {
   });
 }
 
-// The layer's own deformation, before any PLink: bone skinning, pierce
-// offsets, then pins pulling their neighbourhood back toward rest. One pass,
-// one mesh, no seams.
-export function deformVerticesUncorrected(mesh, part, boneTransforms) {
-  const out = deformRaw(mesh, part, boneTransforms);
+// The layer's own deformation, before any PLink: bone skinning, then pins
+// pulling their neighbourhood back toward rest, then -- for a pierced layer
+// being spread -- its V. One mesh, no seams.
+export function deformVerticesUncorrected(mesh, part, boneTransforms, half = null) {
+  const out = pinned(mesh, part, boneTransforms, deformRaw(mesh, part, boneTransforms));
+  // A pierced layer's V, LAST: each half turns about its hinge as a whole,
+  // pinned pixels and all, so the pins and the V compose instead of arguing
+  // -- a pinned patch on a finger swings with the finger. `half` picks which
+  // of a seam-split layer's two copies this is (see spread.js).
+  return applySpread(mesh, part, out, half);
+}
 
-  // Pierce, BEFORE pins. A displaced vertex is the bone result plus this
-  // layer's current spring offset -- read, never advanced: the solver owns
-  // those numbers and steps them once per frame in the physics loop, where
-  // a redraw cannot make the simulation run faster by happening twice.
-  //
-  // It goes before the pin step deliberately. Pins pull their
-  // neighbourhood back toward rest afterwards, so a pinned pixel that a
-  // pierce tried to move is returned to exactly where it was -- pinned
-  // pixels stay put during contact, and the two features compose instead
-  // of arguing. (The solver also masks by pin influence itself, so those
-  // vertices never accumulate an offset to be undone in the first place.)
-  const pierce = pierceOffsets(part);
-  if (pierce) {
-    for (let i = 0; i < out.length; i++) {
-      out[i] = { x: out[i].x + pierce.offsetX[i], y: out[i].y + pierce.offsetY[i] };
-    }
-  }
-
+// Pins pulling their neighbourhood back toward rest.
+function pinned(mesh, part, boneTransforms, out) {
   if (!part || !part.pins || part.pins.size === 0) return out;
 
   // Pinned artwork holds still relative to its LAYER, not to the canvas:

@@ -1,45 +1,25 @@
-// Pierce: displacing flesh, not cutting a hole in it.
+// Pierce: a piercer going BETWEEN two halves, which part to let it in.
 //
-// WHAT THIS IS NOT
+// THE MOTION
 //
-// It never removes a pixel, never hides one, never makes one transparent
-// and never punches a hole. There is no second rendering pass and no
-// stencil. Every pixel the pierced layer had before contact is still
-// drawn afterwards, through the same rasterizer, in the same single pass.
-// The ONLY thing that changes is where some mesh vertices are, which is
-// exactly the same lever bone skinning already pulls -- so the effect is
-// completely reversible by moving the piercer back out, with nothing to
-// undo or restore.
+// A closed fist, the thumb pressing into the seam between two fingers. As
+// the thumb goes in, two things happen at once and are one motion: the
+// thumb's own tip travels in along its path, visible the whole way, and the
+// two fingers swing apart about their own bases into a V exactly as wide as
+// the thumb has gone deep. The V never exists first and gets filled; there is
+// no stage where the tip vanishes and reappears inside an opening. Both are
+// read off ONE number -- the depth below -- in the same frame.
 //
-// A WEDGE, NOT TWO DRAWN SHAPES
+// The thumb is the PIERCER. The fingers are the two HALVES of the pierced
+// side: two separate layers the artist paired, or one layer split by a seam
+// the artist drew (see spread.js for the halves, their hinges and the V's
+// geometry). This file measures the depth, turns it into how open the V is,
+// and publishes that for the deformation to read.
 //
-// The local shape of a contact is a triangular dent: an apex driven in
-// along the approach, a base across the surface, both sized by the depth
-// fraction and by two numbers the artist sets. dent.js holds that
-// machinery, cuts the wedge out of the artwork as a per-texel mask, and
-// shoves the material marked Deformable outward around its faces.
-//
-// It replaced a blend between two hand-painted outlines, which worked on
-// primitives and could not work on organic artwork: two freehand drawings
-// of a curvy silhouette have no reliable point-to-point correspondence to
-// blend along, and every attempt to find one narrowed the failure without
-// removing it.
-//
-// This replaced a per-vertex spring push, and the reason is worth keeping.
-// That version gave each vertex its own radial shove away from the tip
-// with its own smoothstep falloff, so neighbours decided independently --
-// and on the coarse mesh an unbound layer gets, independent neighbours
-// read as a torn, jagged silhouette rather than a shape changing. It is a
-// technique mismatch rather than a tuning problem: nothing in it knew what
-// outline it was supposed to be producing, so no stiffness could have made
-// it produce one.
-//
-// Nothing about the dent is integrated over time. The wedge IS the depth,
-// so a given depth always looks the same, there is no state to fall out of
-// step with the drag, withdrawing runs the identical numbers backwards to
-// exactly zero, and the frame loop has nothing left to settle once the
-// piercer stops. The bones' own springs are untouched and go on reporting
-// for themselves.
+// It replaced a model that CUT a triangular dent out of the pierced artwork
+// and bunched "Deformable" pixels around it. That showed the piercer's tip
+// sinking out of sight under the surface and then appearing inside a
+// pre-formed notch -- which is not how two fingers make room for a thumb.
 //
 // HOW DEEP IS DEEP
 //
@@ -48,60 +28,55 @@
 //           ALONG THE PIERCER'S OWN AXIS, and SIGNED: negative once the
 //           tip is already that far in.
 //   Enter = the gap at which contact begins. Further out than this and
-//           nothing moves at all.
-//   End   = how much FURTHER past that first contact the push keeps
+//           nothing engages at all.
+//   End   = how much FURTHER past that first contact the depth keeps
 //           growing. Reaching it is the maximum, and going deeper than it
 //           changes nothing more -- the hard limit.
 //
 //   depth = clamp(Enter - gap, 0, End)      t = depth / End
 //
 // The sign is the whole reason the gap is measured along an axis rather
-// than as a plain nearest-pixel distance. A nearest-pixel distance cannot
-// go below zero -- two overlapping regions are zero apart and stay zero
-// however much further the needle is driven in -- so depth could never
-// exceed Enter, and any End beyond it (including the 24 the app offers by
-// default against an Enter of 12) was simply unreachable. Along the axis,
-// driving deeper keeps making the number smaller, so the two marks sit on
-// one continuous scale the way the depth bar draws them.
+// than as a plain nearest-pixel distance: two overlapping regions are zero
+// apart however much further the tip is driven in, so a nearest-pixel
+// distance could never say "deeper". Along the axis, driving deeper keeps
+// making the number smaller, so Enter, the trigger and End sit on one
+// continuous scale the way the depth bar draws them.
 //
-// One consequence worth knowing, because it is the effect rather than a
-// side effect: at the instant the tip actually touches, gap is 0 and depth
-// is already Enter, so the flesh has retreated Enter pixels AHEAD of the
-// tip. Flesh dents away from a needle instead of being skewered by it, and
-// Enter is how far ahead of itself the needle pushes. Past End it stops
-// giving way, which is what "hard limit" looks like on screen.
+// HOW OPEN IS OPEN
 //
-// t runs 0 at first touch to 1 at the limit, and scales the push, so a
-// tip barely in contact moves the flesh barely at all.
+// The V has its own start, the Dent Trigger Distance -- a gap on the same
+// scale, independent of Enter -- and is fully open at the End Point:
 //
-// The limit binds the PIERCER too, not only the push. Capping the depth
-// alone left the artwork free to carry on through the layer and out the
-// far side while the numbers sat pinned at End, which is not what a hard
-// limit looks like. Past End the piercer is DRAWN short of where the drag
-// put it, by exactly the distance the depth refused (see pierceHold), so
-// its tip stops where the depth stopped.
+//   open  = clamp((trigger - gap) / (trigger - (Enter - End)), 0, 1)
 //
-// Nothing blocks the finger: the drag is still the user's, the layer's
-// real coordinates still follow it exactly, and the contact is still
-// measured from those real coordinates rather than from where the sprite
-// was drawn -- so there is no feedback between the two. Only the axis
-// component of the motion stops having a visible effect. Sideways motion
-// and pulling back out track the finger one-for-one as they always did.
+// So the halves are shut at the trigger, fully apart at End, and move
+// smoothly in between; contact and opening are two different events the
+// artist places separately. Nothing is integrated over time: a given depth
+// always looks the same, and backing out runs the identical numbers down to
+// shut. The bones' own springs are untouched and report for themselves.
+//
+// THE LIMIT BINDS THE PIERCER TOO
+//
+// Past End the piercer is DRAWN short of where the drag put it, by exactly
+// the distance the depth refused (see pierceHold), so its tip stops where the
+// depth stopped. Nothing blocks the finger: the layer's real coordinates
+// still follow the drag and the contact is measured from them, so only the
+// along-axis component of the motion stops having a visible effect.
 
-import { partsStore, PiercePhysics } from './parts.js';
+import { partsStore, PiercePhysics, SpreadMode } from './parts.js';
 import { bonesStore } from './bones.js';
 import {
-  localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity,
+  localToWorld, pinCarriageOffset, generateMesh, defaultDensity,
 } from './mesh.js';
-import { pierceStateFor, peekPierceState } from './pierceState.js';
+import { publishSpreadOpen } from './pierceState.js';
 import { carryByCorrection } from './plinkState.js';
 import { correctionOf } from './plink.js';
 import {
-  dentTriangleAt, dentCutMask, dentCutArea, writeBunch, resetDentCache,
-} from './dent.js';
+  pierceTargets, spreadTargetOf, spreadGeometry, swingAt, swingAtTexel, fullSwing,
+} from './spread.js';
 import { haptic } from './haptics.js';
 
-export { pierceOffsets, resetPierceState } from './pierceState.js';
+export { resetPierceState } from './pierceState.js';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -129,8 +104,7 @@ export { pierceOffsets, resetPierceState } from './pierceState.js';
 const pointsCache = new Map();
 
 // The two masks that have a position in the scene: what can be touched,
-// and what cannot be crossed. (Deformable never needs scene coordinates --
-// it is asked about per mesh vertex, in the layer's own texel space.)
+// and what cannot be crossed.
 const REGIONS = {
   pierce: { set: (part) => part.pierceRegion, version: (part) => part.pierceRegionVersion || 0 },
   barrier: { set: (part) => part.pierceBarrierRegion, version: (part) => part.pierceBarrierRegionVersion || 0 },
@@ -289,9 +263,7 @@ const IN_PLAY_MARGIN = 4;
 export function resetPierceContainment() {
   containedTips.clear();
   motionState.clear();
-  dentCuts = new Map();
-  placementIssues.clear();
-  resetDentCache();
+  publishSpreadOpen([]);
 }
 
 // The middle of a region, cached against the points array regionPoints
@@ -423,40 +395,32 @@ function axialGap(tip, flesh, tipMiddle, tipSpread, axis) {
   return { gap: surface - lead, surface };
 }
 
-// A DISPLACEMENT NEEDS SOMEWHERE TO LIVE
+// A V NEEDS A MESH TO SWING
 //
-// The offsets this solver produces are PER VERTEX, so an pierced layer
-// with no mesh has nowhere to put them. Until now such a layer was simply
-// skipped, which meant the whole feature quietly did nothing unless the
-// user had first rigged a skeleton and bound the flesh to it in Bind mode
-// -- a prerequisite nothing in the Pierce UI ever mentions, and one that
-// has nothing to do with piercing. Measured on a two-layer scene with
-// roles assigned and regions painted: the contact read perfectly (gap 31
-// down to -13, depth capped at End) while the displacement stayed at
-// 0.000 px at every depth, because the layer never reached the solver.
-//
-// So the mesh is built here, on demand. An unbound mesh has no bind pose
-// and no weights, so skinning it is the identity -- it renders exactly as
-// the flat sprite did -- and it exists purely as the surface a pierce can
-// push on. Binding the layer later replaces it as usual.
+// The halves turn by moving their mesh vertices, so a pierced layer with no
+// mesh has nothing to turn. It is built here, on demand, rather than asking
+// the user to rig and bind flesh first -- a prerequisite that has nothing to
+// do with piercing. An unbound mesh has no bind pose and no weights, so
+// skinning it is the identity -- it renders exactly as the flat sprite did --
+// and binding the layer later replaces it as usual.
 function meshFor(part) {
   if (!part.mesh) part.mesh = generateMesh(part, defaultDensity(part));
   return part.mesh;
 }
 
-// THE DENT'S OWN TWO ENDS
+// THE V'S OWN TWO ENDS
 //
-// The notch starts at the Dent Trigger Distance -- the piercer's third
-// depth, independent of Enter -- and is complete at the End Point, the same
-// place the depth stops. Sharing the far end is deliberate: a drag should
-// not have two different "all the way in" positions, one for the numbers
-// and one for the artwork.
+// The V starts opening at the Dent Trigger Distance -- the piercer's third
+// depth, independent of Enter -- and is fully open at the End Point, the same
+// place the depth stops. Sharing the far end is deliberate: a drag should not
+// have two different "all the way in" positions, one for the numbers and one
+// for the artwork.
 //
 // The near end has to stay in front of the far one, and nothing stops the
-// user from editing Enter or End afterwards into a pair that puts it
-// behind. Rather than refuse the edit or divide by a span of nothing, the
-// trigger is held one pixel clear of the End Point: the dent then starts as
-// late as it still can, which is the closest thing to what was asked for.
+// user from editing Enter or End afterwards into a pair that puts it behind.
+// Rather than refuse the edit or divide by a span of nothing, the trigger is
+// held one pixel clear of the End Point: the V then starts as late as it
+// still can, which is the closest thing to what was asked for.
 const MIN_DENT_SPAN = 1;
 
 function dentStartOf(piercer, enter, end) {
@@ -468,10 +432,107 @@ function dentSpan(piercer, enter, end) {
   return dentStartOf(piercer, enter, end) - (enter - end);
 }
 
+// Where a texel of a pierced layer sits at rest, the same way regionPoints
+// places painted texels -- for the hinges the Barrier's walls turn about.
+function restPoint(part, transforms, u, v) {
+  const carriage = pinCarriageOffset(part, transforms);
+  const world = localToWorld(part, { x: u - part.naturalWidth / 2, y: v - part.naturalHeight / 2 });
+  const carried = { x: world.x + carriage.x, y: world.y + carriage.y };
+  const link = correctionOf(part, transforms || undefined);
+  return link ? carryByCorrection(link, carried) : carried;
+}
+
+// A BARRIER IN A V IS TWO WALLS THAT OPEN WITH IT
+//
+// Walls are painted on the halves -- typically down each half's inner edge,
+// either side of the seam -- so they swing with the halves: each wall texel
+// turned about its own half's hinge by exactly the angle the artwork is at.
+// The channel between them therefore widens as the V opens, and the tip may
+// drift sideways within it by exactly as much as the V has made room for.
+function wallPoints(target, transforms, open) {
+  const out = [];
+  for (const layer of target.layers) {
+    const points = regionPoints(layer, transforms, 'barrier');
+    if (points.length === 0) continue;
+    if (!(open > 0) || target.mode === SpreadMode.OFF) { out.push(...points); continue; }
+    const hinges = new Map();
+    let k = 0;
+    // regionPoints walks the region in the same order, so point k IS the
+    // k-th texel of the set.
+    for (const index of layer.pierceBarrierRegion) {
+      const p = points[k++];
+      if (!p) break;
+      const u = (index % layer.naturalWidth) + 0.5;
+      const v = Math.floor(index / layer.naturalWidth) + 0.5;
+      const swing = swingAtTexel(layer, u, v, open);
+      if (!swing || swing.angle === 0) { out.push(p); continue; }
+      const hk = `${swing.hinge.u},${swing.hinge.v}`;
+      if (!hinges.has(hk)) hinges.set(hk, restPoint(layer, transforms, swing.hinge.u, swing.hinge.v));
+      const at = hinges.get(hk);
+      out.push(carryByCorrection(
+        { cos: Math.cos(swing.angle), sin: Math.sin(swing.angle), from: at, to: at }, p));
+    }
+  }
+  return out;
+}
+
+// The V's centre line in the scene: through the point of the V (between its
+// hinges), out along its seam to the mouth -- placed the same way the walls
+// are, so the two agree about where the channel is.
+function centreLine(target, transforms) {
+  const geometry = spreadGeometry(target);
+  if (!geometry) return null;
+  if (target.mode === SpreadMode.SEAM) {
+    const layer = target.layers[0];
+    const origin = restPoint(layer, transforms, geometry.origin.x, geometry.origin.y);
+    const mouth = restPoint(layer, transforms, geometry.mouth.x, geometry.mouth.y);
+    const length = Math.hypot(mouth.x - origin.x, mouth.y - origin.y);
+    if (length < 1e-6) return null;
+    return { origin, axis: { x: (mouth.x - origin.x) / length, y: (mouth.y - origin.y) / length } };
+  }
+  const [a, b] = geometry.halves.map((half) => restPoint(half.part, transforms, half.hinge.u, half.hinge.v));
+  return { origin: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, axis: geometry.axis };
+}
+
+// SIDEWAYS ONLY, INSIDE A V
+//
+// In a V the walls say how far the tip may drift ACROSS the channel, never
+// how deep it may go -- that is the depth's job, and a wall that could stop
+// the tip going in could stop the V from ever opening (the V opens because
+// the tip goes in). So the tip is held on the line across the channel at its
+// own depth: swept out from the V's centre line toward where the drag puts
+// it, and stopped at the first wall. The centre line is the gap between the
+// halves, so it is open by construction; a wall painted right across it
+// fails open rather than trapping the tip.
+function containAcross(aim, line, walls) {
+  const s = (aim.x - line.origin.x) * line.axis.x + (aim.y - line.origin.y) * line.axis.y;
+  const centre = { x: line.origin.x + line.axis.x * s, y: line.origin.y + line.axis.y * s };
+  if (blockedAt(wallGridFor(walls), centre.x, centre.y)) return aim;
+  return sweepContain(centre, aim, walls);
+}
+
+// How open the V is at this gap: 0 at the Dent Trigger Distance, 1 at the
+// End Point, straight line in between.
+function openAt(piercer, enter, end, gap) {
+  return Math.min(1, Math.max(0, (dentStartOf(piercer, enter, end) - gap) / dentSpan(piercer, enter, end)));
+}
+
+function targetFor(pierced) {
+  if (!pierced) return null;
+  if (pierced.layers) return pierced;
+  return spreadTargetOf(pierced) || { mode: SpreadMode.OFF, key: `off:${pierced.id}`, layers: [pierced] };
+}
+
+// The live contact between one piercer and one pierced target -- a single
+// pierced layer, or the two halves of a V measured TOGETHER, so the pair has
+// one depth and one opening rather than two that could disagree. Null when
+// either side has nothing painted: an unpainted region is not a contact of
+// size zero, it is no contact at all.
 export function contactOf(piercer, pierced, transforms) {
-  if (!piercer || !pierced) return null;
+  const target = targetFor(pierced);
+  if (!piercer || !target) return null;
   const tip = regionPoints(piercer, transforms);
-  const flesh = regionPoints(pierced, transforms);
+  const flesh = target.layers.flatMap((layer) => regionPoints(layer, transforms));
   if (tip.length === 0 || flesh.length === 0) return null;
 
   const tipMiddle = centroid(tip);
@@ -486,12 +547,14 @@ export function contactOf(piercer, pierced, transforms) {
 
   const enter = piercer.pierceEnter;
   const end = Math.max(1, piercer.pierceEnd);
-  const pair = `${piercer.id}:${pierced.id}`;
+  const pair = `${piercer.id}:${target.key}`;
 
   // Apply the Physics Direction. The gap the rest of this function works
-  // from is the measured one plus everything the excluded side has moved
-  // it by since this pair came into range -- which is to say, the gap as
-  // it would be if that side had stayed where it was.
+  // from is the measured one plus everything the excluded side has moved it
+  // by since this pair came into range -- which is to say, the gap as it
+  // would be if that side had stayed where it was. For a V that decides
+  // whose movement drives the whole coupled motion -- the tip going in and
+  // the halves parting -- because both are read off this one gap.
   const mode = piercer.piercePhysics || PiercePhysics.PIERCER;
   let rawGap = measured;
   if (axis && rawInPath && mode !== PiercePhysics.BOTH) {
@@ -518,282 +581,210 @@ export function contactOf(piercer, pierced, transforms) {
 
   const rawDepth = rawInPath ? Math.min(end, Math.max(0, enter - rawGap)) : 0;
 
-  // Past End the contact's GEOMETRY has to stop advancing as well, not
-  // just the depth number. The push is aimed outward from the tip and
-  // fades with distance from it, so a tip that kept travelling after the
-  // depth was capped would walk straight through the flesh and out the
-  // far side -- leaving every vertex too far away to be pushed, and the
-  // dent melting away to nothing exactly when it should be deepest.
-  // Holding the tip at the position where End was reached makes deeper
-  // than End look identical to End, which is what a hard limit means.
+  // Past End the contact's geometry stops advancing as well as the depth
+  // number: the tip is held where End was reached.
   const overshoot = rawInPath ? Math.max(0, (enter - end) - rawGap) : 0;
   const depthClamped = overshoot > 0
     ? { x: tipMiddle.x - axis.x * overshoot, y: tipMiddle.y - axis.y * overshoot }
     : tipMiddle;
-  // Walls apply only once the tip is actually in contact, the same
-  // threshold everything else about a pierce turns on. A piercer merely
-  // passing nearby is not being contained by anything.
+
   // A CONTAINED TIP IS STILL IN THERE
   //
-  // Engagement cannot be read off the raw position once walls are in play,
-  // or the two undo each other: the wall holds the tip inside the cavity
-  // while the finger carries on outside it, the raw reading says "nothing
-  // in my path", the contact drops -- and dropping the contact releases
-  // the containment that was holding the tip. Measured before this: the
-  // tip sat correctly at the wall (137) up to the moment the raw needle
-  // left the channel, then sprang out to 146, 154, 168 as the drag went on.
-  //
-  // So a pair that was contained last frame stays a candidate this frame,
-  // and the depth is re-measured from where the tip is ALLOWED to be. The
-  // loop closes: held inside the cavity, it still reads as in contact, so
-  // it stays held. Pulling back out along the axis is what ends it -- the
-  // sweep follows the retreat freely, the gap opens past Enter, and the
-  // contact drops for the ordinary reason.
+  // A pair that was contained last frame stays a candidate this frame, and
+  // the depth is re-measured from where the tip is ALLOWED to be -- held
+  // inside the channel, it still reads as in contact, so it stays held.
+  // Pulling back out along the axis is what ends it.
   const sticky = containedTips.has(pair);
-  const walls = rawDepth > 0 || sticky ? regionPoints(pierced, transforms, 'barrier') : [];
+  const walled = rawDepth > 0 || sticky;
 
-  let contained = depthClamped;
-  if (walls.length > 0 && axis) {
-    // WHICH POINT IS THE ONE THAT MUST NOT CROSS
-    //
-    // Not the tip's middle. On anything but a very shallow tip the middle
-    // sits well behind the part that actually goes in, and a wall running
-    // down the side of a cavity starts BELOW it -- so the middle glides
-    // over the top of the wall and out the other side without ever
-    // entering a painted pixel. Measured on a 10-row tip against walls
-    // occupying rows 121..144: the middle sat at 120 the whole way and
-    // sailed straight past.
-    //
-    // The leading point does the entering, so it is the one contained.
-    // Everything else about the tip is carried by the same correction,
-    // which is how the middle -- still what the displacement radiates
-    // from -- ends up where it belongs.
-    // A flat tip has a whole ROW at the same distance along the axis, so
-    // "the furthest one" is a tie between every texel across its front.
-    // Picking any single winner picks a corner -- and a corner of a tip
-    // wider than the cavity starts out already inside the wall, which
-    // blocked entry down a completely open channel. The leading EDGE's
-    // midpoint is the one point that means the same thing for a flat tip
-    // and a pointed one.
+  // The leading point does the entering, so it is the one contained: the
+  // leading EDGE's midpoint, which means the same thing for a flat tip and a
+  // pointed one.
+  let leadX = 0;
+  let leadY = 0;
+  if (axis) {
     let best = -Infinity;
     for (const p of tip) best = Math.max(best, p.x * axis.x + p.y * axis.y);
-    let leadSumX = 0;
-    let leadSumY = 0;
-    let leadCount = 0;
+    let sx = 0; let sy = 0; let n = 0;
     for (const p of tip) {
       if (best - (p.x * axis.x + p.y * axis.y) > 0.5) continue;
-      leadSumX += p.x;
-      leadSumY += p.y;
-      leadCount++;
+      sx += p.x; sy += p.y; n++;
     }
-    const leadX = leadCount ? leadSumX / leadCount - tipMiddle.x : 0;
-    const leadY = leadCount ? leadSumY / leadCount - tipMiddle.y : 0;
-
-    const previous = containedTips.get(pair);
-    const target = { x: depthClamped.x + leadX, y: depthClamped.y + leadY };
-    let held = sweepContain(previous || target, target, walls);
-
-    // CONTAINMENT HOLDS BACK; IT NEVER PULLS FORWARD
-    //
-    // The sweep starts from where the tip was last frame, so a withdrawal
-    // whose path clips a wall could stop short and leave the tip deeper
-    // than the finger is now asking for. Drawn, that is a piercer sliding
-    // INTO the flesh on its own -- the needle appearing to be sucked in,
-    // or to stick when pulled. Nothing here is allowed to do that: whatever
-    // the walls say sideways, the along-axis component can only ever lag
-    // the drag, never lead it.
-    const ahead = (held.x - target.x) * axis.x + (held.y - target.y) * axis.y;
-    if (ahead > 0) {
-      held = { x: held.x - axis.x * ahead, y: held.y - axis.y * ahead };
-    }
-
-    // A BARRIER CROSSING, felt once per crossing.
-    //
-    // "Contained" means the sweep was stopped by a painted wall: the tip
-    // tried to go somewhere the barrier does not allow. What is worth
-    // feeling is the CROSSING -- the frame the tip first meets the wall --
-    // not the leaning, which can go on for as long as a finger holds it
-    // there. So this fires on the transition into contact and stays quiet
-    // until the tip has come off the wall again.
-    const blocked = Math.hypot(held.x - target.x, held.y - target.y) > 0.5;
-    if (blocked && !wallContact.get(pair)) haptic('barrier');
-    wallContact.set(pair, blocked);
-
-    contained = { x: held.x - leadX, y: held.y - leadY };
-    containedTips.set(pair, held);
+    leadX = n ? sx / n - tipMiddle.x : 0;
+    leadY = n ? sy / n - tipMiddle.y : 0;
   }
 
-  let inPath = rawInPath;
-  let gap = rawGap;
-  let depth = rawDepth;
-  const shiftX = contained.x - tipMiddle.x;
-  const shiftY = contained.y - tipMiddle.y;
-  if (axis && (Math.abs(shiftX) > 1e-6 || Math.abs(shiftY) > 1e-6)) {
+  // Walls sit where the halves are at a given opening, and the opening
+  // depends on where the walls let the tip get to. Measured at the raw
+  // opening first, then -- if containment changed the depth -- once more at
+  // the opening that produced, so the walls the tip is held by are the walls
+  // that are drawn.
+  const inV = target.mode !== SpreadMode.OFF;
+  const contain = (open) => {
+    const walls = (inV ? rawDepth > 0 : walled) ? wallPoints(target, transforms, open) : [];
+    if (walls.length === 0 || !axis) return { contained: depthClamped, walls, held: null, blocked: false };
+    const aim = { x: depthClamped.x + leadX, y: depthClamped.y + leadY };
+    if (inV) {
+      const line = centreLine(target, transforms);
+      const held = line ? containAcross(aim, line, walls) : aim;
+      const blocked = Math.hypot(held.x - aim.x, held.y - aim.y) > 0.5;
+      return { contained: { x: held.x - leadX, y: held.y - leadY }, walls, held, blocked, across: true };
+    }
+    const previous = containedTips.get(pair);
+    let held = sweepContain(previous || aim, aim, walls);
+    // CONTAINMENT HOLDS BACK; IT NEVER PULLS FORWARD: whatever the walls say
+    // sideways, the along-axis component can only ever lag the drag.
+    const ahead = (held.x - aim.x) * axis.x + (held.y - aim.y) * axis.y;
+    if (ahead > 0) held = { x: held.x - axis.x * ahead, y: held.y - axis.y * ahead };
+    const blocked = Math.hypot(held.x - aim.x, held.y - aim.y) > 0.5;
+    return { contained: { x: held.x - leadX, y: held.y - leadY }, walls, held, blocked };
+  };
+  const measureAt = (contained) => {
+    const shiftX = contained.x - tipMiddle.x;
+    const shiftY = contained.y - tipMiddle.y;
+    if (!axis || (Math.abs(shiftX) <= 1e-6 && Math.abs(shiftY) <= 1e-6)) {
+      return { inPath: rawInPath, gap: rawGap, surface, depth: rawDepth };
+    }
     const moved = tip.map((p) => ({ x: p.x + shiftX, y: p.y + shiftY }));
     const heldAxial = axialGap(moved, flesh, contained, tipSpread, axis);
-    if (heldAxial !== null) {
-      inPath = true;
-      gap = heldAxial.gap;
-      surface = heldAxial.surface;
-      depth = Math.min(end, Math.max(0, enter - heldAxial.gap));
-    }
+    if (heldAxial === null) return { inPath: rawInPath, gap: rawGap, surface, depth: rawDepth };
+    return {
+      inPath: true,
+      gap: heldAxial.gap,
+      surface: heldAxial.surface,
+      depth: Math.min(end, Math.max(0, enter - heldAxial.gap)),
+    };
+  };
+
+  const rawOpen = rawInPath ? openAt(piercer, enter, end, rawGap) : 0;
+  let pass = contain(rawOpen);
+  let reading = measureAt(pass.contained);
+  let open = reading.inPath ? openAt(piercer, enter, end, reading.gap) : 0;
+  if (pass.walls.length > 0 && Math.abs(open - rawOpen) > 1e-3) {
+    pass = contain(open);
+    reading = measureAt(pass.contained);
+    open = reading.inPath ? openAt(piercer, enter, end, reading.gap) : 0;
+  }
+  if (pass.held) {
+    // A BARRIER CROSSING, felt once per crossing -- the frame the tip first
+    // meets the wall, not the leaning.
+    if (pass.blocked && !wallContact.get(pair)) haptic('barrier');
+    wallContact.set(pair, pass.blocked);
+    // Only the plain sweep carries its position frame to frame; across a V
+    // the tip is placed from the centre line afresh every frame.
+    if (!pass.across) containedTips.set(pair, pass.held);
   }
 
+  const { inPath, gap, depth } = reading;
+  surface = reading.surface;
   const engaged = depth > 0;
-  if (!engaged || walls.length === 0) containedTips.delete(pair);
+  if (!engaged || pass.walls.length === 0) containedTips.delete(pair);
 
   return {
-    // How much of the configured dent is currently cut, 0 to 1. Measured on
-    // its OWN scale -- 0 at the Dent Trigger Distance, 1 at the End Point --
-    // which is the whole point of that setting: contact and the notch are
-    // two different events and the artist places them separately.
-    dentT: inPath
-      ? Math.min(1, Math.max(0, (dentStartOf(piercer, enter, end) - gap) / dentSpan(piercer, enter, end)))
-      : 0,
+    // How open the V is, 0 to 1 -- on its OWN scale, 0 at the Dent Trigger
+    // Distance and 1 at the End Point. Zero for a target with no V.
+    openT: target.mode === SpreadMode.OFF ? 0 : open,
     piercer,
+    target,
     axis,
-    // How far PAST the End Point the piercer has been driven. The depth
-    // stops at End, but the drag does not, and this is the difference.
+    // How far PAST the End Point the piercer has been driven.
     overshoot,
-    // Where the drag actually put the tip, against where it is allowed to
-    // be once the depth cap and the walls have had their say. The gap
-    // between the two IS how far the artwork has to be held back for the
-    // tip to stop where it stopped -- see pierceHold(), which is simply
-    // their difference and so covers both constraints at once.
+    // Where the drag actually put the tip, against where it is allowed to be
+    // once the depth cap and the walls have had their say; their difference
+    // is how far the artwork is held back (see pierceHold).
     rawTip: tipMiddle,
-    tip: contained,
+    tip: pass.contained,
     tipSpread,
     gap,
     inPath,
     depth,
-    // Where the flesh's near face is, as a distance along the axis from the
-    // scene origin. Projecting the tip forward by (surface - tipAlong)
-    // lands exactly on the outline the piercer is going through, which is
-    // where the dent's base is centred.
     surface,
-    // 0 at first contact, 1 at the End Point and never more, however far
-    // past it the piercer is pushed.
+    // 0 at first contact, 1 at the End Point and never more.
     t: depth / end,
     end,
     engaged,
   };
 }
 
-// Every measurable contact in the scene: each pierced layer paired
-// with the one piercer that matters to it. One piece of flesh being pushed
-// by two needles at once is not a thing this models, so exactly one is
-// chosen, by a single rule: deepest wins, and when nothing is in yet (both
-// depths zero) the nearest wins. That is stable rather than flickering
-// between them, and it keeps the closest approach of a piercer that has
-// not reached the Enter Point yet -- a real measurement, and the one the
-// "nothing should be happening at this distance" case is made of.
-//
-// Whether that contact actually DOES anything is a separate question,
-// asked with contact.engaged. A contact short of Enter has depth 0 and
-// therefore a zero target, which is the same thing as no contact at all
-// as far as the springs are concerned.
+// Every measurable contact in the scene: each pierced target (a V of two
+// halves counts once) paired with the one piercer that matters to it --
+// deepest wins, and when nothing is in yet the nearest wins, so the choice
+// is stable rather than flickering between piercers.
 function activeContacts(transforms) {
   const piercers = partsStore.piercers;
-  const piercedLayers = partsStore.piercedLayers;
   const contacts = [];
-  for (const pierced of piercedLayers) {
-    meshFor(pierced);
+  for (const target of pierceTargets()) {
+    for (const layer of target.layers) meshFor(layer);
     let best = null;
     for (const piercer of piercers) {
-      const contact = contactOf(piercer, pierced, transforms);
+      const contact = contactOf(piercer, target, transforms);
       if (!contact) continue;
       if (!best || contact.depth > best.depth ||
           (contact.depth === best.depth && contact.gap < best.gap)) {
         best = contact;
       }
     }
-    contacts.push({ pierced, contact: best });
+    contacts.push({ target, contact: best });
   }
   return contacts;
 }
 
 // ---------------------------------------------------------------------------
-// What the renderer needs: who is inside whom, and which texels are which
+// What the renderer needs: who is drawn in front of whom
 
-// A 2D stack does not imply depth. A piercer drawn above the flesh it has
-// entered goes on looking like it is lying ON the surface however far in
-// the numbers say it is, because painter's-algorithm order is the only
-// depth cue the scene bitmap has. So while a tip is actually in contact,
-// it is drawn BENEATH the layer it has entered and the surface closes over
-// it -- which is the same information a 3D renderer would get from a depth
-// buffer, taken from the one place this app actually knows it.
+// WHICH WAY THE TIP GOES IN THE STACK
 //
-// Only the painted TIP moves. The rest of the piercer -- the shaft of a
-// needle, the finger behind a nail -- has not entered anything and stays
-// exactly where it was in the stack, so the artwork reads as one object
-// going in rather than the whole sprite ducking under.
+// A plain pierced layer (no V) is ENTERED: its surface closes over the tip,
+// so while in contact the painted tip is drawn BENEATH it -- the depth cue a
+// 3D renderer would get from a depth buffer.
 //
-// This map is written from the SAME contact objects the displacement is
-// integrated from, in the same pass. There is one contact test, and both
-// effects read its answer, so the tip cannot sink a frame before the flesh
-// gives way or stay sunk a frame after it lets go.
-let occlusion = new Map(); // piercer id -> the pierced part to sink beneath
+// A V is different, and that difference is the point of it. The tip goes
+// BETWEEN the halves, into a gap they open for it, and it stays visible the
+// whole way in -- its own shape, travelling along its own path. Hiding it
+// beneath the halves would make it vanish and then reappear in the opening,
+// which is exactly the "appearing inside a pre-formed hole" this replaced.
+// So against a V the painted tip is drawn IN FRONT of both halves.
+//
+// Either way only the painted TIP moves in the stack. The rest of the
+// piercer has not entered anything and stays where it was.
+let occlusion = new Map(); // piercer id -> { mode: 'sink' | 'lift', layers }
 let hold = new Map();      // piercer id -> how far to hold its artwork back
-let dentCuts = new Map();  // pierced id -> its draw mask, dent texels zeroed
 let occlusionStale = true;
 let readout = [];
 
 // ---------------------------------------------------------------------------
-// Force transfer: the press the pierced layer feels back
+// Force transfer: the press the pierced side feels back
 
-// How hard a piercer at full depth presses, as an angular acceleration
-// about the bone it is pressing on. Against the default stiffness of 180
-// that is a steady deflection of about a seventh of a radian at the End
-// Point with a full lever -- a lean you can see, well short of a flail.
+// How hard a piercer at full depth presses, as an angular acceleration about
+// the bone it is pressing on. Against the default stiffness of 180 that is a
+// steady deflection of about a seventh of a radian at the End Point with a
+// full lever -- a lean you can see, well short of a flail.
 const PIERCE_PUSH = 45;
-
-// Past the End Point the tip stops advancing, but the DRAG does not, and
-// that leftover travel is the only thing on screen still saying "harder".
-// So it goes on counting toward the press after the depth has stopped
-// counting -- which is what makes leaning on something feel different from
-// resting against it -- up to one more End Point's worth, and no further.
+// Past the End Point the leftover drag goes on counting toward the press, up
+// to one more End Point's worth -- leaning on something feels different from
+// resting against it.
 const MAX_PRESS = 2;
-
-// The moment arm, in units of the bone's own length, clamped so a contact
-// far off to one side cannot manufacture an enormous torque out of a
-// small force. Beyond the bone's own reach the lever stops growing.
+// The moment arm, in units of the bone's own length, clamped so a contact far
+// off to one side cannot manufacture an enormous torque.
 const MAX_LEVER = 1;
 
 let torqueChanged = false;
 const torques = new Map();
 
-// A PIERCE IS A FORCE, AND A FORCE HAS SOMEWHERE TO GO
-//
-// The contact already knows everything a torque needs: where the tip is,
-// which way it is pushing, and how hard. What was missing was the other
-// half of Newton's third law -- the pierced layer took the shape change
-// and gave nothing back, so a piercer driven into a character stopped dead
-// at the End Point against something that never reacted. Read as a
-// picture, that is a needle hitting a wall, not entering flesh.
-//
-// So each engaged contact is turned into a torque about the head of every
-// physics bone the pierced layer is ATTACHED to -- the user's own stated
-// relationship, never guessed from proximity -- and handed to the bone
-// integrator, where it sits in the same sum as gravity and the carry
-// torque. The bone's own spring does the rest: it leans away under the
-// press, settles there while the press holds, and springs back when the
-// piercer withdraws and the torque goes to zero.
-//
-// This is a genuine feedback loop and is meant to be: the flesh leaning
-// away opens the gap, which lowers the depth, which lowers the press. It
-// converges rather than oscillating because the loop gain is well under
-// one -- the contact point moves a fraction of the End Point's distance
-// for a full deflection -- and the spring's damping absorbs what is left.
-// That settling IS the soft-contact behaviour; nothing models it
-// separately.
-// How hard this contact is pressing, 0 at first touch and 1 at the End
-// Point. t is the part of it the depth accounts for; the overshoot carries
-// it on past, because past End the tip has stopped advancing and the
-// leftover travel is the only thing still saying "harder".
+// How hard this contact is pressing IN, 0 at first touch and 1 at the End
+// Point, with the overshoot carrying it on past.
 function pressOf(contact) {
   if (!contact || !contact.engaged) return 0;
   const beyond = contact.end > 0 ? Math.min(1, contact.overshoot / contact.end) : 0;
   return Math.min(MAX_PRESS, contact.t + beyond);
+}
+
+// How hard the halves are being pushed APART: the V's own opening, with the
+// same overshoot on top. Zero until the V starts to open.
+function spreadPressOf(contact) {
+  if (!contact || !(contact.openT > 0)) return 0;
+  const beyond = contact.end > 0 ? Math.min(1, contact.overshoot / contact.end) : 0;
+  return Math.min(MAX_PRESS, contact.openT + beyond);
 }
 
 function chainFrom(attached) {
@@ -801,8 +792,6 @@ function chainFrom(attached) {
   const chain = [];
   for (const start of attached) {
     let bone = start;
-    // A cycle is not constructible through the UI, but the walk is
-    // bounded by the visited set either way rather than by trust.
     while (bone && !seen.has(bone.id)) {
       seen.add(bone.id);
       chain.push(bone);
@@ -812,84 +801,118 @@ function chainFrom(attached) {
   return chain;
 }
 
-function publishForce(contacts) {
+function addTorque(bone, at, dir, press) {
+  const head = bonesStore.worldHead(bone);
+  const rx = at.x - head.x;
+  const ry = at.y - head.y;
+  // The 2D cross product of the arm with the push: the signed moment, so a
+  // push on either side of a pivot turns it the right way round without any
+  // special casing.
+  const moment = (rx * dir.y - ry * dir.x) / Math.max(bone.length, 1);
+  const lever = Math.max(-MAX_LEVER, Math.min(MAX_LEVER, moment));
+  torques.set(bone.id, (torques.get(bone.id) || 0) + PIERCE_PUSH * press * lever);
+}
+
+// Which way a half's own bones are pushed: straight away from the seam, on
+// that half's side -- the direction the half is being parted in. The seam's
+// normal is in the halves' frame: the scene for a pair, the layer's texels
+// (turned by the layer's rotation) for a seam.
+function spreadPush(target, geometry, half) {
+  let n = geometry.normal;
+  if (target.mode === SpreadMode.SEAM) {
+    const layer = target.layers[0];
+    const c = Math.cos(layer.rotation);
+    const s = Math.sin(layer.rotation);
+    n = { x: n.x * c - n.y * s, y: n.x * s + n.y * c };
+  }
+  return { x: n.x * half.sigma, y: n.y * half.sigma };
+}
+
+// A PIERCE IS A FORCE, AND A FORCE HAS SOMEWHERE TO GO
+//
+// Each engaged contact is turned into torques about the heads of the physics
+// bones the pierced side is ATTACHED to (the user's own stated
+// relationship, never guessed) and handed to the bone integrator, where the
+// bone's own spring does the rest: it leans under the press, settles while
+// the press holds, and springs back -- jiggling -- when the piercer
+// withdraws.
+//
+// Against a V, the halves are being pushed APART, so each half's own bones
+// are pushed sideways, away from the seam, by as much as the V is open. The
+// bones those hang from (a palm, an arm) feel the piercer's push along its
+// own axis, as any pierced layer does -- once each, however many halves
+// hang from them.
+function publishForce(contacts, transforms) {
   torques.clear();
   if (!bonesStore.hasPhysicsBones) return bonesStore.setPierceTorques(torques);
 
-  for (const { pierced, contact } of contacts) {
+  for (const { target, contact } of contacts) {
     if (!contact || !contact.engaged || !contact.axis) continue;
-    // The bones the layer is attached to, AND every bone above them. A
-    // force on a link is felt at every joint it hangs from -- poke a
-    // finger hard enough and the arm moves -- and each joint feels it
-    // about its own head, with its own lever. Collected as a set so a
-    // chain whose child and parent are both attached to the layer is
-    // still pressed once.
-    const bones = chainFrom(bonesStore.bonesAttachedTo(pierced.id));
-    if (bones.length === 0) continue;
-
-    // t is the press up to the End Point; the overshoot carries it on
-    // past. Both are already clamped by the contact, so this is bounded
-    // whatever the drag does.
-    const press = pressOf(contact);
-    if (press <= 0) continue;
-
-    // The tip as it is ALLOWED to be, not as the drag asked -- the press
-    // acts where the piercer actually is on screen.
     const at = contact.tip;
-    for (const bone of bones) {
+    const press = pressOf(contact);
+    const geometry = target.mode === SpreadMode.OFF ? null : spreadGeometry(target);
+    const lateral = new Map(); // bone id -> push direction, for half bones
+    const spreadPress = spreadPressOf(contact);
+    if (geometry && spreadPress > 0) {
+      for (const half of geometry.halves) {
+        for (const bone of bonesStore.bonesAttachedTo(half.part.id)) {
+          if (target.mode === SpreadMode.PAIR) {
+            lateral.set(bone.id, spreadPush(target, geometry, half));
+            continue;
+          }
+          // One layer: a bone belongs to the half its middle lies on.
+          const head = bonesStore.worldHead(bone);
+          const tail = bonesStore.worldTail(bone);
+          const mid = { x: (head.x + tail.x) / 2, y: (head.y + tail.y) / 2 };
+          const hinge = restPoint(half.part, transforms, half.hinge.u, half.hinge.v);
+          const push = spreadPush(target, geometry, half);
+          const side = (mid.x - hinge.x) * push.x + (mid.y - hinge.y) * push.y;
+          if (side > 1) lateral.set(bone.id, push);
+        }
+      }
+    }
+    const attached = target.layers.flatMap((layer) => bonesStore.bonesAttachedTo(layer.id));
+    for (const bone of chainFrom(attached)) {
       if (!bone.physicsEnabled) continue;
-      const head = bonesStore.worldHead(bone);
-      const rx = at.x - head.x;
-      const ry = at.y - head.y;
-      // The 2D cross product of the arm with the push direction: the
-      // signed moment, positive one way round the pivot and negative the
-      // other, so a tip on the left of a bone turns it the other way from
-      // one on the right without any special casing.
-      const moment = (rx * contact.axis.y - ry * contact.axis.x) /
-        Math.max(bone.length, 1);
-      const lever = Math.max(-MAX_LEVER, Math.min(MAX_LEVER, moment));
-      const add = PIERCE_PUSH * press * lever;
-      torques.set(bone.id, (torques.get(bone.id) || 0) + add);
+      const sideways = lateral.get(bone.id);
+      if (sideways) addTorque(bone, at, sideways, spreadPress);
+      else if (press > 0) addTorque(bone, at, contact.axis, press);
     }
   }
   return bonesStore.setPierceTorques(torques);
 }
 
-function publishOcclusion(contacts) {
+function publishOcclusion(contacts, transforms = null) {
   const next = new Map();
   const held = new Map();
-  for (const { pierced, contact } of contacts) {
-    if (!contact || !contact.engaged) continue;
-    const current = next.get(contact.piercer.id);
-    // Beneath the LOWEST layer it is inside, so every one of them draws
-    // over it rather than just the topmost.
-    if (!current || pierced.zIndex < current.zIndex) next.set(contact.piercer.id, pierced);
+  const open = [];
+  for (const { target, contact } of contacts) {
+    if (!contact) continue;
+    if (target.mode !== SpreadMode.OFF && contact.openT > 0) open.push([target.key, contact.openT]);
+    const inFront = target.mode !== SpreadMode.OFF;
+    if (contact.engaged || (inFront && contact.openT > 0)) {
+      const current = next.get(contact.piercer.id);
+      if (inFront) {
+        // In front of every half, so none of them can cover the tip.
+        const layers = current && current.mode === 'lift' ? [...current.layers, ...target.layers] : [...target.layers];
+        next.set(contact.piercer.id, { mode: 'lift', layers });
+      } else if (!current || (current.mode === 'sink' && target.layers[0].zIndex < current.layers[0].zIndex)) {
+        // Beneath the LOWEST layer it is inside, so every one of them draws
+        // over it rather than just the topmost.
+        next.set(contact.piercer.id, { mode: 'sink', layers: [target.layers[0]] });
+      }
+    }
 
-    // THE END POINT IS A LIMIT ON THE PIERCER, NOT JUST ON THE PUSH
-    //
-    // Capping the depth stops the flesh giving way any further, which is
-    // half of what a hard limit means. The other half is that the piercer
-    // itself has to stop, and it did not: its artwork was drawn at the raw
-    // dragged position, so the drag carried it on through the layer and
-    // out the far side while the depth sat pinned at End. Measured with a
-    // needle driven past a 32 px block: depth held at 16 the whole way
-    // while the tip travelled from 435 px to 720 px down the screen and
-    // crossed the flesh's bottom edge at 590 -- a needle visibly coming
-    // out the other side of something it was only ever meant to dent.
-    //
-    // So the artwork is held back by exactly the distance the depth
-    // refused, along the piercer's own axis. The drag keeps being the
-    // user's -- nothing blocks the finger, and moving sideways or pulling
-    // out still tracks it one-for-one -- but the axis component of it
-    // stops having any effect once End is reached, which is what "the tip
-    // stops advancing" has to mean on screen. Pulling back shrinks the
-    // overshoot to nothing and the piercer follows the finger again.
+    if (!contact.engaged) continue;
+    // THE END POINT IS A LIMIT ON THE PIERCER, NOT JUST ON THE DEPTH: the
+    // artwork is held back by exactly the distance the depth (and the walls)
+    // refused, along the piercer's own axis.
     const backX = contact.rawTip.x - contact.tip.x;
     const backY = contact.rawTip.y - contact.tip.y;
     const distance = Math.hypot(backX, backY);
     if (distance > 1e-6) {
       const previous = held.get(contact.piercer.id);
-      // Two layers at once: obey whichever stopped it hardest.
+      // Two targets at once: obey whichever stopped it hardest.
       if (!previous || distance > previous.distance) {
         held.set(contact.piercer.id, { distance, x: backX, y: backY });
       }
@@ -897,124 +920,82 @@ function publishOcclusion(contacts) {
   }
   occlusion = next;
   hold = held;
-  torqueChanged = publishForce(contacts);
+  // The V's opening, written here rather than in the frame loop so the
+  // renderer's own re-measure keeps it current: a frame that re-measured the
+  // contact but drew last frame's V would lag the drag by a frame.
+  publishSpreadOpen(open);
+  torqueChanged = publishForce(contacts, transforms);
 
-  // THE DENT, BOTH HALVES OF IT, IN ONE PASS
-  //
-  // Written here rather than in the frame loop so the renderer's own
-  // re-measure keeps it current: a frame that re-measured the contact but
-  // drew last frame's shape would lag the drag by one frame at every
-  // depth.
-  //
-  // The wedge is built once and both halves come off the SAME object --
-  // the texels it takes out, and the push it gives the material around it.
-  // That is what stops them reading as two effects that happen to overlap:
-  // one depth fraction, one triangle, one rim.
-  const cuts = new Map();
-  for (const { pierced, contact } of contacts) {
-    if (!pierced.mesh) continue;
-    const tri = dentFor(pierced, contact);
-    const entry = pierceStateFor(pierced.id, pierced.mesh.vertices.length);
-    const pins = pierced.pins.size > 0 ? pinInfluence(pierced.mesh, pierced) : null;
-    writeBunch(pierced.mesh, pierced, tri, entry.offsetX, entry.offsetY, pins);
-    const mask = dentCutMask(pierced, tri);
-    if (mask) cuts.set(pierced.id, mask);
-  }
-  dentCuts = cuts;
-  // Taken from the same contacts in the same pass, so the on-screen
-  // numbers are the ones the frame was actually drawn from rather than a
-  // second measurement that could disagree with it.
-  readout = contacts.map(({ pierced, contact }) => ({
-    pierced: pierced.name,
-    piercer: contact ? contact.piercer.name : null,
-    gap: contact ? contact.gap : null,
-    inPath: Boolean(contact && contact.inPath),
-    enter: contact ? contact.piercer.pierceEnter : null,
-    end: contact ? contact.end : null,
-    depth: contact ? contact.depth : 0,
-    // The dent fraction: 0 is no notch at all, 1 the full configured Depth
-    // and Width. Worth reporting because it IS the wedge's size rather than
-    // a scale factor on a push -- and because it runs on its own scale, so
-    // seeing it sit at 0 while the depth climbs is how the trigger distance
-    // proves it is doing something.
-    dent: contact ? contact.dentT : 0,
-    dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
-    engaged: Boolean(contact && contact.engaged),
-    sunk: Boolean(contact && next.has(contact.piercer.id)),
-    overshoot: contact ? contact.overshoot : 0,
-    // How far the artwork is being held back in total -- the depth cap and
-    // the walls together, since both land in the same difference.
-    held: contact ? Math.hypot(contact.rawTip.x - contact.tip.x, contact.rawTip.y - contact.tip.y) : 0,
-    // How hard the contact is pressing back on the pierced layer's bones,
-    // 0 to 2. Reported because a press that produces no visible reaction
-    // is otherwise indistinguishable from no press at all -- and the
-    // usual reason for that is the lever, not the force.
-    press: pressOf(contact),
-    // Purely lateral: what the walls alone are doing, so a sideways
-    // containment can be told apart from a depth cap on screen.
-    walled: contact && contact.axis
-      ? Math.abs((contact.rawTip.x - contact.tip.x) * -contact.axis.y
-               + (contact.rawTip.y - contact.tip.y) * contact.axis.x)
-      : 0,
-  }));
+  // Taken from the same contacts in the same pass, so the on-screen numbers
+  // are the ones the frame was actually drawn from.
+  readout = contacts.map(({ target, contact }) => {
+    const geometry = target.mode === SpreadMode.OFF ? null : spreadGeometry(target);
+    const swings = geometry && contact
+      ? geometry.halves.map((half) => (swingAt(half, contact.openT) * 180) / Math.PI)
+      : [];
+    return {
+      pierced: target.layers.map((layer) => layer.name).join(' + '),
+      mode: target.mode,
+      piercer: contact ? contact.piercer.name : null,
+      gap: contact ? contact.gap : null,
+      inPath: Boolean(contact && contact.inPath),
+      enter: contact ? contact.piercer.pierceEnter : null,
+      end: contact ? contact.end : null,
+      depth: contact ? contact.depth : 0,
+      // The V's opening, 0 shut to 1 fully open, on its own scale -- seeing
+      // it sit at 0 while the depth climbs is how the trigger distance proves
+      // it is doing something.
+      open: contact ? contact.openT : 0,
+      swings,
+      dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
+      engaged: Boolean(contact && contact.engaged),
+      inFront: Boolean(contact && next.get(contact.piercer.id)?.mode === 'lift'),
+      sunk: Boolean(contact && next.get(contact.piercer.id)?.mode === 'sink'),
+      overshoot: contact ? contact.overshoot : 0,
+      held: contact ? Math.hypot(contact.rawTip.x - contact.tip.x, contact.rawTip.y - contact.tip.y) : 0,
+      press: pressOf(contact),
+      walled: contact && contact.axis
+        ? Math.abs((contact.rawTip.x - contact.tip.x) * -contact.axis.y
+                 + (contact.rawTip.y - contact.tip.y) * contact.axis.x)
+        : 0,
+    };
+  });
   occlusionStale = false;
 }
 
-// What the solver currently reads, for the on-screen probe. Goes through
-// pierceOcclusion() so a stale answer is re-measured first.
+// What the solver currently reads, for the on-screen probe.
 export function pierceReadout() {
   pierceOcclusion();
   return readout;
 }
 
 // Anything that can move a piercer or a layer invalidates this. The frame
-// loop republishes on every step it takes, so while something is moving
-// the answer is always this frame's; when the loop is asleep nothing is
-// moving and the last answer still stands. This flag covers the gap
-// between the two -- the first frame after a drag, where the renderer runs
-// before the loop has stepped.
+// loop republishes on every step it takes; this flag covers the first frame
+// after a drag, where the renderer runs before the loop has stepped.
 export function markPierceStale() {
   occlusionStale = true;
 }
 
+// Who is drawn where in the stack this frame: piercer id -> { mode, layers },
+// 'sink' to draw its tip beneath a plain pierced layer, 'lift' to draw it in
+// front of a V's halves.
 export function pierceOcclusion() {
   if (occlusionStale) {
     const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-    publishOcclusion(partsStore.hasPierce ? activeContacts(transforms) : []);
+    publishOcclusion(partsStore.hasPierce ? activeContacts(transforms) : [], transforms);
   }
   return occlusion;
 }
 
 // How far each piercer's artwork is to be held back from where the drag
-// actually put it, so its tip stops at the End Point. Empty for every
-// piercer that has not reached its limit, which is the normal case.
+// actually put it, so its tip stops at the End Point.
 export function pierceHold() {
   pierceOcclusion();
   return hold;
 }
 
-// The dent's cut, as a draw mask per pierced layer: one byte per source
-// texel, zero where the wedge has taken the artwork out. Empty for every
-// layer not currently dented, which is the normal case.
-export function pierceDentCuts() {
-  pierceOcclusion();
-  return dentCuts;
-}
-
-// The wedge itself, for tests and for the on-canvas overlay -- the same
-// object the cut and the bunching are both built from.
-export function pierceDentOf(part) {
-  pierceOcclusion();
-  const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  for (const { pierced, contact } of activeContacts(transforms)) {
-    if (pierced.id === part.id) return dentFor(pierced, contact);
-  }
-  return null;
-}
-
 // One byte per source texel, splitting a layer's artwork into its painted
-// region and everything else. Cached against the region version, so
-// painting rebuilds them and a frame never does.
+// region and everything else. Cached against the region version.
 const maskCache = new Map();
 
 export function pierceMasks(part) {
@@ -1038,29 +1019,16 @@ export function pierceMasks(part) {
 
 // ---------------------------------------------------------------------------
 // The region overlay: a testing aid, off by default
-
-// Which pixels the app thinks are painted is invisible once the painter is
-// closed, so "nothing is happening" and "the regions are not where I think
-// they are" look identical. This draws them back onto the artwork, in the
-// painter's own two colours, through the layer's own geometry -- so it
-// follows every deformation exactly and cannot drift out of step with what
-// it is reporting on.
 //
-// The colours are the painter's own, laid on harder than it lays them: the
-// painter can dim the artwork underneath with its opacity sliders, and
-// here the artwork is at full strength. So the hue still reads as pink or cyan over
-// bright pixel art instead of washing out to a pale tint of whatever is
-// beneath it. Opaque enough to identify, sheer enough to still see the
-// artwork it is describing.
+// Which pixels the app thinks are painted is invisible once the painter is
+// closed, so this draws them back onto the artwork, in the painter's own
+// colours, through the layer's own geometry -- so it follows every
+// deformation exactly, the V included.
 const OVERLAY_TIP = [255, 46, 147, 185];
 const OVERLAY_AREA = [46, 230, 255, 185];
-// Pierceable AND deformable, in the painter's amber. Telling the two
-// apart on the canvas is the whole point of the split: cyan is where a
-// pierce registers, amber is where it actually moves anything.
-const OVERLAY_DEFORM = [255, 176, 46, 190];
-// Walls, in a near-white the other three cannot be mistaken for. A barrier
-// is not a degree of anything -- it is solid or it is not -- so it reads
-// as the most opaque of the four.
+// The seam a single layer is split along, in the painter's violet.
+const OVERLAY_SEAM = [160, 120, 255, 215];
+// Walls, in a near-white the others cannot be mistaken for.
 const OVERLAY_BARRIER = [236, 238, 248, 215];
 
 let overlayOn = false;
@@ -1074,167 +1042,93 @@ export function setPierceOverlay(on) {
   overlayOn = Boolean(on);
 }
 
-// A texture the size of the layer's artwork: the region's colour where the
-// user painted, fully transparent everywhere else. Drawn over the layer
-// through the same triangles with the same mask, so it lands on exactly
-// the texels it is describing.
 export function pierceOverlayTexture(part) {
   if (!part) return null;
-  if (part.pierceRegion.size === 0 && part.pierceBarrierRegion.size === 0) return null;
+  if (part.pierceRegion.size === 0 && part.pierceBarrierRegion.size === 0 && part.pierceSeam.size === 0) return null;
   const size = part.naturalWidth * part.naturalHeight;
-  const version = `${part.pierceRegionVersion || 0}:${part.pierceDeformRegionVersion || 0}:` +
+  const version = `${part.pierceRegionVersion || 0}:${part.pierceSeamVersion || 0}:` +
     `${part.pierceBarrierRegionVersion || 0}`;
   const cached = overlayCache.get(part.id);
   if (cached && cached.version === version && cached.role === part.pierceRole && cached.pixels.length === size * 4) {
     return cached.pixels;
   }
 
-  const base = part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA;
-  const walls = part.isPiercer ? null : part.pierceBarrierRegion;
-  // Deformable no longer means "gives way" and an empty one no longer
-  // means "all of it". It is the material that BUNCHES around the dent,
-  // and painting none of it asks for none -- so amber is drawn where the
-  // artist actually painted, and nowhere else. An all-cyan pierceable area
-  // is now a true report: pierceable, with nothing set to react.
   const pixels = new Uint8ClampedArray(size * 4);
-  // Walls are drawn even where they sit outside the pierceable area: a
-  // wall's whole job is to be somewhere the tip must not reach, and that
-  // is often just beyond the cavity's edge.
-  const marked = walls && walls.size > 0
-    ? new Set([...part.pierceRegion, ...walls])
-    : part.pierceRegion;
-  for (const index of marked) {
-    if (index < 0 || index >= size) continue;
-    const wall = walls && walls.has(index);
-    const soft = !wall && !part.isPiercer
-      && part.pierceRegion.has(index) && part.pierceDeformRegion.has(index);
-    if (!wall && !part.pierceRegion.has(index)) continue;
-    const [r, g, b, a] = wall
-      ? OVERLAY_BARRIER
-      : (soft ? OVERLAY_DEFORM : base);
+  const paint = (index, [r, g, b, a]) => {
+    if (index < 0 || index >= size) return;
     const o = index * 4;
-    pixels[o] = r;
-    pixels[o + 1] = g;
-    pixels[o + 2] = b;
-    pixels[o + 3] = a;
+    pixels[o] = r; pixels[o + 1] = g; pixels[o + 2] = b; pixels[o + 3] = a;
+  };
+  for (const index of part.pierceRegion) paint(index, part.isPiercer ? OVERLAY_TIP : OVERLAY_AREA);
+  if (!part.isPiercer) {
+    for (const index of part.pierceSeam) paint(index, OVERLAY_SEAM);
+    for (const index of part.pierceBarrierRegion) paint(index, OVERLAY_BARRIER);
   }
   overlayCache.set(part.id, { version, role: part.pierceRole, pixels });
   return pixels;
 }
 
 // ---------------------------------------------------------------------------
-// The shape at this depth
+// Is this layer's V set up to do anything?
 
-// A dent needs somewhere to be cut from. Everything else about the two
-// numbers is a legitimate setting -- a depth or a width of zero is simply
-// "this layer registers contact without giving way" -- so this reports the
-// one combination that is configured to do something and then cannot.
-const placementIssues = new Map();
-
-export function pierceDentIssue(part) {
+// The configurations that are chosen and then cannot work, said in words --
+// the numbers alone would say a V is configured while nothing ever opens.
+export function pierceSpreadIssue(part) {
   if (!part || !part.isPierced) return null;
-  if (!(part.pierceDentDepth > 0) || !(part.pierceDentWidth > 0)) return null;
-  if (part.pierceRegion.size === 0) {
-    return 'a dent is configured but no Pierceable area is painted, so there ' +
-      'is nothing for it to be cut out of';
+  if (part.pierceSpreadMode === SpreadMode.SEAM && part.pierceSeam.size < 2) {
+    return 'the V is set to split this layer along a seam, but no seam is drawn yet — draw it with Paint regions… → Seam';
   }
-  // A placed dent can be dragged somewhere there is nothing to cut, which
-  // the numbers alone cannot show: Depth and Width would both read as set
-  // while the notch never appeared. Asked at FULL size, so a dent that only
-  // reaches the paint part-way through its growth still counts as working.
-  //
-  // Cached, because this is asked once per pierced layer per frame and the
-  // answer only moves when the paint or the placement does -- and the scan
-  // is the wedge's whole bounding box, which at the top of the size range
-  // is sixteen thousand texels.
-  const key = `${part.pierceRegionVersion || 0}:${part.pierceRegion.size}:` +
-    `${part.pierceDentDepth}:${part.pierceDentWidth}:${part.pierceDentPlaced}:` +
-    `${part.pierceDentX}:${part.pierceDentY}:${part.pierceDentAngle}`;
-  let cached = placementIssues.get(part.id);
-  if (!cached || cached.key !== key) {
-    cached = { key, empty: dentCutArea(part, dentTriangleAt(part, 1)) === 0 };
-    placementIssues.set(part.id, cached);
+  if (part.pierceSpreadMode === SpreadMode.PAIR && !partsStore.partnerOf(part)) {
+    return 'the V is set to pair this layer with another, but that other half is gone';
   }
-  if (cached.empty) {
-    return 'the dent is placed where this layer has no Pierceable pixels, so ' +
-      'there is nothing for it to cut — drag it onto the painted area';
+  const target = spreadTargetOf(part);
+  if (target && target.layers.every((layer) => layer.pierceRegion.size === 0)) {
+    return 'no Pierceable area is painted on either half, so no piercer can reach the V';
+  }
+  if (target && !spreadGeometry(target)) {
+    return 'the halves could not be worked out from this artwork';
   }
   return null;
-}
-
-// What the dent currently is, for this layer, given its contact. Rebuilt
-// every frame from the live dent fraction -- the wedge IS that fraction, so
-// there is no state to hold and nothing to get out of step.
-//
-// Gated on the DENT's fraction, not on contact.engaged. Enter and the
-// trigger distance are separate settings and have to be able to disagree:
-// a trigger set further out than Enter has to be able to start the notch
-// before contact, and one set closer has to be able to hold it back after
-// contact has begun. Reading engagement here would quietly overrule both.
-function dentFor(pierced, contact) {
-  if (!contact || !(contact.dentT > 0)) return null;
-  if (pierceDentIssue(pierced) !== null) return null;
-  return dentTriangleAt(pierced, contact.dentT);
 }
 
 // ---------------------------------------------------------------------------
 // The frame step
 
-// Advances every pierceable layer's displacement by dt seconds. Returns
-// true while anything is still moving, so physics.js's loop knows when it
-// may sleep -- including the whole spring-back after the piercer leaves,
-// which is motion nobody is driving any more.
+// Re-measures every contact and republishes. Returns true while a changed
+// press still has to reach the bones, so physics.js's loop knows when it may
+// sleep. The V itself settles nothing: its shape IS the depth, so there is no
+// motion left over once the piercer stops.
 export function stepPierce() {
   if (!partsStore.hasPierce) {
     publishOcclusion([]);
     return false;
   }
-
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  // Publishing is what writes the shapes -- see publishOcclusion -- and it
-  // happens on every path, including the ones with nothing in contact: an
-  // empty answer is still this frame's answer, and a stale one would leave
-  // a tip sunk under flesh it is no longer touching.
-  publishOcclusion(activeContacts(transforms));
-
-  // The SHAPE settles nothing: the outline IS the depth, so a given depth
-  // always looks the same and there is no motion left over once the
-  // piercer stops -- which is exactly the property the springs did not
-  // have, and the reason they needed the loop kept awake.
-  //
-  // The PRESS does need one more step, though, and only when it changed.
-  // The bones integrate before this runs, so a press first written after
-  // their step would otherwise be sitting on a sleeping loop, unfelt. One
-  // more frame hands it to them; from there their own settle test has it,
-  // because an unbalanced press is an unbalanced spring.
+  publishOcclusion(activeContacts(transforms), transforms);
   return torqueChanged;
 }
 
-// Test/debug window into the solver: what the contact currently reads and
-// how far the flesh has actually been pushed. Proving displacement starts
-// at Enter, caps at End and returns to zero is the whole verification.
+// Test/debug window into the solver: what each contact reads, how open its V
+// is, and how far each half has turned.
 export function pierceDebug() {
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  return activeContacts(transforms).map(({ pierced, contact }) => {
-    const entry = peekPierceState(pierced.id);
-    let worst = 0;
-    if (entry) {
-      for (let i = 0; i < entry.count; i++) {
-        worst = Math.max(worst, Math.hypot(entry.offsetX[i], entry.offsetY[i]));
-      }
-    }
+  return activeContacts(transforms).map(({ target, contact }) => {
+    const geometry = target.mode === SpreadMode.OFF ? null : spreadGeometry(target);
     return {
-      pierced: pierced.name,
-      // The measured separation is reported whether or not it is close
-      // enough to do anything; null means there was nothing to measure at
-      // all (a region on either side still unpainted).
+      pierced: target.layers.map((layer) => layer.name).join(' + '),
+      mode: target.mode,
+      key: target.key,
       engaged: Boolean(contact && contact.engaged),
       inPath: Boolean(contact && contact.inPath),
       gap: contact ? contact.gap : null,
       depth: contact ? contact.depth : 0,
       t: contact ? contact.t : 0,
-      dentT: contact ? contact.dentT : 0,
-      maxOffset: worst,
+      openT: contact ? contact.openT : 0,
+      swings: geometry && contact ? geometry.halves.map((half) => swingAt(half, contact.openT)) : [],
+      fullSwings: geometry ? geometry.halves.map((half) => fullSwing(half)) : [],
+      tip: contact ? contact.tip : null,
+      rawTip: contact ? contact.rawTip : null,
+      axis: contact ? contact.axis : null,
     };
   });
 }

@@ -59,8 +59,8 @@
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { deformVerticesUncorrected, localToWorld, pinCarriageOffset } from './mesh.js';
-import { pierceOffsets } from './pierceState.js';
-import { registerPLinkSolver, carryByCorrection } from './plinkState.js';
+import { spreadActive } from './spread.js';
+import { registerPLinkSolver, carryByCorrection, locateTexel, landTexel } from './plinkState.js';
 
 const MAX_ITERATIONS = 32;
 const CONVERGED = 1e-9; // scene px -- far below anything the grid can show
@@ -241,11 +241,12 @@ export function deserializePLinks(data, partIds) {
 
 // A layer's geometry as the renderer draws it, before PLink: vertex
 // positions, and the texel coordinates they carry. The same decision the
-// renderer makes -- a bound or pierce-driven layer through its mesh, anything
-// else as its plain quad -- so the solve works on what is actually drawn.
+// renderer makes -- a bound layer, or a pierced one whose V is open, through
+// its mesh, anything else as its plain quad -- so the solve works on what is
+// actually drawn.
 function layerGeometry(part, transforms) {
   const mesh = part.mesh;
-  if (mesh && (mesh.isBound || pierceOffsets(part))) {
+  if (mesh && (mesh.isBound || spreadActive(part))) {
     return {
       mesh,
       positions: deformVerticesUncorrected(mesh, part, transforms),
@@ -264,38 +265,15 @@ function layerGeometry(part, transforms) {
   };
 }
 
-function barycentric(a, b, c, u, v) {
-  const den = (b.v - c.v) * (a.u - c.u) + (c.u - b.u) * (a.v - c.v);
-  if (Math.abs(den) < 1e-12) return null;
-  const l0 = ((b.v - c.v) * (u - c.u) + (c.u - b.u) * (v - c.v)) / den;
-  const l1 = ((c.v - a.v) * (u - c.u) + (a.u - c.u) * (v - c.v)) / den;
-  return [l0, l1, 1 - l0 - l1];
-}
-
-// The triangle a texel point sits in, with its barycentric coordinates. A
-// point outside the mesh -- a hinge drawn just past a layer's edge -- uses
-// the NEAREST triangle, extended affinely: the layer carries the point as if
-// its surface continued a little past its own edge.
+// The triangle a texel point sits in, and where it lands -- plinkState.js's
+// locateTexel/landTexel, the same two functions a pierced half uses to find
+// its hinge.
 function locate(geometry, u, v) {
-  const { uvs, triangles } = geometry;
-  let best = null;
-  let bestOutside = Infinity;
-  for (let t = 0; t < triangles.length; t += 3) {
-    const ids = [triangles[t], triangles[t + 1], triangles[t + 2]];
-    const bary = barycentric(uvs[ids[0]], uvs[ids[1]], uvs[ids[2]], u, v);
-    if (!bary) continue;
-    const outside = Math.max(0, -bary[0], -bary[1], -bary[2]);
-    if (outside < bestOutside) { bestOutside = outside; best = { ids, bary }; }
-    if (outside === 0) break;
-  }
-  return best;
+  return locateTexel(geometry.uvs, geometry.triangles, u, v);
 }
 
 function landing(geometry, located) {
-  const { positions } = geometry;
-  const [a, b, c] = located.ids.map((i) => positions[i]);
-  const [l0, l1, l2] = located.bary;
-  return { x: l0 * a.x + l1 * b.x + l2 * c.x, y: l0 * a.y + l1 * b.y + l2 * c.y };
+  return landTexel(geometry.positions, located);
 }
 
 // The inverse: where a SCENE point falls in a layer's texel space, through the

@@ -82,50 +82,66 @@ export const PIERCE_DEPTH_RANGE = Object.freeze({ min: 1, max: 128 });
 export const DEFAULT_PIERCE_ENTER = 12;
 export const DEFAULT_PIERCE_END = 24;
 
-// THE DENT'S OWN STARTING LINE
+// THE DENT TRIGGER DISTANCE: WHEN THE V STARTS TO OPEN
 //
 // A third distance on the same scale as Enter and End, and independent of
-// both: the gap at which the notch BEGINS TO APPEAR. Enter says when the
-// pair is in contact -- z-order swaps, force transfers, the depth starts
+// both: the gap at which the halves BEGIN TO SPREAD. Enter says when the
+// pair is in contact -- containment, force transfer, the depth starts
 // counting -- and this says when the artwork starts visibly giving way.
-// They are two different questions and were previously answered by one
-// number, so a piercer could not touch something without immediately
-// denting it.
+// They are two different questions, so they are two numbers.
 //
-// Set it closer than Enter and the tip makes contact, sinks under the
-// surface and only then starts the notch. Set it equal to Enter and the
-// dent begins on contact, which is what every project did before this
-// existed -- hence the default.
+// The V is shut at this gap and fully open at the End Point, and moves
+// smoothly between the two -- so set it closer than Enter and contact
+// begins first, the halves opening only once the piercer is further in.
+// Equal to Enter is the default: the V starts opening on contact.
 export const DEFAULT_PIERCE_DENT_START = DEFAULT_PIERCE_ENTER;
 
-// The dent's two numbers, in the pierced layer's own texels. Zero is a
-// legitimate setting -- no dent -- so the floor is zero rather than one,
-// and the ceiling is generous enough for a wedge across a large sprite
-// without being large enough to be a typo nobody notices.
-export const MAX_DENT_SIZE = 128;
-export const DEFAULT_DENT_DEPTH = 6;
-export const DEFAULT_DENT_WIDTH = 10;
+// THE V: HOW A PIERCED LAYER GIVES WAY
+//
+// A piercer does not cut into what it enters. It goes BETWEEN two halves --
+// a thumb pressed into the seam between two fingers -- and they swing apart
+// about their own hinges to make room, by exactly as much as the piercer's
+// depth says. See spread.js for the geometry and pierce.js for the depth.
+//
+// The two halves are either two separate layers (PAIR -- an index finger and
+// a middle finger imported on their own) or two sides of ONE layer, split by
+// a seam the artist draws on it (SEAM). OFF is a pierced layer that registers
+// contact without opening at all.
+//
+// The mode is always the artist's explicit choice, never inferred from
+// whatever seam or partner data happens to be stored -- the same rule the
+// pierce role itself follows.
+export const SpreadMode = Object.freeze({
+  OFF: 'off',
+  SEAM: 'seam',
+  PAIR: 'pair',
+});
 
-export function clampDentSize(value) {
+export const SPREAD_MODES = new Set(Object.values(SpreadMode));
+
+// How wide the V is at its mouth when fully open (at the End Point), in
+// scene pixels. Each half swings by the angle that moves its own mouth
+// corner half of this away from the seam, so the two together open exactly
+// this wide however long or short each half is. Zero is a legitimate
+// setting -- halves that stay shut -- so the floor is zero.
+export const MAX_PIERCE_SPREAD = 128;
+export const DEFAULT_PIERCE_SPREAD = 12;
+
+export function clampPierceSpread(value) {
   const number = Math.round(Number(value));
-  if (!Number.isFinite(number)) return 0;
-  return Math.max(0, Math.min(MAX_DENT_SIZE, number));
+  if (!Number.isFinite(number)) return DEFAULT_PIERCE_SPREAD;
+  return Math.max(0, Math.min(MAX_PIERCE_SPREAD, number));
 }
 
-// The dent's base, kept on the artwork. Sub-texel positions are allowed --
-// a handle dragged with a fingertip has no reason to snap -- but a base off
-// the sprite entirely would put the whole wedge where nothing can be cut.
-export function clampDentCoord(value, extent) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return 0;
-  return Math.max(0, Math.min(extent, number));
-}
-
-export function normalizeAngle(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return Math.PI / 2;
-  const turn = Math.PI * 2;
-  return ((number % turn) + turn) % turn;
+// A hinge point in a layer's own texel space: {u, v}, sub-texel positions
+// allowed, kept on (or at the edge of) the artwork. Null means "not placed":
+// spread.js then derives one from the seam.
+export function clampHinge(point, width, height) {
+  if (!point || !Number.isFinite(Number(point.u)) || !Number.isFinite(Number(point.v))) return null;
+  return {
+    u: Math.max(0, Math.min(width, Number(point.u))),
+    v: Math.max(0, Math.min(height, Number(point.v))),
+  };
 }
 
 export function clampPierceDepth(value) {
@@ -194,25 +210,10 @@ export class Part {
     this.pierceRegionVersion = 0;
     this.pierceEnter = DEFAULT_PIERCE_ENTER;
     this.pierceEnd = DEFAULT_PIERCE_END;
-    // The gap at which this piercer starts CUTTING a dent, as opposed to
-    // the gap at which it makes contact. See DEFAULT_PIERCE_DENT_START.
+    // The gap at which the V starts to open -- the Dent Trigger Distance --
+    // as opposed to the gap at which contact begins. See
+    // DEFAULT_PIERCE_DENT_START.
     this.pierceDentStart = DEFAULT_PIERCE_DENT_START;
-
-    // WHICH PIXELS BUNCH AROUND A DENT
-    //
-    // A wedge pushed into something has to put the material it displaces
-    // somewhere, and it piles up at the rim. These are the pixels allowed
-    // to do that: painted anywhere on this layer, they are shoved outward
-    // along the dent's own faces, by an amount that falls off with distance
-    // from it and grows with depth.
-    //
-    // EMPTY MEANS NONE. This is opt-in -- gathering is an effect asked for
-    // on the pixels it should happen to, not one every pierceable pixel
-    // gets until told otherwise. It is also NOT intersected with the
-    // pierceable area: the material that rises around a dent is usually the
-    // material just outside where the pierce itself registers.
-    this.pierceDeformRegion = new Set();
-    this.pierceDeformRegionVersion = 0;
 
     // WALLS THE TIP CANNOT CROSS
     //
@@ -229,39 +230,22 @@ export class Part {
     this.pierceBarrierRegion = new Set();
     this.pierceBarrierRegionVersion = 0;
 
-    // THE DENT THIS REGION TAKES AT FULL DEPTH
+    // THE V THIS LAYER OPENS INTO (see SpreadMode)
     //
-    // Two numbers rather than a second painted silhouette. How far the
-    // wedge's point pushes in, and how wide its base is across the surface
-    // -- both in this layer's own texels, both scaled by the live depth
-    // fraction, so the dent grows from nothing and shrinks back the same
-    // way. See dent.js for what is built from them and why drawing a whole
-    // second outline turned out not to work on real artwork.
-    //
-    // Zero on either means no dent, which is a finished, valid setup for a
-    // layer that registers contact without giving way.
-    this.pierceDentDepth = DEFAULT_DENT_DEPTH;
-    this.pierceDentWidth = DEFAULT_DENT_WIDTH;
-
-    // WHERE THE DENT IS, IN THIS LAYER'S OWN TEXELS
-    //
-    // The base's centre and the direction the apex is driven in. Placed by
-    // the artist, by dragging the wedge onto the spot it should happen at,
-    // and FIXED once placed: the piercer's approach decides how much of the
-    // dent there is, never where it is.
-    //
-    // Texel space, like every other mask on a Part, so the dent stays glued
-    // to the artwork through any amount of dragging, rigging or rotation
-    // without a single coordinate conversion.
-    //
-    // Unplaced, these are ignored and dent.js derives a starting position
-    // from the pierceable paint instead -- so the handles always have
-    // somewhere sensible to appear, and nothing is stored until a drag
-    // stores it.
-    this.pierceDentPlaced = false;
-    this.pierceDentX = 0;
-    this.pierceDentY = 0;
-    this.pierceDentAngle = Math.PI / 2;
+    // pierceSeam is the line the artist draws to split ONE layer into its
+    // two halves -- texel indices in this layer's grid, painted with the same
+    // freehand brush as every other mask. piercePartnerId is the OTHER layer
+    // when the two halves are separate layers; both layers point at each
+    // other. The hinges are where each half turns: A and B for the two sides
+    // of a seam, only A (this layer's own) for a pair. Each is {u, v} in this
+    // layer's texels, or null for "derive it from the seam".
+    this.pierceSpreadMode = SpreadMode.OFF;
+    this.pierceSeam = new Set();
+    this.pierceSeamVersion = 0;
+    this.piercePartnerId = null;
+    this.pierceHingeA = null;
+    this.pierceHingeB = null;
+    this.pierceSpread = DEFAULT_PIERCE_SPREAD;
 
     // Which side's movement may deepen this piercer's contacts. Lives on
     // the piercer with Enter and End, because like them it describes the
@@ -451,6 +435,9 @@ class PartsStore {
   remove(id) {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part) return null;
+    // Half of a V leaving takes the V with it: the other half is left
+    // pierced, with its own V switched off, rather than paired with nothing.
+    this._unpair(part);
 
     this._parts = this._parts.filter((candidate) => candidate.id !== id);
     if (this._selectedId === id) this._selectedId = null;
@@ -554,19 +541,20 @@ class PartsStore {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part || !PIERCE_ROLES.has(role) || part.pierceRole === role) return false;
     part.pierceRole = role;
+    // Only a pierced layer can be half of a V.
+    if (role !== PierceRole.PIERCED) this._unpair(part);
     if (role === PierceRole.NONE) {
       part.pierceRegion = new Set();
       part.pierceRegionVersion++;
-      part.pierceDeformRegion = new Set();
-      part.pierceDeformRegionVersion++;
       part.pierceBarrierRegion = new Set();
       part.pierceBarrierRegionVersion++;
-      part.pierceDentDepth = DEFAULT_DENT_DEPTH;
-      part.pierceDentWidth = DEFAULT_DENT_WIDTH;
-      part.pierceDentPlaced = false;
-      part.pierceDentX = 0;
-      part.pierceDentY = 0;
-      part.pierceDentAngle = Math.PI / 2;
+      this._unpair(part);
+      part.pierceSpreadMode = SpreadMode.OFF;
+      part.pierceSeam = new Set();
+      part.pierceSeamVersion++;
+      part.pierceHingeA = null;
+      part.pierceHingeB = null;
+      part.pierceSpread = DEFAULT_PIERCE_SPREAD;
       part.piercePhysics = PiercePhysics.PIERCER;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
@@ -597,35 +585,109 @@ class PartsStore {
     return true;
   }
 
-  setPierceDent(id, depth, width) {
+  // ---- The V (see SpreadMode) ----------------------------------------
+
+  // A pair's other half, or null. Only a MUTUAL pairing between two pierced
+  // layers counts: a one-sided or stale pointer (a partner since deleted, or
+  // no longer pierced) is not half of anything.
+  partnerOf(part) {
+    if (!part || !part.piercePartnerId) return null;
+    const other = this._parts.find((candidate) => candidate.id === part.piercePartnerId);
+    if (!other || other === part || other.piercePartnerId !== part.id) return null;
+    return other;
+  }
+
+  // Ends a pairing from both sides, leaving each layer's own V switched off
+  // rather than half-configured.
+  _unpair(part) {
+    const other = this._parts.find((candidate) => candidate.id === part.piercePartnerId);
+    part.piercePartnerId = null;
+    if (part.pierceSpreadMode === SpreadMode.PAIR) part.pierceSpreadMode = SpreadMode.OFF;
+    if (other && other.piercePartnerId === part.id) {
+      other.piercePartnerId = null;
+      if (other.pierceSpreadMode === SpreadMode.PAIR) other.pierceSpreadMode = SpreadMode.OFF;
+    }
+  }
+
+  // OFF or SEAM on this layer alone. Leaving a pair takes the other half out
+  // of it too -- a pair of one is not a V.
+  setPierceSpreadMode(id, mode) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || !SPREAD_MODES.has(mode) || mode === SpreadMode.PAIR) return false;
+    if (part.pierceSpreadMode === mode && !part.piercePartnerId) return false;
+    this._unpair(part);
+    part.pierceSpreadMode = mode;
+    this._emit('structure');
+    return true;
+  }
+
+  // Makes two pierced layers the two halves of one V. Both are rewritten --
+  // each points at the other, both in PAIR mode -- and any pairing either
+  // was in before is ended first. The partner must already be pierced: the
+  // role is the user's explicit choice and is never assigned from here.
+  setPiercePartner(id, partnerId) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    const other = this._parts.find((candidate) => candidate.id === partnerId);
+    if (!part || !other || part === other || !part.isPierced || !other.isPierced) return false;
+    if (this.partnerOf(part) === other) return false;
+    this._unpair(part);
+    this._unpair(other);
+    part.piercePartnerId = other.id;
+    other.piercePartnerId = part.id;
+    part.pierceSpreadMode = SpreadMode.PAIR;
+    other.pierceSpreadMode = SpreadMode.PAIR;
+    // One V, one opening: the pair shares the setting it was made with.
+    other.pierceSpread = part.pierceSpread;
+    this._emit('structure');
+    return true;
+  }
+
+  // The full opening, written to both halves of a pair so they cannot
+  // disagree about how wide their shared V is.
+  setPierceSpread(id, width) {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part) return false;
-    const nextDepth = clampDentSize(depth);
-    const nextWidth = clampDentSize(width);
-    if (part.pierceDentDepth === nextDepth && part.pierceDentWidth === nextWidth) return false;
-    part.pierceDentDepth = nextDepth;
-    part.pierceDentWidth = nextWidth;
+    const next = clampPierceSpread(width);
+    const other = this.partnerOf(part);
+    if (part.pierceSpread === next && (!other || other.pierceSpread === next)) return false;
+    part.pierceSpread = next;
+    if (other) other.pierceSpread = next;
     this._emit('transform');
     return true;
   }
 
-  // Where the wedge sits on this layer's artwork. Writing any placement
-  // marks it placed, so the derived starting position stops applying and
-  // the dent stays exactly where it was put.
-  setPierceDentPlacement(id, x, y, angle) {
+  // Places ('a' or 'b') a hinge in this layer's texels, or clears it back to
+  // the derived default with null.
+  setPierceHinge(id, which, point) {
     const part = this._parts.find((candidate) => candidate.id === id);
-    if (!part) return false;
-    const nextX = clampDentCoord(x, part.naturalWidth);
-    const nextY = clampDentCoord(y, part.naturalHeight);
-    const nextAngle = normalizeAngle(angle);
-    if (part.pierceDentPlaced && part.pierceDentX === nextX &&
-        part.pierceDentY === nextY && part.pierceDentAngle === nextAngle) return false;
-    part.pierceDentPlaced = true;
-    part.pierceDentX = nextX;
-    part.pierceDentY = nextY;
-    part.pierceDentAngle = nextAngle;
+    if (!part || (which !== 'a' && which !== 'b')) return false;
+    const key = which === 'a' ? 'pierceHingeA' : 'pierceHingeB';
+    const next = clampHinge(point, part.naturalWidth, part.naturalHeight);
+    const current = part[key];
+    if ((next === null && current === null) ||
+        (next && current && next.u === current.u && next.v === current.v)) return false;
+    part[key] = next;
     this._emit('transform');
     return true;
+  }
+
+  // The seam that splits one layer into two halves, painted like any mask.
+  setPierceSeam(id, indices, marked) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return 0;
+    let changed = 0;
+    for (const index of indices) {
+      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
+      if (marked ? !part.pierceSeam.has(index) : part.pierceSeam.has(index)) {
+        if (marked) part.pierceSeam.add(index); else part.pierceSeam.delete(index);
+        changed++;
+      }
+    }
+    if (changed) {
+      part.pierceSeamVersion++;
+      this._emit('transform');
+    }
+    return changed;
   }
 
   setPierceBarrierRegion(id, indices, marked) {
@@ -641,27 +703,6 @@ class PartsStore {
     }
     if (changed) {
       part.pierceBarrierRegionVersion++;
-      this._emit('transform');
-    }
-    return changed;
-  }
-
-  // The deformable sub-mask, painted exactly like the others. Kept beside
-  // setPierceRegion rather than folded into it because the two answer
-  // different questions and are painted in separate passes.
-  setPierceDeformRegion(id, indices, marked) {
-    const part = this._parts.find((candidate) => candidate.id === id);
-    if (!part) return 0;
-    let changed = 0;
-    for (const index of indices) {
-      if (index < 0 || index >= part.naturalWidth * part.naturalHeight) continue;
-      if (marked ? !part.pierceDeformRegion.has(index) : part.pierceDeformRegion.has(index)) {
-        if (marked) part.pierceDeformRegion.add(index); else part.pierceDeformRegion.delete(index);
-        changed++;
-      }
-    }
-    if (changed) {
-      part.pierceDeformRegionVersion++;
       this._emit('transform');
     }
     return changed;

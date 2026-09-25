@@ -18,9 +18,8 @@ import {
   Part, partsStore, reservePartId,
   PierceRole, PIERCE_ROLES, clampPierceDepth,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
-  clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH,
-  clampDentCoord, normalizeAngle,
   PiercePhysics, PIERCE_PHYSICS,
+  SpreadMode, SPREAD_MODES, clampPierceSpread, clampHinge, DEFAULT_PIERCE_SPREAD,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
 import { MeshVertex, PartMesh, sanitizeWeights } from './mesh.js';
@@ -144,14 +143,14 @@ function serializePart(part, copyPixels) {
     // saves and PSaver exports without any special casing.
     pierceRole: part.pierceRole,
     pierceRegion: [...part.pierceRegion],
-    pierceDeformRegion: [...part.pierceDeformRegion],
     pierceBarrierRegion: [...part.pierceBarrierRegion],
-    pierceDentDepth: part.pierceDentDepth,
-    pierceDentWidth: part.pierceDentWidth,
-    pierceDentPlaced: part.pierceDentPlaced,
-    pierceDentX: part.pierceDentX,
-    pierceDentY: part.pierceDentY,
-    pierceDentAngle: part.pierceDentAngle,
+    // The V: which halves open, where each turns, and how wide it opens.
+    pierceSpreadMode: part.pierceSpreadMode,
+    pierceSeam: [...part.pierceSeam],
+    piercePartnerId: part.piercePartnerId,
+    pierceHingeA: part.pierceHingeA ? { ...part.pierceHingeA } : null,
+    pierceHingeB: part.pierceHingeB ? { ...part.pierceHingeB } : null,
+    pierceSpread: part.pierceSpread,
     piercePhysics: part.piercePhysics,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
@@ -189,38 +188,35 @@ function deserializePart(data) {
   const role = data.pierceRole === 'interactive' ? PierceRole.PIERCED : data.pierceRole;
   part.pierceRole = PIERCE_ROLES.has(role) ? role : PierceRole.NONE;
   part.pierceRegion = new Set(data.pierceRegion || []);
-  // Absent in projects saved before the deformable mask existed, and an
-  // empty one means "all of the pierceable area gives way" -- which is
-  // exactly how those projects behaved, so they load unchanged.
-  part.pierceDeformRegion = new Set(data.pierceDeformRegion || []);
   // Absent before barriers existed; empty means no walls, which is how
   // those projects behaved.
   part.pierceBarrierRegion = new Set(data.pierceBarrierRegion || []);
-  // The dent's two numbers. A project saved before them carries a painted
-  // pierceEnteredRegion instead -- a second silhouette for a blend that no
-  // longer exists. It is deliberately NOT migrated into a depth and a
-  // width: those numbers cannot be recovered from a freehand outline
-  // without inventing them, and inventing them would silently give an old
-  // project a dent nobody configured. It loads with the defaults, and the
-  // Pierce window's two sliders are then the whole setup.
-  part.pierceDentDepth = clampDentSize(data.pierceDentDepth ?? DEFAULT_DENT_DEPTH);
-  part.pierceDentWidth = clampDentSize(data.pierceDentWidth ?? DEFAULT_DENT_WIDTH);
-  // Where the dent sits. Absent in a project saved while the wedge still
-  // followed the piercer's live contact point, and left unplaced for one:
-  // there is no stored spot to recover, so dent.js derives a starting
-  // position from the pierceable paint and the first drag makes it real.
-  part.pierceDentPlaced = Boolean(data.pierceDentPlaced);
-  part.pierceDentX = clampDentCoord(data.pierceDentX ?? 0, part.naturalWidth);
-  part.pierceDentY = clampDentCoord(data.pierceDentY ?? 0, part.naturalHeight);
-  part.pierceDentAngle = normalizeAngle(data.pierceDentAngle ?? Math.PI / 2);
+  // The V. A project saved while pierces cut a triangular dent (and bunched
+  // "Deformable" pixels around it) carries pierceDentDepth/Width/X/Y/Angle
+  // and pierceDeformRegion instead. They are deliberately NOT turned into a
+  // V: a dent says nothing about where a seam runs or which two halves it
+  // separates, and inventing one would give an old project an opening
+  // nobody drew. Such a layer loads with its V switched off, everything
+  // else about its pierce intact, and the V is then one choice away.
+  part.pierceSpreadMode = SPREAD_MODES.has(data.pierceSpreadMode) ? data.pierceSpreadMode : SpreadMode.OFF;
+  const size = part.naturalWidth * part.naturalHeight;
+  part.pierceSeam = new Set((Array.isArray(data.pierceSeam) ? data.pierceSeam : [])
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < size));
+  // Checked against the other layers once they are all loaded (see
+  // applyProject): a partner that did not come back is no partner.
+  part.piercePartnerId = typeof data.piercePartnerId === 'string' ? data.piercePartnerId : null;
+  part.pierceHingeA = clampHinge(data.pierceHingeA, part.naturalWidth, part.naturalHeight);
+  part.pierceHingeB = clampHinge(data.pierceHingeB, part.naturalWidth, part.naturalHeight);
+  part.pierceSpread = clampPierceSpread(data.pierceSpread ?? DEFAULT_PIERCE_SPREAD);
   // Absent before the setting existed, and its default is the behaviour
   // those projects were saved under.
   part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)
     ? data.piercePhysics : PiercePhysics.PIERCER;
   part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
   part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
-  // Absent before the dent had its own starting line, when it began at the
-  // Enter Point -- so that is what those projects load with.
+  // The Dent Trigger Distance. Absent before it had its own starting line,
+  // when it began at the Enter Point -- so that is what those projects load
+  // with.
   part.pierceDentStart = clampPierceDepth(data.pierceDentStart ?? part.pierceEnter);
   part.mesh = deserializeMesh(data.mesh);
   return part;
@@ -299,6 +295,20 @@ export function applyProject(data) {
   if (!data) return;
   if (data.canvas) sceneStore.setSize(data.canvas.width, data.canvas.height);
   partsStore.replaceAll((data.parts || []).map(deserializePart), data.selectedPartId ?? null);
+  // A pair is two layers pointing at each other, and both have to have come
+  // back pierced: anything less is a V missing a half, and is switched off
+  // rather than left half-configured.
+  for (const part of partsStore.parts) {
+    if (part.pierceSpreadMode !== SpreadMode.PAIR && !part.piercePartnerId) continue;
+    const other = partsStore.parts.find((candidate) => candidate.id === part.piercePartnerId);
+    const mutual = other && other !== part && other.piercePartnerId === part.id
+      && part.isPierced && other.isPierced
+      && part.pierceSpreadMode === SpreadMode.PAIR && other.pierceSpreadMode === SpreadMode.PAIR;
+    if (!mutual) {
+      part.piercePartnerId = null;
+      if (part.pierceSpreadMode === SpreadMode.PAIR) part.pierceSpreadMode = SpreadMode.OFF;
+    }
+  }
   bonesStore.replaceAll((data.bones || []).map(deserializeBone), data.selectedBoneId ?? null);
   // After the layers, because a link is only kept if every layer it joins
   // came back. A project saved before PLink existed simply has none.

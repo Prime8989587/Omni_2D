@@ -447,26 +447,25 @@
           <p id="piercePhysicsHint" class="joint-hint"></p>
         </div>
 
-        <div id="pierceDentRow" hidden>
+        <div id="pierceSpreadRow" hidden>
           <div class="field-label-row">
-            <div class="field-label">Dent shape</div>
-            <button class="info-btn" type="button" data-info="pierce-dent" aria-haspopup="true" aria-expanded="false" aria-label="What do Depth and Width do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+            <div class="field-label">V spread — two halves that part</div>
+            <button class="info-btn" type="button" data-info="pierce-spread" aria-haspopup="true" aria-expanded="false" aria-label="How does the V spread work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
           </div>
-          <label class="slider-field slider-field--wide">
-            <span>Depth <b id="pierceDentDepthValue">6 px</b></span>
-            <input id="pierceDentDepthSlider" class="slider" type="range" min="0" max="128" step="1" value="6" />
+          <div class="segmented" role="group" aria-label="What the two halves are">
+            <button id="pierceSpreadOffBtn" class="segmented__btn" type="button" aria-pressed="true">Off</button>
+            <button id="pierceSpreadSeamBtn" class="segmented__btn" type="button" aria-pressed="false">Seam</button>
+            <button id="pierceSpreadPairBtn" class="segmented__btn" type="button" aria-pressed="false">Two layers</button>
+          </div>
+          <label id="pierceSpreadPartnerRow" class="plink__anchor" hidden>
+            <span>Other half</span>
+            <select id="pierceSpreadPartnerSelect" class="select-input"></select>
           </label>
-          <label class="slider-field slider-field--wide">
-            <span>Width <b id="pierceDentWidthValue">10 px</b></span>
-            <input id="pierceDentWidthSlider" class="slider" type="range" min="0" max="128" step="1" value="10" />
+          <label id="pierceSpreadWidthRow" class="slider-field slider-field--wide">
+            <span>Full opening <b id="pierceSpreadValue">12 px</b></span>
+            <input id="pierceSpreadSlider" class="slider" type="range" min="0" max="64" step="1" value="12" />
           </label>
-          <p class="joint-hint">
-            The notch a pierce cuts into this layer, in its own pixels, at the
-            End Point. Depth is how far the point drives in along the approach;
-            Width is how wide the opening is across the surface. Both grow from
-            nothing at the Enter Point, and shrink back to nothing on the way
-            out. Set Depth or Width to 0 for no notch.
-          </p>
+          <p id="pierceSpreadHint" class="joint-hint"></p>
         </div>
 
         <div id="pierceDepthSummary" hidden>
@@ -482,8 +481,8 @@
         <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show painted regions on the canvas</button>
         <p class="joint-hint">
           A testing aid, right on the artwork: tips pink, pierceable cyan,
-          the part that bunches up around a dent amber, and walls white — plus
-          the live contact reading. Leave it off for normal work.
+          seams violet and walls white — plus the live contact reading and how
+          open the V is. Leave it off for normal work.
         </p>
         <button id="pierceRemoveBtn" class="btn btn--sm btn--danger px-pin-launch" type="button">Remove Pierce Role</button>
 
@@ -506,10 +505,11 @@
           <button class="info-btn" type="button" data-info="pierce-dent-start" aria-haspopup="true" aria-expanded="false" aria-label="What is the Dent Trigger Distance?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
         </div>
         <p class="modal__text">
-          A separate gap: where the notch <b>starts to appear</b>. Contact,
-          z-order and force all begin at the Enter Point; the dent begins here
-          and is complete at the End Point. Set it closer than Enter for a tip
-          that touches first and only dents once it is further in.
+          A separate gap: where the V <b>starts to open</b>. Contact,
+          containment and force all begin at the Enter Point; the halves start
+          parting here and are fully apart at the End Point. Set it closer than
+          Enter for a tip that touches first and only parts them once it is
+          further in.
         </p>
         <div class="bind-row">
           <label class="slider-field">
@@ -537,7 +537,7 @@
           <canvas id="pierceDepthCanvas" class="pierce-draw__canvas" width="480" height="300"></canvas>
           <p id="pierceDrawHint" class="px-pin__hint">
             Drag the three handles along the needle's path: <b>Enter</b> where
-            contact begins, <b>Dent</b> where the notch starts to appear, and
+            contact begins, <b>Dent</b> where the V starts to open, and
             <b>End</b> where both stop growing.
           </p>
         </div>
@@ -735,10 +735,11 @@
         <div class="segmented" role="group" aria-label="Which region to paint">
           <button id="pierceTargetTipBtn" class="segmented__btn" type="button" aria-pressed="true">Tip</button>
           <button id="pierceTargetAreaBtn" class="segmented__btn" type="button" aria-pressed="false">Pierceable</button>
-          <button id="pierceTargetDeformBtn" class="segmented__btn" type="button" aria-pressed="false">Deformable</button>
+          <button id="pierceTargetSeamBtn" class="segmented__btn" type="button" aria-pressed="false">Seam</button>
           <button id="pierceTargetBarrierBtn" class="segmented__btn" type="button" aria-pressed="false">Barrier</button>
-          <button id="pierceTargetDentBtn" class="segmented__btn" type="button" aria-pressed="false">Dent</button>
+          <button id="pierceTargetHingeBtn" class="segmented__btn" type="button" aria-pressed="false">Hinges</button>
         </div>
+        <button id="pierceSwitchHalfBtn" class="btn btn--sm px-pin-launch" type="button" hidden>Paint the other half</button>
         <div id="pierceToolRow" class="segmented" role="group" aria-label="Paint tools">
           <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
           <button id="pierceToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>

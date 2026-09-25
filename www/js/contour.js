@@ -4,7 +4,7 @@
 // sit on its boundary. No canvas, no view, no settings -- so "does this
 // find the right edge" is answerable from a hand-written 5x5 grid in a
 // headless test rather than by screenshotting a rig and squinting at it,
-// the same split raster.js, dent.js and color.js already follow.
+// the same split raster.js, spread.js and color.js already follow.
 //
 // WHAT COUNTS AS AN EDGE
 //

@@ -4,7 +4,7 @@
 //
 // No DOM is touched by any of this -- floodFillFrom and
 // buildExtractedPixels are plain functions over typed arrays and a Set of
-// indices, exactly like dent.js's pure geometry, so the whole algorithm
+// indices, exactly like spread.js's pure geometry, so the whole algorithm
 // runs in Node against the shipped code rather than a re-implementation
 // of it.
 

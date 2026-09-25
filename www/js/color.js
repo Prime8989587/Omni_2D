@@ -1,7 +1,7 @@
 // Colour conversion: pure functions, no DOM, so the wheel's math can be
 // verified headlessly against known reference values rather than by
 // screenshotting a canvas and eyeballing pixels -- the same reasoning
-// dent.js's and raster.js's own geometry is kept apart from any rendering
+// spread.js's and raster.js's own geometry is kept apart from any rendering
 // context.
 //
 // PCreate is the first thing in the app to need general RGB<->HSV
