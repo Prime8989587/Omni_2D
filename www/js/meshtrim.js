@@ -35,6 +35,7 @@ import { contentBounds, cropPixels } from './importer.js';
 import { getSetting, setSetting } from './settings.js';
 import { playEnter } from './transitions.js';
 import { plinkStore } from './plink.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
 
 const WIRE_COLOR = 'rgba(255, 46, 147, 0.75)';
 const VERTEX_COLOR = '#FF2E93';
@@ -101,15 +102,15 @@ function texelToScreen(u, v) {
 // ---------------------------------------------------------------------------
 // Rendering
 
+// The backing store follows the canvas's own box -- see pixelCanvas.js.
+// Picking a tool changes the hint and action rows under the canvas, which
+// is exactly the change that used to leave this stale.
 function sizeCanvas() {
-  const canvas = els.meshTrimCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  session.dpr = dpr;
-  session.viewWidth = rect.width;
-  session.viewHeight = rect.height;
+  const box = fitBackingStore(els.meshTrimCanvas);
+  if (!box) return;
+  session.dpr = box.dpr;
+  session.viewWidth = box.width;
+  session.viewHeight = box.height;
 }
 
 function render() {
@@ -283,8 +284,16 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
+  // Where the pinch was as it ends: the point it settles onto the pixel grid about.
+  const settleAt = session.pinch ? pinchMidpoint(session.pointers) : null;
   session.pointers.delete(event.pointerId);
-  if (session.pointers.size < 2) session.pinch = null;
+  if (session.pointers.size < 2) {
+    if (settleAt) {
+      snapCamera(session.cam, session.dpr, settleAt.x, settleAt.y, { maxZoom: MAX_ZOOM });
+      render();
+    }
+    session.pinch = null;
+  }
   if (session.pointers.size === 0) {
     session.dragging = null;
     endBoundaryStroke();
@@ -570,9 +579,11 @@ export function initMeshTrim({ onExit } = {}) {
     els.meshTrimOpenBtn.addEventListener('click', () => openMeshTrim(partsStore.selected));
   }
 
-  window.addEventListener('resize', () => {
+  watchCanvasBox(els.meshTrimCanvas, () => {
     if (!session) return;
+    const unmeasured = !session.viewWidth;
     sizeCanvas();
+    if (unmeasured) fitCamera();
     render();
   });
 }

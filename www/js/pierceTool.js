@@ -37,6 +37,7 @@ import { pierceSpreadIssue } from './pierce.js';
 import { spreadTargetOf, spreadGeometry, fullSwing } from './spread.js';
 import { SpreadMode } from './parts.js';
 import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
 
 // The tip is the app's accent; the pierceable area is deliberately NOT,
 // because the two are painted in the same window and confusing them would
@@ -216,20 +217,19 @@ function targetPlacement() {
   return session.target === 'tip' ? session.piercerAt : session.piercedAt;
 }
 
+// The backing store follows the canvas's own box -- see pixelCanvas.js.
 function sizeCanvas() {
-  const canvas = els.pierceCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  session.cssWidth = rect.width;
-  session.cssHeight = rect.height;
-  session.dpr = dpr;
+  const box = fitBackingStore(els.pierceCanvas);
+  if (!box) return;
+  session.cssWidth = box.width;
+  session.cssHeight = box.height;
+  session.dpr = box.dpr;
 }
 
 // Fit both layers on screen with a margin; that zoom is also the floor,
 // so the user can always come back out to the overview.
 function fitCamera() {
+  if (!session.cssWidth || !session.cssHeight) return;
   const { piercer, pierced, piercerAt, piercedAt, cam } = session;
   const boxes = [[piercer, piercerAt], [pierced, piercedAt]];
   if (session.partner && session.partnerAt) boxes.push([session.partner, session.partnerAt]);
@@ -244,6 +244,8 @@ function fitCamera() {
   session.minZoom = cam.zoom * 0.5;
   cam.panX = (session.cssWidth - spanX * cam.zoom) / 2 - x0 * cam.zoom;
   cam.panY = (session.cssHeight - spanY * cam.zoom) / 2 - y0 * cam.zoom;
+  // Whole device pixels per texel, so every texel draws the same size.
+  snapCamera(cam, session.dpr, session.cssWidth / 2, session.cssHeight / 2, { maxZoom: MAX_ZOOM });
 }
 
 // ---------------------------------------------------------------------------
@@ -769,8 +771,16 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
+  // Where the pinch was as it ends: the point it settles onto the pixel grid about.
+  const settleAt = session.pinch ? pinchMidpoint(session.pointers) : null;
   session.pointers.delete(event.pointerId);
-  if (session.pointers.size < 2) session.pinch = null;
+  if (session.pointers.size < 2) {
+    if (settleAt) {
+      snapCamera(session.cam, session.dpr, settleAt.x, settleAt.y, { maxZoom: MAX_ZOOM });
+      render();
+    }
+    session.pinch = null;
+  }
   if (session.pointers.size === 0) { endHingeDrag(); endStroke(); }
 }
 
@@ -894,31 +904,16 @@ export function initPierceTool() {
   els.pierceCanvas.addEventListener('pointerup', onPointerUp);
   els.pierceCanvas.addEventListener('pointercancel', onPointerUp);
 
-  window.addEventListener('resize', () => {
-    if (!session) return;
-    sizeCanvas();
-    render();
-  });
-
   // THE CANVAS CAN CHANGE SIZE WITHOUT THE WINDOW DOING SO
   //
-  // It shares a flex column with the controls below it, so anything that
-  // changes THEIR height takes the difference out of the canvas -- and a
-  // window resize is the only thing that used to re-measure. A hint line
-  // under the target row, whose text differs per target, was enough to
-  // break it: the backing store kept the old size while the CSS box
-  // shrank, so the texels drew as stretched rectangles, and the pointer
-  // mapping (which reads a fresh rect) landed somewhere other than where
-  // the finger was. Reopening the window fixed it, until the next target
-  // change. An observer on the element itself catches every cause rather
-  // than the one that happened to be known.
-  if (typeof ResizeObserver === 'function') {
-    new ResizeObserver(() => {
-      if (!session) return;
-      const rect = els.pierceCanvas.getBoundingClientRect();
-      if (rect.width === session.cssWidth && rect.height === session.cssHeight) return;
-      sizeCanvas();
-      render();
-    }).observe(els.pierceCanvas);
-  }
+  // A hint line under the target row, whose text differs per target, was
+  // the first cause found here; pixelCanvas.js now watches the element
+  // itself for every window, so every cause is caught, not just that one.
+  watchCanvasBox(els.pierceCanvas, () => {
+    if (!session) return;
+    const unmeasured = !session.cssWidth;
+    sizeCanvas();
+    if (unmeasured) fitCamera();
+    render();
+  });
 }

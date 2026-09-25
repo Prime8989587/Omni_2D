@@ -51,6 +51,7 @@
 
 import { Part, partsStore } from './parts.js';
 import { playEnter } from './transitions.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
 import { sceneStore, SCENE_PRESETS, MIN_SCENE_SIZE, MAX_SCENE_SIZE } from './scene.js';
 import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName } from './importer.js';
@@ -673,15 +674,15 @@ function redoPCreate() {
   showToast(label ? `Redid ${label}.` : 'Nothing to redo.');
 }
 
+// The backing store follows the canvas's own box -- see pixelCanvas.js.
+// Each drawing tool brings its own option row, so switching tools is
+// exactly the kind of change that used to leave it stale.
 function sizeCanvas() {
-  const canvas = els.pcreateCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  session.cssWidth = rect.width;
-  session.cssHeight = rect.height;
-  session.dpr = dpr;
+  const box = fitBackingStore(els.pcreateCanvas);
+  if (!box) return;
+  session.cssWidth = box.width;
+  session.cssHeight = box.height;
+  session.dpr = box.dpr;
 }
 
 // Two-finger viewport rotation, the same idea as the main canvas's (see
@@ -713,6 +714,7 @@ function shortestAngle(radians) {
 }
 
 function fitCamera() {
+  if (!session.cssWidth || !session.cssHeight) return;
   const { width, height, cam } = session;
   const zoom = Math.min(session.cssWidth / width, session.cssHeight / height) * 0.9;
   cam.zoom = Math.min(MAX_ZOOM, zoom);
@@ -722,6 +724,8 @@ function fitCamera() {
   // Fit means "put the view back", so it straightens it too -- the same
   // way out of a rotation the main canvas offers.
   cam.rotation = 0;
+  // Whole device pixels per canvas pixel, so every pixel draws the same size.
+  snapCamera(cam, session.dpr, session.cssWidth / 2, session.cssHeight / 2, { maxZoom: MAX_ZOOM });
 }
 
 // ---------------------------------------------------------------------------
@@ -1205,8 +1209,17 @@ function onPointerMove(event) {
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
   cancelLongPress();
+  // Where the pinch was as it ends: the point it settles onto the pixel grid
+  // about. A turned view has no pixel grid to settle onto, so only straight.
+  const settleAt = session.pinch && !session.cam.rotation ? pinchMidpoint(session.pointers) : null;
   session.pointers.delete(event.pointerId);
-  if (session.pointers.size < 2) session.pinch = null;
+  if (session.pointers.size < 2) {
+    if (settleAt) {
+      snapCamera(session.cam, session.dpr, settleAt.x, settleAt.y, { maxZoom: MAX_ZOOM });
+      render();
+    }
+    session.pinch = null;
+  }
   if (session.pointers.size === 0) {
     if (longPressFired) {
       longPressFired = false;
@@ -3436,9 +3449,11 @@ export function initPCreate({ onExit, onSettings } = {}) {
   els.pcreateLayerDeleteConfirmBtn.addEventListener('click', confirmDeleteLayer);
   els.pcreateLayerDeleteCancelBtn.addEventListener('click', closeLayerDeleteModal);
 
-  window.addEventListener('resize', () => {
+  watchCanvasBox(els.pcreateCanvas, () => {
     if (!session) return;
+    const unmeasured = !session.cssWidth;
     sizeCanvas();
+    if (unmeasured) fitCamera();
     render();
     // A no-op unless the device pixel ratio actually changed (moving the
     // window to a different-density display, folding/unfolding a phone) --

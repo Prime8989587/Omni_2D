@@ -6461,6 +6461,124 @@ In the real app, on a 390×844 phone viewport with real touch events
 
 All twelve headless suites and all twelve browser suites pass.
 
+## Touch that lands where the finger is: tool-window canvases and Free Move
+
+Four reports arrived together, and looked like one broken coordinate
+transform: Free Move would not drag anything, Mesh Trim's Move / Add /
+Remove did not respond properly, PLink drew pixels as rectangles and put
+taps in the wrong place, and the Pierce V "did not work". The first question
+was whether PLink or the V had changed something shared that every drag
+depends on — a touch-to-canvas transform, a zoom calculation, a drag
+handler. They had not. Measured rather than argued: the same Free-Move
+drags, in the real app with real touches, give **identical** results on the
+build before PLink and on the build after the V, and the main canvas's
+backing store matches its box exactly in both. What the reports had found
+was two older faults, each shared across several tools, that the recent
+features happened to walk straight into.
+
+### Every tool window carried the same copied canvas code
+
+Px Pin, the Pierce painter, Mesh Trim, PLink, CLayer and PCreate each show
+artwork at their own zoom on their own `<canvas>`, and each carried its own
+copy of the same few lines — first written for Px Pin — to size that canvas
+and fit its camera. The copy was missing two things the main canvas has
+always had:
+
+- **The backing store only followed the window, not the canvas.** Each
+  window measured its canvas when it opened and when the browser window
+  resized. But the canvas shares a column with the controls under it, so
+  anything that changes their height — a tool's hint line, a row of layer
+  chips, a list of links — takes the difference out of the canvas, and the
+  browser then stretches the stale bitmap to fit. Measured in Mesh Trim:
+  drawn **2.5% squashed** on opening, **5%** after picking Add, **13%**
+  after Remove and **23%** after Trim Boundary. A finger aims at what is
+  drawn, while the tool maps it through a camera sized for the old box, so
+  a tap on a vertex selected *nothing* or a different vertex, and an Add
+  landed on top of an existing one ("a vertex is already there"). PLink,
+  the newest copy, was stale from the moment it opened — its layer chips
+  and link list render after the canvas is measured — so every PLink pixel
+  was **7% squashed at every zoom**, and a tap on a pixel placed the joint
+  up to 1.5 px away from it. (The Pierce painter had already been fixed
+  this way on its own, earlier; the fix never reached the others.)
+- **The window cameras never landed on whole device pixels.** With
+  smoothing off, a pixel drawn 34.7 device pixels wide comes out as some
+  columns 34 wide and some 35 — uneven rectangles that change as you zoom.
+  The main camera rounds its zoom to whole device pixels per scene pixel
+  (`view.snapToDevicePixels`); none of the windows did.
+
+The fix is one module, `pixelCanvas.js`, that every window now uses:
+`fitBackingStore` sizes the backing store to the canvas's own box,
+`watchCanvasBox` re-measures on any change to that box (a `ResizeObserver` on
+the element itself, plus the window resize that covers a change of pixel
+ratio), and `snapCamera` settles a camera onto whole device pixels when it
+fits and whenever a pinch ends — anchored where the fingers were, so the
+settle does not yank the view. PCreate's camera can be turned; a turned
+view has no pixel grid to settle onto, so it snaps only when straight. The
+main canvas already did all of this and is unchanged.
+
+![Mesh Trim after picking Remove: before, the 16x16 square drawn squashed into a rectangle; after, square](docs/images/touch-meshtrim-before-after.png)
+
+### Free Move only knew about one of the two ways a layer gets a bone
+
+A layer can be driven by a bone two ways: an explicit **Controls layer**
+assignment in Rig mode, or simply by being **bound** in Bind mode, where its
+weights say which bones move it. Binding is the ordinary way to rig, and it
+assigns nothing — yet Free Move asked only for the assignment. So on a rig
+bound the ordinary way:
+
+- choosing any layer in **Drag moves** listed it as "— no bone" and the drag
+  never started;
+- the **Piercer** tab moved nothing — `translatePiercers` leaves bound
+  layers to their bones, and there were no bones to move — so a pierce set
+  up that way could never be driven in, and a **V could never open**.
+
+`layerBone()` in `poseTool.js` now answers "which bone drives this layer"
+the way the renderer does: the assigned bone if there is one, otherwise the
+bone carrying most of the layer's weight. The Drag-moves menu, the layer
+target and the Piercer tab all ask it. For a piercer it prefers a bone that
+moves no other layer, so the Piercer tab still moves only the piercer
+wherever the rig allows; a piercer bone jointed to the body (a child of the
+body's root, say) shares weight near that joint, and those body pixels
+follow it, because that is what the weights say.
+
+And separately: **dragging was switched off during a take.** Free Move
+answered to Animate mode only, and Start moves the app into its recording
+state, so pressing Start silently disabled every drag and hid the drag pad
+and the Body / Piercer tabs (resetting a Piercer tab to Body) for the length
+of the recording. A take records the scene bitmap, never the controls, and
+the recorder already redraws every tick so "a pause records as a pause" —
+recording was always meant to capture the character being moved. Drags, the
+pad and the tabs now work during a take exactly as before one.
+
+### Verified
+
+In the real app, phone-sized Chromium with real touches, on the minimal
+scene that exposed it — a Square set Pierced and a Rectangle set Piercer, on
+a 32×32 canvas, bound by weights — with every touch aimed at where the thing
+is *drawn* on the glass. The same script on the build before this fix and
+after it: **1 of 10 checks before, 10 of 10 after.**
+
+| | Before | After |
+| --- | --- | --- |
+| Mesh Trim canvas, per tool (h stretch) | 0.976 / 0.951 / 0.873 | 1.000 everywhere |
+| Mesh Trim Remove, tap on a drawn vertex | selected nothing / the wrong vertex | the tapped vertex, at 72, 122 and 192 device px per pixel |
+| Mesh Trim Add at the deepest zoom | refused — "a vertex is already there" | added 0.46 px from the finger (snapped) |
+| PLink pixel shape (height ÷ width) | 0.932 at every zoom | 1.000 at every zoom |
+| PLink device px per pixel | 34.73 / 59.05 / 183.05 | 35 / 60 / 186 |
+| PLink tap on a drawn pixel | 1.5 / 1 / 0.5 px off | 0 px off |
+| Free Move, whole character | moves | moves |
+| Free Move, Drag moves → Square | "— no bone", 0 px | moves (57.9 px) |
+| Free Move, Piercer tab | 0 px | moves (77.5 px) and pierces; the Square's geometry 0.00 px |
+| Free Move while recording | 0 px, pad hidden | moves, pad stays |
+| The V, every layer weight-bound | never opens (gap stuck at 31) | 0 → 25 → 50 → 75 → 100% and back |
+
+The whole-character drag itself was never broken, and still is not: the
+same body and piercer drags give identical results before and after this
+fix at five further phone sizes and pixel ratios, from 360×640 at 2 up to
+412×915 at 2.625, and identically on the build before PLink. The V suite
+(34 checks), PLink's (33), the Pierce painter's touch suite, the twelve
+browser regression suites and `npm test` all pass.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

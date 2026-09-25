@@ -31,6 +31,7 @@ import { linkShift } from './plink.js';
 import { getSetting } from './settings.js';
 import { haptic } from './haptics.js';
 import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
 
 const ACCENT = '#FF2E93';
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
@@ -178,20 +179,19 @@ function endSession() {
   session = null;
 }
 
+// The backing store follows the canvas's own box -- see pixelCanvas.js.
 function sizeCanvas() {
-  const canvas = els.pxpinCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  session.cssWidth = rect.width;
-  session.cssHeight = rect.height;
-  session.dpr = dpr;
+  const box = fitBackingStore(els.pxpinCanvas);
+  if (!box) return;
+  session.cssWidth = box.width;
+  session.cssHeight = box.height;
+  session.dpr = box.dpr;
 }
 
 // Fit both layers on screen with a margin; that zoom is also the floor,
 // so the user can always come back out to the overview.
 function fitCamera() {
+  if (!session.cssWidth || !session.cssHeight) return;
   const { above, below, aboveAt, belowAt, cam } = session;
   const x0 = Math.min(aboveAt.x, belowAt.x);
   const y0 = Math.min(aboveAt.y, belowAt.y);
@@ -204,6 +204,8 @@ function fitCamera() {
   session.minZoom = Math.min(cam.zoom, zoom) * 0.5;
   cam.panX = (session.cssWidth - spanX * cam.zoom) / 2 - x0 * cam.zoom;
   cam.panY = (session.cssHeight - spanY * cam.zoom) / 2 - y0 * cam.zoom;
+  // Whole device pixels per texel, so every texel draws the same size.
+  snapCamera(cam, session.dpr, session.cssWidth / 2, session.cssHeight / 2, { maxZoom: MAX_ZOOM });
 }
 
 // ---------------------------------------------------------------------------
@@ -495,8 +497,16 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
+  // Where the pinch was as it ends: the point it settles onto the pixel grid about.
+  const settleAt = session.pinch ? pinchMidpoint(session.pointers) : null;
   session.pointers.delete(event.pointerId);
-  if (session.pointers.size < 2) session.pinch = null;
+  if (session.pointers.size < 2) {
+    if (settleAt) {
+      snapCamera(session.cam, session.dpr, settleAt.x, settleAt.y, { maxZoom: MAX_ZOOM });
+      render();
+    }
+    session.pinch = null;
+  }
   if (session.pointers.size === 0) endStroke();
 }
 
@@ -554,9 +564,11 @@ export function initPxPin() {
   els.pxpinCanvas.addEventListener('pointerup', onPointerUp);
   els.pxpinCanvas.addEventListener('pointercancel', onPointerUp);
 
-  window.addEventListener('resize', () => {
+  watchCanvasBox(els.pxpinCanvas, () => {
     if (!session) return;
+    const unmeasured = !session.cssWidth;
     sizeCanvas();
+    if (unmeasured) fitCamera();
     render();
   });
 }

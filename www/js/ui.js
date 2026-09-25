@@ -21,7 +21,7 @@ import {
 } from './bindTool.js';
 import {
   initPoseTool, initMovePad, PoseTarget, getPoseTarget, setPoseTarget, hasPiercerTarget,
-  getTargetLayer, setTargetLayer, targetLayerStatus,
+  getTargetLayer, setTargetLayer, targetLayerStatus, layerBone,
 } from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
@@ -2485,8 +2485,12 @@ function renderChrome() {
   els.canvasWrap.classList.toggle('is-rig-mode', isRig || isBind);
   els.canvasWrap.classList.toggle('is-recording', isRecording);
 
-  // Free Move: drag the canvas, or the pad below, to move the character.
-  const canMove = isAnimating && !bonesStore.isEmpty && !partsStore.isEmpty;
+  // Free Move: drag the canvas, or the pad below, to move the character --
+  // during a take as well as before one. A take records the scene bitmap,
+  // not the controls, so the pad and the Body / Piercer tabs stay put while
+  // it runs; hiding them used to reset a Piercer tab to Body at Start, which
+  // made a pierce impossible to record.
+  const canMove = isAnimateMode && !bonesStore.isEmpty && !partsStore.isEmpty;
   els.animateHint.hidden = !isAnimating;
   els.movePad.hidden = !canMove;
   // The Piercer tab is only meaningful once some layer actually carries
@@ -2977,7 +2981,7 @@ function renderPoseLayerChrome() {
   // to own the root.
   addItem('Whole character', null, true);
   for (const part of partsStore.parts) {
-    addItem(part.name, part.id, bonesStore.bonesAttachedTo(part.id).length > 0);
+    addItem(part.name, part.id, Boolean(layerBone(part.id)));
   }
 
   // The list is inline in a footer that scrolls, so opening it near the

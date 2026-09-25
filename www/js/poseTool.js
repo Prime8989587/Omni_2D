@@ -96,15 +96,64 @@ export function setPoseTarget(target) {
   poseTarget = target;
 }
 
-// The bones a piercer drag writes to: the roots of whatever bones drive
-// the piercer layers. A piercer bound to its own little rig is moved by
-// moving that rig; an unbound one is moved by its own coordinates
+// WHICH BONE DRIVES A LAYER
+//
+// An explicit "Controls layer" assignment in Rig mode says so directly, and
+// wins. But that assignment is optional: the ordinary way to rig a layer is
+// to place bones and bind it in Bind mode, which drives it by WEIGHTS and
+// assigns nothing. Asking only for the assignment made every such layer read
+// as boneless to Free Move -- choosing it in "Drag moves" started no drag at
+// all, and a weight-bound piercer could not be moved by the Piercer tab
+// (translatePiercers leaves bound layers to their bones, and there were no
+// bones to move), so a pierce set up that way could never be driven in. The
+// bone carrying most of the layer's weight is the one that moves it, so that
+// is the one a drag on it moves.
+export function layerBone(partId, { avoid = null } = {}) {
+  const attached = bonesStore.bonesAttachedTo(partId);
+  if (attached.length) return attached[0];
+  const part = partsStore.parts.find((p) => p.id === partId);
+  const totals = boneWeights(part);
+  if (!totals) return null;
+  // Heaviest first; with `avoid`, the heaviest bone that moves none of the
+  // avoided layers wins if there is one.
+  const ranked = [...totals].filter(([boneId]) => bonesStore.byId(boneId)).sort((a, b) => b[1] - a[1]);
+  if (ranked.length === 0) return null;
+  const clean = avoid ? ranked.find(([boneId]) => !avoid.some((other) => (boneWeights(other) || new Map()).get(boneId) > 0)) : null;
+  return bonesStore.byId((clean || ranked[0])[0]);
+}
+
+// How much of a bound layer's weight each bone carries, or null when the
+// layer is not bound.
+function boneWeights(part) {
+  const mesh = part && part.mesh;
+  if (!mesh || !mesh.isBound) return null;
+  const totals = new Map();
+  for (const vertex of mesh.vertices) {
+    for (const [boneId, weight] of Object.entries(vertex.weights || {})) {
+      totals.set(boneId, (totals.get(boneId) || 0) + weight);
+    }
+  }
+  return totals;
+}
+
+// The bones a piercer drag writes to: whatever drives each piercer layer
+// (layerBone). A piercer bound to its own little rig is moved by moving
+// that rig; an unbound one is moved by its own coordinates
 // (partsStore.translatePiercers). Doing both to the same layer would
 // double its travel, which is why each layer answers to exactly one.
+//
+// A weight-bound piercer prefers a bone that moves no other layer, so the
+// Piercer tab still moves only the piercer wherever the rig allows it. When
+// every bone it has also reaches into the body -- auto-weights bleed across a
+// piercer bone sitting right on the body's edge -- the heaviest one is moved
+// anyway, and those body pixels follow it: that is what the weights say.
 function piercerBones() {
   const bones = [];
+  const others = partsStore.parts.filter((part) => !part.isPiercer);
   for (const part of partsStore.piercers) {
-    for (const bone of bonesStore.bonesAttachedTo(part.id)) bones.push(bone);
+    const attached = bonesStore.bonesAttachedTo(part.id);
+    const driving = attached.length ? attached : [layerBone(part.id, { avoid: others })].filter(Boolean);
+    for (const bone of driving) if (!bones.includes(bone)) bones.push(bone);
   }
   return bones;
 }
@@ -166,7 +215,7 @@ export function setTargetLayer(partId) {
 // deleted while still selected.
 export function targetBone() {
   if (targetPartId === null) return masterBone();
-  return bonesStore.bonesAttachedTo(targetPartId)[0] || null;
+  return layerBone(targetPartId);
 }
 
 // What the UI needs to tell the user where they stand: whether a layer is
@@ -230,7 +279,10 @@ export function beginPoseDrag(bone, scenePoint) {
   // position when there is a rig, so the drag still writes root data;
   // with no bones at all it is just the finger, so unbound artwork can
   // still be pushed around.
-  const anchorBone = piercing ? piercerBones()[0] : bone;
+  // Resolved once per gesture: the same bones for the whole drag, and no
+  // weight totals re-summed on every pointer move.
+  const piercerRig = piercing ? piercerBones() : [];
+  const anchorBone = piercing ? piercerRig[0] : bone;
   // A NON-ROOT bone is grabbed by its TAIL, not its head. Its head is the
   // joint, which is exactly the point that is going to stay still -- anchor
   // the finger there and the lever starts at zero length, so a long drag
@@ -249,6 +301,7 @@ export function beginPoseDrag(bone, scenePoint) {
     token: history.capture(piercing ? 'Move piercer'
       : (anchorBone && anchorBone.parentId !== null ? `Move ${anchorBone.name}` : 'Move character')),
     piercing,
+    piercerRig,
     moved: false,
   };
 }
@@ -268,7 +321,7 @@ export function updatePoseDrag(scenePoint) {
   // Whole numbers of grid cells, applied to everything the drag is aimed
   // at -- and to nothing it is not.
   if (drag.piercing) {
-    for (const bone of piercerBones()) bonesStore.nudgePosition(bone, dx, dy);
+    for (const bone of drag.piercerRig) bonesStore.nudgePosition(bone, dx, dy);
     partsStore.translatePiercers(dx, dy);
   } else {
     // The fork, and the ONLY thing the layer menu changes. Both branches
@@ -353,7 +406,11 @@ function sceneFromScreen(point) {
 // finger travelling N screen pixels moves the character N/zoom scene
 // pixels wherever it happens to be travelling.
 function attachDragSurface(element) {
-  const active = () => appState.state === AppState.ANIMATING;
+  // Recording is Animate mode with the recorder running: the whole point of
+  // a take is to capture the character being moved, so a drag has to work
+  // while it runs. (It used to answer to ANIMATING alone, so pressing Start
+  // silently switched every drag off for the length of the take.)
+  const active = () => appState.state === AppState.ANIMATING || appState.state === AppState.RECORDING;
 
   element.addEventListener('pointerdown', (event) => {
     if (!active()) return;

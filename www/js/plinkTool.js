@@ -21,6 +21,7 @@ import {
   plinkStore, sceneToTexel, defaultAnchor, distanceToArtwork, linkPositions, currentTransforms,
 } from './plink.js';
 import { playEnter } from './transitions.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
 
 const TEAL = '#2EE6C8';
 const HANDLE_RADIUS = 9;
@@ -105,18 +106,20 @@ function focusedMembers() {
 // ---------------------------------------------------------------------------
 // Camera
 
+// The backing store follows the canvas's own box -- see pixelCanvas.js.
+// Here it mattered from the first frame: the canvas is measured as the
+// window opens, and the layer chips, anchor row and link list rendered
+// straight afterwards take their height out of it.
 function sizeCanvas() {
-  const canvas = els.plinkCanvas;
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
-  session.dpr = dpr;
-  session.viewWidth = rect.width;
-  session.viewHeight = rect.height;
+  const box = fitBackingStore(els.plinkCanvas);
+  if (!box) return;
+  session.dpr = box.dpr;
+  session.viewWidth = box.width;
+  session.viewHeight = box.height;
 }
 
 function fitCamera() {
+  if (!session.viewWidth || !session.viewHeight) return;
   const W = sceneStore.width;
   const H = sceneStore.height;
   const zoom = Math.max(0.25, Math.min(session.viewWidth / W, session.viewHeight / H) * 0.95);
@@ -124,6 +127,8 @@ function fitCamera() {
   session.cam.panX = (session.viewWidth - W * zoom) / 2;
   session.cam.panY = (session.viewHeight - H * zoom) / 2;
   session.minZoom = Math.min(zoom, 1) * 0.5;
+  // Whole device pixels per scene pixel, so every pixel draws the same size.
+  snapCamera(session.cam, session.dpr, session.viewWidth / 2, session.viewHeight / 2, { maxZoom: MAX_ZOOM });
 }
 
 const toScreen = (x, y) => ({ x: session.cam.panX + x * session.cam.zoom, y: session.cam.panY + y * session.cam.zoom });
@@ -470,8 +475,16 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   if (!session || !session.pointers.has(event.pointerId)) return;
+  // Where the pinch was as it ends: the point it settles onto the pixel grid about.
+  const settleAt = session.pinch ? pinchMidpoint(session.pointers) : null;
   session.pointers.delete(event.pointerId);
-  if (session.pointers.size < 2) session.pinch = null;
+  if (session.pointers.size < 2) {
+    if (settleAt) {
+      snapCamera(session.cam, session.dpr, settleAt.x, settleAt.y, { maxZoom: MAX_ZOOM });
+      render();
+    }
+    session.pinch = null;
+  }
   if (session.pointers.size === 0) session.dragging = false;
   renderChrome();
 }
@@ -535,9 +548,11 @@ export function initPLinkTool() {
   // Undo, redo, a load, or a layer deleted elsewhere can change what the
   // window lists -- it follows the stores rather than its own copy.
   plinkStore.subscribe(() => { if (session) renderAll(); });
-  window.addEventListener('resize', () => {
+  watchCanvasBox(els.plinkCanvas, () => {
     if (!session) return;
+    const unmeasured = !session.viewWidth;
     sizeCanvas();
+    if (unmeasured) fitCamera();
     render();
   });
 }
