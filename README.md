@@ -6480,6 +6480,167 @@ removes the fix and shows the same measure catching the failure, so neither
 can go blind the way the earlier checks did. All eleven headless suites and
 all twelve browser suites pass.
 
+## PLink: drawn hinge connections between independent layers
+
+A hand and an arm imported as two separate layers share no mesh, no
+weights and no vertices. Give each its own bone and nothing in the rig
+relates them, so the moment either moves a gap opens between them. That is
+not a skinning bug. It is the correct result for two objects with no defined
+relationship. **PLink is that relationship**: a point drawn on the artwork
+where two or more layers are joined.
+
+It is a **hinge**, not a rigid attachment. The layers never part at the link
+point, but each one still turns, bends and jiggles on its own bones, so they
+swing relative to one another *around* the shared point, the way an elbow
+works.
+
+### Using it
+
+Bind mode → **PLink — join separate layers at a hinge…** opens a full-screen
+window, like Px Pin, Pierce and Mesh Trim:
+
+1. Tap the layer chips to pick two or more layers. The picked layers are lit
+   and everything else is dimmed.
+2. Tap the artwork where they meet. A teal joint marker drops there on a
+   half-pixel grid, because a joint usually sits on the edge *between* two
+   layers' pixels. Drag the marker to adjust it; two fingers pan and zoom.
+3. **Holds still** chooses who gives way (see below). Leave it on Auto.
+4. **Link**. The link is listed under *Links in this project* with the layers
+   it joins and who holds still. Tap a row to highlight its layers and ring.
+   Each row's own menu changes that link's anchor, and ✕ deletes that link
+   only, after a confirmation.
+
+A project can hold any number of links. A link can join any number of
+layers at one point: arm + hand + bracelet is one link with three members.
+Links show as teal rings on the canvas in Rig and Bind modes.
+
+### The maths: a constraint, solved every frame
+
+This is deliberately **not** `T_child = T_parent · T_offset`. That would glue
+the hand into the arm's frame and turn it with the arm, which is no hinge at
+all. Instead, each frame (`www/js/plink.js`):
+
+1. Every linked layer is deformed **exactly as it would be alone**: its own
+   bones, springs, pins and pierce offsets. The link point is then found on
+   the result. It is stored per layer in that layer's own texel space and
+   located by barycentric lookup in its mesh. A point drawn just past a
+   layer's edge uses the nearest triangle, extended.
+2. Each layer is then **corrected as a rigid body** so its link points land on
+   the shared positions. With one link that is a pure translation, which
+   leaves the layer's rotation entirely to its own bones: *that is what makes
+   it a hinge*. With several links it is a least-squares rigid fit (2D
+   Kabsch).
+3. Step 2 repeats (up to 32 passes, converging to 1e-9 px), because
+   correcting one layer moves the target for the next. A chain such as
+   torso → arm → hand settles in a few passes.
+4. Whatever a rigid move *cannot* do, for example a hand linked to the arm
+   at the wrist and to the hip at its side while the arm swings, is closed
+   by a **weld**: a smooth local displacement at the link point that fades
+   out within two mesh cells. Every weld on a layer is sized **together** in
+   one small linear system, because two links close enough to share
+   vertices each nudge the other's point. The solve makes every link point
+   land exactly. The rest of the layer keeps its shape.
+
+**Who gives way.** Each link has an anchor: the member that holds still
+while the others are brought to it. By default that is the layer whose bone
+is nearest the skeleton's root, so a hand is brought to its arm and never
+the arm to the hand. Ties go to the first layer picked, and a layer with no
+bone never anchors. **Shared** makes every member give way equally; they
+meet in the middle, as two free bodies at a hinge do. The anchor is fixed
+per link rather than decided by whatever the finger is dragging, because a
+rule that changed with the finger would give a different answer the instant
+the finger lifted, and the follower would jump.
+
+**Where it is applied.** The correction is applied inside `mesh.js`'s
+`deformVertices`, through `plinkState.js`, a leaf module that keeps the
+import graph acyclic, as `pierceState.js` does for Pierce. Every consumer of
+a layer's geometry already calls that one function: the renderer, the
+Free-Move live drag, Pierce, weight painting. So they all see a linked layer
+exactly where it is drawn, and none of them had to learn what a link is. The
+renderer takes one bone snapshot per frame, so a frame solves once however
+many layers ask. Vertices around a link point are left unsnapped, the same
+rule seam vertices follow, so rounding to the pixel grid cannot reopen the
+join by half a pixel.
+
+**Unbound layers** (no bones) are drawn as their quad. PLink moves the quad
+rigidly and does not round it afterwards, for the same half-pixel reason.
+
+### Working with everything else
+
+- **Free Move.** Dragging a linked layer by its own entry in the layer menu
+  swings it about the point it is *seen* to turn about: the link, for a
+  layer that gives way there. The drawn tail therefore follows the finger
+  instead of an unseen bone head (`visibleSwing` in `poseTool.js`).
+- **Px Pin / Pierce windows** draw each layer at its bones' carriage *plus*
+  its PLink shift, so what they show is where the layer is.
+- **Pierce** touch regions and layer centres are carried by the same
+  correction as the mesh.
+- **Mesh Trim** crops a layer's texture, so that layer's link points shift
+  with the crop and stay on the same physical pixel.
+- **Deleting a layer** ends *its* links only. A three-way link loses that
+  member and keeps the other two; every other link stands.
+- **Undo/redo, Save/Open, Autosave recovery and PSaver files** all carry
+  links, because links are part of the project snapshot all of them use.
+  Links read from a file are validated: bad entries are dropped, missing
+  layers pruned, duplicate members merged and a bad anchor cleared.
+
+### Found on the way
+
+- The delete confirmation opened *behind* the full-screen PLink window. It
+  rendered fine, but every tap on Delete or Cancel landed on the canvas.
+  This is the same trap the CSS comments record for three earlier modals.
+  It now sits in the raised modal list.
+- Two links close together on one layer each disturbed the other's weld,
+  leaving the second point 0.11 px off. That is why welds are now solved
+  jointly.
+- A link point drawn off a layer's edge is carried by a triangle whose
+  corners could fall outside the unsnapped zone. The zone now always
+  covers that triangle.
+
+### Verification
+
+`tests/plink.mjs` (41 checks, headless) measures everything on the
+geometry the renderer draws, and finds the link point there with its own
+barycentric lookup, not the solver's. It covers: coincidence under swings to
+±179°; the hinge (the hand keeps its own angle to 1e-9°), with a control
+proving the angle measure sees a 90° turn; a layer turned on its own bone
+pivoting exactly at the link; rigid, physics and pivot joints over 90 rocking
+frames; three layers at one point; shared links; chains; a layer pulled two
+incompatible ways; an unbound layer; Px-Pinned physics; Free-Move drags of
+arm and hand at 1 px and 37 px steps; save/load; damaged files; undo/redo;
+deleting layers and links; and cropping.
+
+In the real app, on a 390×844 phone viewport with real touch events
+(33 checks):
+
+- **The link is created through the window.** Arm + Hand are picked with the
+  chips, the wrist is tapped and **Link** is pressed. The two layers are on
+  independent bones, both children of the torso.
+- **Arm dragged in Free Move**, slow (1 touch move per degree, 262 frames
+  over 110° and back 150°) and fast (5 jumps of about 24°). The worst gap
+  between the drawn link points on any frame is about 1e-14 px. Arm and
+  hand are one connected piece of artwork on screen on every frame, with no
+  holes at the joint. The hand's own angle is unchanged, 0°, while the arm
+  turns up to 150°.
+- **Hand dragged in Free Move**, slow and fast. It turns up to 122° about the
+  wrist, the arm does not move, and the join holds.
+- **Whole character thrown about with the hand on a physics bone.** The hand
+  lags 13–16° on its spring (it varies run to run), and the join holds on
+  every frame and after release.
+- **Control.** The link is deleted through the confirmation, and **Undo** and
+  **Redo** bring it back and take it away again. The same arm drag without
+  the link leaves the hand behind by up to 51.5 px. The measurement sees a
+  tear when one exists.
+- **Three layers at one point** (Arm + Hand + Cuff). Each is dragged in turn,
+  slow and fast, and all three stay coincident: worst gap about 1e-14 px.
+- **Two links** (the three-way wrist and a Torso + Arm shoulder link). Both
+  hold, and the arm then swings about the shoulder link. After a page
+  reload, **Autosave Restore**, **Open project** and **PSaver Import** each
+  restore both links exactly, and the links still hold. Deleting one link
+  leaves the other exactly as it was.
+
+All twelve headless suites and all twelve browser suites pass.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

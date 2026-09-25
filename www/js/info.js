@@ -38,6 +38,24 @@ const TOPICS = {
       '• Both -- either one deepens it, and the two add together rather ' +
       'than competing.',
   },
+  plink: {
+    title: 'PLink',
+    body: 'Joins separate layers at one point, like a hinge.\n\n' +
+      'Two layers imported on their own -- a hand and an arm -- have nothing ' +
+      'connecting them, so when either moves a gap can open between them. A ' +
+      'PLink says where they meet. From then on they never come apart at ' +
+      'that point, however either one moves.\n\n' +
+      'It is a HINGE, not glue: each layer still turns, bends and jiggles on ' +
+      'its own bones. They swing around the shared point, the way an elbow ' +
+      'lets the arm bend without the forearm coming off.\n\n' +
+      '• Pick two or more layers, tap where they meet (drag the marker to ' +
+      'adjust), then Link. Three or more layers can share one point.\n' +
+      '• Holds still: which layer stays put while the others are brought to ' +
+      'it -- normally the one nearest the body. Shared: they all give way ' +
+      'equally and meet in the middle.\n' +
+      '• You can have as many links as you like. Delete one and nothing ' +
+      'else changes.',
+  },
   'mesh-trim': {
     title: 'Mesh Trim',
     body: 'Two different jobs in one window, and it is worth knowing which ' +

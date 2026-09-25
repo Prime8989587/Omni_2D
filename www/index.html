@@ -272,6 +272,7 @@
 
         <button id="pxpinOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Px Pin — pin single pixels…</button>
         <button id="meshTrimOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Mesh Trim — edit vertices &amp; trim the boundary…</button>
+        <button id="plinkOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">PLink — join separate layers at a hinge…</button>
 
         <div class="field-label-row">
           <div class="field-label">Weight tool</div>
@@ -1096,6 +1097,58 @@
       <p id="meshTrimHint" class="px-pin__hint"></p>
     </footer>
   </section>
+
+  <!-- ==================== PLink ====================
+       Joins separate layers at a drawn hinge point. The same full-bleed shell
+       as Mesh Trim and Px Pin. The canvas shows the scene exactly as it is
+       drawn, with the chosen layers lit and everything else dimmed, so the
+       joint is drawn where the layers really meet. -->
+
+  <section id="plinkScreen" class="px-pin plink" hidden>
+    <header class="px-pin__bar">
+      <span class="px-pin__title">PLink</span>
+      <span id="plinkStatus" class="px-pin__status"></span>
+      <button id="plinkDoneBtn" class="btn btn--sm" type="button">Done</button>
+    </header>
+
+    <canvas id="plinkCanvas" class="px-pin__canvas"></canvas>
+
+    <footer class="px-pin__controls plink__controls">
+      <div class="px-pin__row-label">
+        <span>Layers to join</span>
+        <button class="info-btn" type="button" data-info="plink" aria-haspopup="true" aria-expanded="false" aria-label="What does PLink do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+      </div>
+      <div id="plinkLayerChips" class="plink__chips" role="group" aria-label="Layers to join"></div>
+
+      <label class="plink__anchor">
+        <span>Holds still</span>
+        <select id="plinkAnchorSelect" class="select-input"></select>
+      </label>
+
+      <div class="control-row plink__actions">
+        <button id="plinkClearBtn" class="btn btn--sm btn--cancel" type="button">Clear</button>
+        <button id="plinkCreateBtn" class="btn btn--sm btn--flourish" type="button">Link</button>
+      </div>
+      <p id="plinkHint" class="px-pin__hint"></p>
+
+      <div class="px-pin__row-label plink__list-label">
+        <span>Links in this project <b id="plinkCount">0</b></span>
+      </div>
+      <ul id="plinkList" class="scene-parts plink__list"></ul>
+      <p id="plinkListEmpty" class="list-tools__empty">No links yet — pick two or more layers, tap where they meet, then Link.</p>
+    </footer>
+  </section>
+
+  <div id="plinkDeleteModal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="plinkDeleteTitle">
+      <h2 id="plinkDeleteTitle" class="modal__title">Delete this link?</h2>
+      <p id="plinkDeleteMessage" class="modal__text"></p>
+      <div class="modal__actions">
+        <button id="plinkDeleteConfirmBtn" class="btn btn--danger" type="button">Delete</button>
+        <button id="plinkDeleteCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ==================== Settings ====================
        ONE screen and ONE data store for all three sections, reached from

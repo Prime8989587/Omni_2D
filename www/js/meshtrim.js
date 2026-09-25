@@ -34,6 +34,7 @@ import { floodFillFrom, buildExtractedPixels } from './clayer.js';
 import { contentBounds, cropPixels } from './importer.js';
 import { getSetting, setSetting } from './settings.js';
 import { playEnter } from './transitions.js';
+import { plinkStore } from './plink.js';
 
 const WIRE_COLOR = 'rgba(255, 46, 147, 0.75)';
 const VERTEX_COLOR = '#FF2E93';
@@ -442,6 +443,9 @@ function applyTrim(part, cropped, bounds, sourceMesh) {
   // screen instead of jumping by the size of the margin that was cut away.
   part.x += bounds.x;
   part.y += bounds.y;
+  // PLink points are held in the layer's own texel space, so they move with
+  // the crop to stay on the same physical pixel.
+  plinkStore.shiftAnchors(part.id, -bounds.x, -bounds.y);
 
   const rebuilt = generateMesh(part, (sourceMesh && sourceMesh.density) || defaultDensity(part));
   if (sourceMesh && sourceMesh.isBound) {

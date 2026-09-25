@@ -30,6 +30,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
+import { linkShift } from './plink.js';
 import { pierceDentIssue } from './pierce.js';
 import { dentPlacement, dentTriangleAt } from './dent.js';
 import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
@@ -109,7 +110,9 @@ function layerCanvas(part) {
 function layerPlacement(part) {
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
   const offset = pinCarriageOffset(part, transforms);
-  return { x: part.x + offset.x, y: part.y + offset.y };
+  // A PLinked layer is then brought to its link point, and is drawn there.
+  const linked = linkShift(part, transforms);
+  return { x: part.x + offset.x + linked.x, y: part.y + offset.y + linked.y };
 }
 
 // Opens on whichever layer the user came from, with the other side of the

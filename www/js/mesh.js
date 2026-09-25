@@ -31,6 +31,9 @@ const FALLOFF_EXPONENT = 2;
 // state module rather than pierce.js, which imports THIS file -- routing
 // through a leaf keeps the import graph acyclic.
 import { pierceOffsets } from './pierceState.js';
+// And the PLink solver's correction, through a leaf for the same reason:
+// plink.js deforms linked layers through this file.
+import { plinkCorrection } from './plinkState.js';
 
 export const DEFAULT_MAX_INFLUENCES = 3;
 export const MIN_DENSITY = 3;
@@ -789,10 +792,20 @@ export function snapToGrid(positions) {
 // The band is a bend -- it stretches and turns by design -- so whole-pixel
 // stepping has nothing to protect there. And at rest an unsnapped vertex maps
 // the texture by the identity, so the art is still drawn exactly as authored.
+//
+// A PLink point is the same situation across two layers that share no mesh
+// at all: the solver lands each layer's link point on exactly the same
+// continuous position, and rounding each layer's vertices on its own would
+// pull them apart again by up to a pixel. So the vertices around a link point
+// stay unsnapped too (plink.js marks them).
 export function deformVerticesSnapped(mesh, part, boneTransforms) {
+  const link = plinkCorrection(part, boneTransforms);
   const positions = deformVertices(mesh, part, boneTransforms);
   const onSeam = seamVertices(mesh, part);
-  return positions.map((p, i) => (onSeam[i] ? p : { x: Math.round(p.x), y: Math.round(p.y) }));
+  const nearLink = link && link.mesh === mesh ? link.nearLink : null;
+  return positions.map((p, i) => (
+    onSeam[i] || (nearLink && nearLink[i]) ? p : { x: Math.round(p.x), y: Math.round(p.y) }
+  ));
 }
 
 // Which vertices lie in a joint seam's band, in the bind pose. Cached
@@ -975,9 +988,53 @@ export function pinInfluence(mesh, part, radius = 0) {
   return influence;
 }
 
-// The deformation every consumer sees: bone skinning, then pins pulling
-// their neighbourhood back toward rest. One pass, one mesh, no seams.
+// The deformation every consumer sees: the layer's own deformation (below),
+// then its PLink correction, if it is linked to other layers.
+//
+// PLink is applied HERE, and only here, so that nothing can see a linked
+// layer anywhere but where it is drawn: the renderer, Pierce's contact,
+// weight painting and every other caller of this function get the same
+// corrected geometry without knowing links exist. The solver (plink.js)
+// deforms each linked layer uncorrected, solves the joint constraint across
+// all of them, and hands back each layer's correction -- along with the
+// uncorrected positions it already computed, so they are not worked out
+// twice in one frame.
 export function deformVertices(mesh, part, boneTransforms) {
+  const link = plinkCorrection(part, boneTransforms);
+  if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms);
+  const base = link.mesh === mesh && link.uncorrected
+    ? link.uncorrected
+    : deformVerticesUncorrected(mesh, part, boneTransforms);
+  return applyLinkCorrection(mesh, base, link);
+}
+
+// A PLink correction applied to a layer's deformed vertices: the rigid part
+// (translate, and rotate when the layer has more than one link) to every
+// vertex, then each weld -- a local closure that lands the layer's link point
+// EXACTLY on the shared position, fading to nothing a couple of cells away.
+function applyLinkCorrection(mesh, positions, link) {
+  const welds = link.mesh === mesh ? link.welds : [];
+  return positions.map((p, i) => {
+    const dx = p.x - link.from.x;
+    const dy = p.y - link.from.y;
+    let x = link.to.x + dx * link.cos - dy * link.sin;
+    let y = link.to.y + dx * link.sin + dy * link.cos;
+    for (const weld of welds) {
+      const vertex = mesh.vertices[i];
+      const d = Math.hypot(vertex.u - weld.u, vertex.v - weld.v);
+      const k = smoothstep01(1 - d / weld.radius) * weld.scale;
+      if (k <= 0) continue;
+      x += weld.dx * k;
+      y += weld.dy * k;
+    }
+    return { x, y };
+  });
+}
+
+// The layer's own deformation, before any PLink: bone skinning, pierce
+// offsets, then pins pulling their neighbourhood back toward rest. One pass,
+// one mesh, no seams.
+export function deformVerticesUncorrected(mesh, part, boneTransforms) {
   const out = deformRaw(mesh, part, boneTransforms);
 
   // Pierce, BEFORE pins. A displaced vertex is the bone result plus this

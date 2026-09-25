@@ -94,6 +94,8 @@ import {
   localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity,
 } from './mesh.js';
 import { pierceStateFor, peekPierceState } from './pierceState.js';
+import { carryByCorrection } from './plinkState.js';
+import { correctionOf } from './plink.js';
 import {
   dentTriangleAt, dentCutMask, dentCutArea, writeBunch, resetDentCache,
 } from './dent.js';
@@ -139,8 +141,12 @@ function regionPoints(part, transforms, which = 'pierce') {
   const region = REGIONS[which].set(part);
   if (!region || region.size === 0) return [];
   const carriage = pinCarriageOffset(part, transforms);
+  // A PLinked layer is drawn where its link puts it, so that is where its
+  // regions are touched -- the same rigid correction its mesh receives.
+  const link = correctionOf(part, transforms || undefined);
   const key = `${part.x},${part.y},${part.rotation},${part.scale},` +
-    `${REGIONS[which].version(part)},${region.size},${carriage.x},${carriage.y}`;
+    `${REGIONS[which].version(part)},${region.size},${carriage.x},${carriage.y}` +
+    (link ? `,${link.cos},${link.sin},${link.from.x},${link.from.y},${link.to.x},${link.to.y}` : '');
   const cacheKey = `${part.id}:${which}`;
   const cached = pointsCache.get(cacheKey);
   if (cached && cached.key === key) return cached.points;
@@ -152,7 +158,8 @@ function regionPoints(part, transforms, which = 'pierce') {
     const u = index % part.naturalWidth;
     const v = Math.floor(index / part.naturalWidth);
     const world = localToWorld(part, { x: u + 0.5 - halfW, y: v + 0.5 - halfH });
-    points.push({ x: world.x + carriage.x, y: world.y + carriage.y });
+    const carried = { x: world.x + carriage.x, y: world.y + carriage.y };
+    points.push(link ? carryByCorrection(link, carried) : carried);
   }
   pointsCache.set(cacheKey, { key, points });
   return points;
@@ -307,7 +314,9 @@ function centroidOf(points) {
 function layerCentre(part, transforms) {
   const carriage = pinCarriageOffset(part, transforms);
   const middle = localToWorld(part, { x: 0, y: 0 });
-  return { x: middle.x + carriage.x, y: middle.y + carriage.y };
+  const carried = { x: middle.x + carriage.x, y: middle.y + carriage.y };
+  const link = correctionOf(part, transforms || undefined);
+  return link ? carryByCorrection(link, carried) : carried;
 }
 
 function centroid(points) {

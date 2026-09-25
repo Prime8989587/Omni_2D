@@ -33,6 +33,8 @@ import {
 import * as canvasEngine from './canvas.js';
 import { initPxPin } from './pxpin.js';
 import { initMeshTrim } from './meshtrim.js';
+import { initPLink } from './plink.js';
+import { initPLinkTool } from './plinkTool.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { initClayer, openClayer } from './clayer.js';
 import { initPCreate, openPCreate } from './pcreate.js';
@@ -3326,6 +3328,9 @@ export function initUI() {
   initMovePad(els.movePad);
   bindEvents();
   initPhysics();
+  // PLink's solver has to be registered before the first frame is drawn:
+  // every layer's deformation asks it for a correction.
+  initPLink();
 
   applySliderRange(els.stiffnessSlider, PHYSICS_RANGES.stiffness);
   applySliderRange(els.dampingSlider, PHYSICS_RANGES.damping);
@@ -3371,6 +3376,7 @@ export function initUI() {
 
   initPxPin();
   initMeshTrim();
+  initPLinkTool();
   initPierceTool();
   initPierceDepthCanvas();
   initClayer();

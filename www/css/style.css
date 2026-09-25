@@ -901,6 +901,78 @@ button, input, select {
   flex: 1 1 40%;
 }
 
+/* PLink reuses the .px-pin shell like Mesh Trim. Its footer carries more --
+   the layer chips, the anchor, and the list of links -- so it scrolls under
+   a cap instead of squeezing the canvas the joint is drawn on. */
+.plink #plinkCanvas {
+  touch-action: none;
+  image-rendering: pixelated;
+}
+
+.plink__controls {
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.plink__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.plink__chips .toggle-chip {
+  margin: 0;
+  min-height: 36px;
+}
+
+.plink__chips .toggle-chip[aria-pressed="true"] {
+  background: #2ee6c8;
+  border-color: #2ee6c8;
+  color: #000000;
+}
+
+.plink__anchor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: var(--text-label);
+}
+
+.plink__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.plink__actions .btn {
+  flex: 1;
+}
+
+.plink__list-label {
+  margin-top: 12px;
+}
+
+.plink__list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.plink__row .scene-part small {
+  display: block;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: var(--text-label);
+}
+
+.plink__row .scene-part[aria-pressed="true"] {
+  border-color: #2ee6c8;
+}
+
 .px-pin__bar {
   display: flex;
   align-items: center;
@@ -1403,6 +1475,13 @@ button, input, select {
    meant for Save/Cancel: found by the CLayer save flow hanging on a click
    that Playwright reported as landing on the canvas underneath instead. */
 #clayerNameModal {
+  z-index: 65;
+}
+
+/* And the PLink window's delete confirmation, for the same reason: it opens
+   over the full-screen PLink window, which would otherwise take every tap
+   meant for Delete/Cancel. */
+#plinkDeleteModal {
   z-index: 65;
 }
 

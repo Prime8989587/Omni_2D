@@ -15,7 +15,8 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
-import { deformVerticesSnapped, partQuad } from './mesh.js';
+import { deformVerticesSnapped, partQuad, localToWorld } from './mesh.js';
+import { isLinked, correctQuad, linkPositions } from './plink.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
@@ -144,11 +145,43 @@ function partGeometry(part, boneTransforms) {
   // rest position), which leaves the pierce offsets as the only thing
   // moving it. An EMPTY set rather than the null above, because a layer
   // bound to bones that have since been deleted still reports isBound and
-  // would otherwise read a bone out of null.
-  if (part.mesh && pierceOffsets(part)) return through(boneTransforms || {});
+  // would otherwise read a bone out of null. One SHARED empty set, so every
+  // layer this frame is asked about the same transforms and a PLink solve
+  // covering several of them runs once.
+  if (part.mesh && pierceOffsets(part)) return through(boneTransforms || NO_BONES);
+  // A bound layer in a PLink is drawn through its mesh even in a scene with
+  // no bones left, since that is the geometry its link correction is for.
+  if (part.mesh && part.mesh.isBound && isLinked(part)) return through(boneTransforms || NO_BONES);
 
   const quad = partQuad(part);
+  // An unbound layer in a PLink: its quad, carried by the link -- and NOT
+  // rounded afterwards. The link point is where the quad meets its partner,
+  // and the partner's vertices around a link are left unsnapped (see
+  // deformVerticesSnapped); rounding the whole quad would slide it up to half
+  // a pixel off the point it is joined at. At rest the correction is zero and
+  // the corners are the same whole numbers partQuad gives.
+  if (isLinked(part)) {
+    const positions = correctQuad(part, partQuadCorners(part), boneTransforms || NO_BONES);
+    return { ...quad, positions: back ? place(positions) : positions };
+  }
   return back ? { ...quad, positions: place(quad.positions) } : quad;
+}
+
+// The same geometry, for a tool window that draws layers exactly as the scene
+// does (the PLink window) -- one function, so the two can never disagree.
+export function layerDrawGeometry(part, boneTransforms) {
+  return partGeometry(part, boneTransforms);
+}
+
+// A part's four corners in scene space, unsnapped: partQuad's corners before
+// its rounding, for the PLink correction to act on.
+const NO_BONES = Object.freeze({});
+function partQuadCorners(part) {
+  const w = part.naturalWidth;
+  const h = part.naturalHeight;
+  return [
+    { x: -w / 2, y: -h / 2 }, { x: w / 2, y: -h / 2 }, { x: w / 2, y: h / 2 }, { x: -w / 2, y: h / 2 },
+  ].map((local) => localToWorld(part, local));
 }
 
 // The draw order, with any piercer currently inside a layer split in two:
@@ -429,7 +462,10 @@ function drawPartOutline(part) {
   // and an outline left behind at the raw dragged position would be ringing
   // empty grid several cells away from the artwork it is selecting.
   const back = part.isPiercer ? pierceHold().get(part.id) : null;
-  const quad = partQuad(part).positions;
+  // A linked unbound layer is drawn carried by its link, so its outline is too.
+  const quad = isLinked(part) && !(part.mesh && part.mesh.isBound)
+    ? correctQuad(part, partQuadCorners(part), bonesStore.isEmpty ? NO_BONES : bonesStore.snapshotTransforms())
+    : partQuad(part).positions;
   const placed = back
     ? quad.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
     : quad;
@@ -643,6 +679,11 @@ function render() {
     }
   }
 
+  // PLink points, where the rig is being built -- so the joints that hold
+  // separate layers together are visible alongside the bones. Not in Free
+  // Move, which draws nothing but the character.
+  if (isRig || isBind) drawPLinkMarkers(boneTransforms);
+
   // The selection outline belongs to the Home screen, where layers are
   // what you manipulate. Rig, Bind and Free Move are all about the
   // skeleton, so the outline would just be noise over the artwork.
@@ -652,6 +693,34 @@ function render() {
   drawPierceProbe();
 
   // FUTURE HOOK: animation playback draws here.
+}
+
+// A ring at each PLink point, at the SOLVED position -- where every member
+// of the link actually meets. Teal, like nothing else on the canvas, and one
+// ring however many layers the link joins, since they all meet there.
+const PLINK_RING = '#2EE6C8';
+function drawPLinkMarkers(boneTransforms) {
+  const links = linkPositions(boneTransforms || NO_BONES);
+  if (links.length === 0) return;
+  ctx.save();
+  for (const link of links) {
+    if (link.members.length === 0) continue;
+    const at = link.members[0];
+    const p = view.toCanvas(at.x, at.y);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.strokeStyle = PLINK_RING;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = PLINK_RING;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // The contact readout, in the same frame as the pixels it describes.
