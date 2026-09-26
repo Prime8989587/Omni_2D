@@ -4,6 +4,9 @@
 // or animation logic belongs in this file -- that lives in canvas.js.
 
 import { appState, AppState } from './state.js';
+import { createIcon, setIcon } from './pixelIcons.js';
+import { initCheckpoints, openCheckpoints } from './checkpoints.js';
+import { initRecentTools, registerToolLauncher } from './recentTools.js';
 import {
   partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics, SpreadMode,
 } from './parts.js';
@@ -31,10 +34,13 @@ import {
   initAutoSave, setAutoSaveSource, autoSaveNow, setAutoSaveInterval, onAutoSaveWritten,
 } from './autosave.js';
 import * as canvasEngine from './canvas.js';
-import { initPxPin } from './pxpin.js';
-import { initMeshTrim } from './meshtrim.js';
+import { initPxPin, openPxPinWith } from './pxpin.js';
+import { fitBackingStore as fitCanvasBox, watchCanvasBox as watchBox } from './pixelCanvas.js';
+import { PixelPen } from './pixelDraw.js';
+import { initMeshTrim, openMeshTrim, isMeshTrimOpen } from './meshtrim.js';
+import { initDebugOverlay, debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
 import { initPxLink } from './pxlink.js';
-import { initPxLinkTool } from './pxlinkTool.js';
+import { initPxLinkTool, openPxLink } from './pxlinkTool.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { initClayer, openClayer } from './clayer.js';
 import { initPCreate, openPCreate } from './pcreate.js';
@@ -46,7 +52,7 @@ import { haptic } from './haptics.js';
 import { renderBrushPresets, PIXEL_FORMAT } from './brushpresets.js';
 import { initHome, startPetals, stopPetals } from './home.js';
 import { playEnter, transitionScreens } from './transitions.js';
-import { pierceOverlayEnabled, setPierceOverlay, pierceSpreadIssue, markPierceStale } from './pierce.js';
+import { setPierceOverlay, pierceSpreadIssue, markPierceStale } from './pierce.js';
 import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
 import { encodeGif, describeGif } from './gif.js';
@@ -58,37 +64,11 @@ const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
 const NUDGE_STEP_RADIANS = (2 * Math.PI) / 180;
 
-// Visual identity pass: every TRUE emoji the app used (colour pictographs
-// the OS renders from its own emoji font, immune to CSS `color`) is drawn
-// here instead, at the same low resolution and nearest-neighbour rule as
-// imported character art. Plain symbol/arrow glyphs elsewhere (✕ ⋮ ▲ ▼ ⌄
-// ⌫ ⇄ ↺ ↻ ⤢ ✿ ...) are not emoji -- they already render as flat, colourless
-// icon glyphs today -- and are left as text.
-const EMOJI_ICONS = {
-  '✏️': 'icon-pencil',
-  '👁': 'icon-eye',
-  '🚫': 'icon-hidden',
-  '🔒': 'icon-lock',
-  '🔓': 'icon-unlock',
-  '🗑': 'icon-trash',
-  '📌': 'icon-pin',
-};
-
-// Appends `glyph` to `el`: a small pixel-art <img> if it is one of the
-// emoji above, or a plain text node otherwise (so callers can pass either
-// kind without caring which one they have).
-function appendGlyph(el, glyph) {
-  const icon = EMOJI_ICONS[glyph];
-  if (icon) {
-    const img = document.createElement('img');
-    img.className = 'pixel-icon';
-    img.src = `icons/${icon}.png`;
-    img.alt = glyph;
-    img.setAttribute('aria-hidden', 'true');
-    el.appendChild(img);
-  } else {
-    el.appendChild(document.createTextNode(glyph));
-  }
+// Row and menu symbols are pixel icons (pixelIcons.js), named directly.
+// They used to be Unicode glyphs and emoji that neither pixel font has, so
+// the phone drew them in its own smooth system font or as colour emoji.
+function appendGlyph(el, iconName) {
+  el.appendChild(createIcon(iconName));
 }
 
 const els = {};
@@ -279,6 +259,7 @@ function cacheElements() {
   els.showBonesTab = document.getElementById('showBonesTab');
   els.bindRiggedOnlyToggle = document.getElementById('bindRiggedOnlyToggle');
 
+  els.rigDebugField = document.getElementById('rigDebugField');
   els.rigDebugSlider = document.getElementById('rigDebugSlider');
   els.rigDebugValue = document.getElementById('rigDebugValue');
   els.jointRigidBtn = document.getElementById('jointRigidBtn');
@@ -591,7 +572,7 @@ function renderBoneList() {
     if (depth > 0) {
       const marker = document.createElement('span');
       marker.className = 'scene-part__depth';
-      marker.textContent = '└ ';
+      setIcon(marker, 'branch');
       button.appendChild(marker);
     }
     button.appendChild(document.createTextNode(bone.name));
@@ -601,10 +582,10 @@ function renderBoneList() {
     if (attachedPart || !bone.visible) {
       const tag = document.createElement('span');
       tag.className = 'scene-part__tag';
-      const bits = [];
-      if (attachedPart) bits.push(`→ ${attachedPart.name}`);
-      if (!bone.visible) bits.push('hidden');
-      tag.textContent = `  ${bits.join(' · ')}`;
+      if (attachedPart) {
+        tag.append(createIcon('arrow-right'), document.createTextNode(` ${attachedPart.name}`));
+      }
+      if (!bone.visible) tag.append(document.createTextNode(attachedPart ? ' · hidden' : 'hidden'));
       button.appendChild(tag);
     }
     button.classList.toggle('is-hidden', !bonesStore.isVisible(bone));
@@ -628,7 +609,7 @@ function renderBoneList() {
     // whole limb off the screen while you work on another.
     row.appendChild(iconButton({
       label: bone.visible ? `Hide ${bone.name} and its children` : `Show ${bone.name}`,
-      glyph: bone.visible ? '👁' : '🚫',
+      glyph: bone.visible ? 'eye' : 'eye-off',
       pressed: !bone.visible,
       onClick: () => history.run(bone.visible ? 'Hide bone' : 'Show bone',
         () => bonesStore.setVisible(bone.id, !bone.visible)),
@@ -654,7 +635,7 @@ function renderRigChrome() {
   boneSelection.prune(bonesStore.bones.map((bone) => bone.id));
   renderBoneBatchBar();
   els.skeletonToggle.setAttribute('aria-expanded', String(skeletonPanelOpen));
-  els.skeletonChevron.textContent = skeletonPanelOpen ? '▾' : '▴';
+  setIcon(els.skeletonChevron, skeletonPanelOpen ? 'chevron-down' : 'chevron-up');
 
   els.addBoneBtn.disabled = status.placing || !status.canAddBone;
   els.boneEditor.hidden = !bone || status.placing;
@@ -670,6 +651,7 @@ function renderRigChrome() {
       `x ${Math.round(head.x)} · y ${Math.round(head.y)} · ${degrees}° · length ${Math.round(bone.length)}`;
 
     const localDegrees = Math.round((bone.rotation * 180) / Math.PI);
+    els.rigDebugField.hidden = !debugViewOn('rotateSliders');
     els.rigDebugSlider.value = String(localDegrees);
     els.rigDebugValue.textContent = `${localDegrees}°`;
     renderBoneLayerSelect(bone);
@@ -741,7 +723,7 @@ function closeCanvasSizeModal() {
 
 function renderCanvasMirrorToggle() {
   els.canvasMirrorToggle.setAttribute('aria-pressed', String(canvasSizeMirror));
-  els.canvasMirrorToggle.textContent = `⇄ Mirror: ${canvasSizeMirror ? 'On' : 'Off'}`;
+  els.canvasMirrorToggle.textContent = `Mirror: ${canvasSizeMirror ? 'On' : 'Off'}`;
 }
 
 // OFF (the default) leaves width and height independent, exactly as
@@ -1075,7 +1057,7 @@ function renderBindChrome() {
     densitySyncedFor = part.id;
   }
 
-  els.debugRotateField.hidden = !bone;
+  els.debugRotateField.hidden = !bone || !debugViewOn('rotateSliders');
   if (bone) {
     els.debugBoneName.textContent = bone.name;
     const degrees = Math.round((bone.rotation * 180) / Math.PI);
@@ -1279,7 +1261,7 @@ function renderPartsList() {
     const isOpen = openPartMenuId === part.id;
     row.appendChild(iconButton({
       label: isOpen ? `Close menu for ${part.name}` : `More actions for ${part.name}`,
-      glyph: isOpen ? '✕' : '⋮',
+      glyph: isOpen ? 'close' : 'kebab',
       pressed: isOpen,
       onClick: () => {
         // Tapping the open row's own button closes it; tapping any other
@@ -1430,28 +1412,28 @@ function partRowAside(part, index, total) {
     aside.appendChild(button);
   };
 
-  action('Rename', '✏️', () => {
+  action('Rename', 'pencil', () => {
     openPartMenuId = null;
     renamingPartId = part.id;
     renderPartsList();
   });
   // The list runs top-of-stack first, so "up" in the list is +1 in z.
-  action('Move up', '▲', () => history.run('Reorder layer', () => partsStore.moveBy(part.id, 1)),
+  action('Move up', 'triangle-up', () => history.run('Reorder layer', () => partsStore.moveBy(part.id, 1)),
     { disabled: index === 0 });
-  action('Move down', '▼', () => history.run('Reorder layer', () => partsStore.moveBy(part.id, -1)),
+  action('Move down', 'triangle-down', () => history.run('Reorder layer', () => partsStore.moveBy(part.id, -1)),
     { disabled: index === total - 1 });
-  action(part.visible ? 'Hide' : 'Show', part.visible ? '👁' : '🚫',
+  action(part.visible ? 'Hide' : 'Show', part.visible ? 'eye' : 'eye-off',
     () => history.run(part.visible ? 'Hide layer' : 'Show layer',
       () => partsStore.setVisible(part.id, !part.visible)),
     { pressed: !part.visible });
-  action(part.locked ? 'Unlock' : 'Lock', part.locked ? '🔒' : '🔓',
+  action(part.locked ? 'Unlock' : 'Lock', part.locked ? 'lock' : 'unlock',
     () => history.run(part.locked ? 'Unlock layer' : 'Lock layer',
       () => partsStore.setLocked(part.id, !part.locked)),
     { pressed: part.locked });
   // Pierce lives with the other per-layer settings rather than in a mode
   // of its own: a role is a property of THIS layer, set where everything
   // else about the layer is set.
-  action(part.hasPierceRole ? `Pierce: ${part.pierceRole}` : 'Pierce', '◆', () => {
+  action(part.hasPierceRole ? `Pierce: ${part.pierceRole}` : 'Pierce', 'diamond', () => {
     openPartMenuId = null;
     renderPartsList();
     openPierceModal(part.id);
@@ -1550,7 +1532,6 @@ const PIERCE_PHYSICS_HINTS = {
 };
 
 const PIERCE_TIP_SEEN_KEY = 'omni2d.pierce.tipSeen';
-const PIERCE_OVERLAY_KEY = 'omni2d.pierce.overlay';
 
 let pierceModalPartId = null;
 // How the depth popup was opened, which decides what Cancel means:
@@ -1630,10 +1611,13 @@ function renderPierceModal() {
     ? `${seam ? ` · seam ${seam} px` : ''}${walls ? ` · ${walls} wall` : ''}`
     : '';
   const issue = pierceSpreadIssue(part);
-  els.piercePaintBtn.textContent = issue
-    ? `Paint regions… (⚠ ${issue})`
-    : (painted ? `Paint regions… (${painted} px marked${extra})` : 'Paint regions…');
-  els.pierceOverlayBtn.setAttribute('aria-pressed', String(pierceOverlayEnabled()));
+  if (issue) {
+    els.piercePaintBtn.replaceChildren(
+      document.createTextNode('Paint regions… '), createIcon('warning'), document.createTextNode(` ${issue}`),
+    );
+  } else {
+    els.piercePaintBtn.textContent = painted ? `Paint regions… (${painted} px marked${extra})` : 'Paint regions…';
+  }
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;
 }
 
@@ -1729,28 +1713,16 @@ function chooseSpreadPartner(partnerId) {
   showToast(`"${part.name}" and "${other.name}" are now the two halves of one V.`);
 }
 
-// The overlay is a property of the whole scene, not of the layer whose
-// popup happens to be open -- it tints every painted region there is, so
-// that both halves of a pierce can be checked against each other at once.
-function togglePierceOverlay() {
-  setPierceOverlay(!pierceOverlayEnabled());
-  const on = pierceOverlayEnabled();
-  try {
-    window.localStorage.setItem(PIERCE_OVERLAY_KEY, on ? '1' : '0');
-  } catch { /* storage blocked: the toggle still works for this session */ }
-  renderPierceModal();
+// The pierce region tint is one of the Debug overlay's views now
+// (debugOverlay.js), switched from its panel like every other testing aid.
+// pierce.js keeps its own flag because the renderer asks it per layer;
+// this keeps that flag in step with the panel. The overlay is a property of
+// the whole scene, not of one layer, so both halves of a pierce can be
+// checked against each other at once.
+function syncDebugViews() {
+  setPierceOverlay(debugViewOn('pierceRegions'));
   canvasEngine.requestRender();
-  showToast(on
-    ? 'Painted regions are tinted on the canvas — pink tip, cyan pierceable, amber bunching.'
-    : 'Region tinting is off.');
-}
-
-// Restored on launch so a testing session survives a reload, which is
-// exactly when the overlay is most wanted.
-function restorePierceOverlay() {
-  try {
-    setPierceOverlay(window.localStorage.getItem(PIERCE_OVERLAY_KEY) === '1');
-  } catch { /* no-op */ }
+  renderChrome();
 }
 
 // Assigning PIERCER is not complete until its two depths exist, so the
@@ -1903,6 +1875,10 @@ function planPierceDepthDraw() {
   const part = piercePart();
   const canvas = els.pierceDepthCanvas;
   if (!part || !canvas) return null;
+  // The backing store matches the box at whole device pixels, and the plan
+  // is laid out in CSS px; drawing converts once, at the end.
+  const box = fitCanvasBox(canvas);
+  if (!box) return null;
 
   const { enter, end } = readPierceDepthInputs();
   const axis = localPierceAxis(part);
@@ -1938,15 +1914,24 @@ function planPierceDepthDraw() {
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
 
-  const scale = Math.min(
-    (canvas.width - DRAW_MARGIN * 2) / Math.max(1, maxX - minX),
-    (canvas.height - DRAW_MARGIN * 2) / Math.max(1, maxY - minY)
+  const { dpr } = box;
+  const fit = Math.min(
+    (box.width - DRAW_MARGIN * 2) / Math.max(1, maxX - minX),
+    (box.height - DRAW_MARGIN * 2) / Math.max(1, maxY - minY)
   );
-  // Centre that box, then place the sprite's middle inside it.
-  const originX = (canvas.width - (maxX - minX) * scale) / 2 - minX * scale;
-  const originY = (canvas.height - (maxY - minY) * scale) / 2 - minY * scale;
+  // A whole number of DEVICE pixels per scene pixel, so every texel of the
+  // sprite is an exact square of screen pixels -- no resampling seams.
+  const scale = Math.max(1, Math.floor(fit * dpr)) / dpr;
+  // Centre that box, then place the sprite's middle inside it -- with its
+  // top-left corner on a device pixel, for the same reason.
+  let originX = (box.width - (maxX - minX) * scale) / 2 - minX * scale;
+  let originY = (box.height - (maxY - minY) * scale) / 2 - minY * scale;
+  const halfW = (spriteW * scale) / 2;
+  const halfH = (spriteH * scale) / 2;
+  originX = Math.round((originX - halfW) * dpr) / dpr + halfW;
+  originY = Math.round((originY - halfH) * dpr) / dpr + halfH;
 
-  return { part, axis, span, lead, scale, originX, originY, bitmap: piercerBitmap(part) };
+  return { part, axis, span, lead, scale, originX, originY, dpr, bitmap: piercerBitmap(part) };
 }
 
 // A distance along the ruler, in scene px, to a point on the canvas.
@@ -1964,55 +1949,50 @@ function renderPierceDepthCanvas() {
   if (!depthDraw) depthDraw = planPierceDepthDraw();
   const plan = depthDraw;
   const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!plan) return;
 
   const { enter, end, dentStart } = readPierceDepthInputs();
-  const { part, axis, scale } = plan;
-
+  const { part, dpr } = plan;
   ctx.imageSmoothingEnabled = false;
 
-  // The sprite, drawn as authored about its own middle.
-  const w = part.naturalWidth * part.scale * scale;
-  const h = part.naturalHeight * part.scale * scale;
-  ctx.drawImage(plan.bitmap, plan.originX - w / 2, plan.originY - h / 2, w, h);
+  // The sprite, drawn as authored about its own middle, in whole device
+  // pixels (the plan put its corner and its texel size on the grid).
+  const texel = part.scale * plan.scale * dpr;
+  const w = part.naturalWidth * texel;
+  const h = part.naturalHeight * texel;
+  const left = Math.round(plan.originX * dpr - w / 2);
+  const top = Math.round(plan.originY * dpr - h / 2);
+  ctx.drawImage(plan.bitmap, left, top, w, h);
 
   // The painted tip, tinted so it is obvious which end is which.
   ctx.fillStyle = 'rgba(255, 46, 147, 0.55)';
-  const texel = part.scale * scale;
+  const cell = Math.max(1, Math.round(texel));
   for (const index of part.pierceRegion) {
     const u = index % part.naturalWidth;
     const v = Math.floor(index / part.naturalWidth);
-    ctx.fillRect(
-      plan.originX - w / 2 + u * texel,
-      plan.originY - h / 2 + v * texel,
-      Math.max(1, texel), Math.max(1, texel)
-    );
+    ctx.fillRect(left + Math.round(u * texel), top + Math.round(v * texel), cell, cell);
   }
 
-  // The ruler, from the tip's leading edge outward.
-  const from = depthDrawPoint(plan, 0);
-  const to = depthDrawPoint(plan, plan.span);
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([5, 5]);
-  ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(to.x, to.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Everything else is pixel art on the interface grid (pixelDraw.js).
+  const pen = new PixelPen(ctx, dpr).begin();
+  const at = (distance) => {
+    const p = depthDrawPoint(plan, distance);
+    return { x: p.x * dpr, y: p.y * dpr };
+  };
 
-  // The stretch between the two marks is where the push grows.
-  const a = depthDrawPoint(plan, enter);
-  const b = depthDrawPoint(plan, enter + end);
-  // Dimmer than the Enter handle it starts at, so the span reads as the
-  // stretch BETWEEN two marks rather than as a third thing to grab.
-  ctx.strokeStyle = '#1C8FA6';
-  ctx.lineWidth = 6;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
+  // The ruler, from the tip's leading edge outward.
+  const from = at(0);
+  const to = at(plan.span);
+  pen.line(from.x, from.y, to.x, to.y, 'rgba(255, 255, 255, 0.35)', { dash: 3 });
+
+  // The stretch between the two marks is where the push grows. Dimmer than
+  // the Enter handle it starts at, so the span reads as the stretch
+  // BETWEEN two marks rather than as a third thing to grab.
+  const a = at(enter);
+  const b = at(enter + end);
+  pen.line(a.x, a.y, b.x, b.y, '#1C8FA6', { thickness: 3 });
 
   // Labels sit clear of the ruler, on whichever side has room -- and out to
   // one SIDE of it, alternating, because three marks on a short ruler can
@@ -2020,17 +2000,11 @@ function renderPierceDepthCanvas() {
   // coincide exactly on a default setup, which is the case that has to stay
   // readable: that is where a user goes looking for the handle to drag.
   const handle = (point, label, colour, side) => {
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, 9, 0, Math.PI * 2);
-    ctx.fillStyle = colour;
-    ctx.fill();
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = colour;
-    ctx.font = '15px monospace';
-    ctx.textAlign = side < 0 ? 'right' : 'left';
-    ctx.fillText(label, point.x + side * 14, point.y + 5);
+    pen.disc(point.x, point.y, 9 * dpr, '#000000');
+    pen.disc(point.x, point.y, 7 * dpr, colour);
+    pen.text(label, point.x + side * 14 * dpr, point.y - 5 * dpr, colour, {
+      align: side < 0 ? 'right' : 'left', background: '#000000',
+    });
   };
   // Not the accent pink: the painted tip is already tinted with it just
   // along the ruler, and two pinks a few pixels apart is the one pairing
@@ -2041,7 +2015,8 @@ function renderPierceDepthCanvas() {
   // coincide -- which is the default, and where the whole point is that the
   // dent's own mark is there to be dragged off it. Labelled on the far side
   // for the same reason.
-  handle(depthDrawPoint(plan, dentStart), `Dent ${dentStart}`, '#A078FF', 1);
+  handle(at(dentStart), `Dent ${dentStart}`, '#A078FF', 1);
+  pen.end();
 
   els.pierceDrawHint.textContent = plan.axis.known
     ? 'Drag any handle along the needle\u2019s path. Enter is where contact ' +
@@ -2084,11 +2059,9 @@ function depthDrawDistance(plan, x, y) {
 
 function pierceDepthCanvasPoint(event) {
   const canvas = els.pierceDepthCanvas;
+  // CSS px within the box: the unit the drawing plan is laid out in.
   const rect = canvas.getBoundingClientRect();
-  return {
-    x: (event.clientX - rect.left) * (canvas.width / rect.width),
-    y: (event.clientY - rect.top) * (canvas.height / rect.height),
-  };
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
 // EACH HANDLE IS A PLACE, NOT A DISTANCE
@@ -2138,6 +2111,9 @@ function dragPierceHandle(which, x, y) {
 function initPierceDepthCanvas() {
   const canvas = els.pierceDepthCanvas;
   if (!canvas) return;
+  // Re-laid out whenever its box changes (the popup opening is one), so the
+  // backing store always matches it at whole device pixels.
+  watchBox(canvas, () => { depthDraw = null; renderPierceDepthCanvas(); });
   let dragging = null;
   canvas.addEventListener('pointerdown', (event) => {
     const point = pierceDepthCanvasPoint(event);
@@ -2329,6 +2305,42 @@ function cancelDeletePart() {
 // nothing) while landing on their own genuinely separate screen rather
 // than sharing #app. That separation is what stops PCreate's entry dialog
 // from ever having Rig-mode's own chrome sitting behind it.
+// RECENT TOOLS: how each tool is reopened from its chip. A rig tool opened
+// from the Home screen first walks into the workspace, exactly as the
+// Rigging button does, then opens. The context is what the tool recorded
+// when it last opened; anything in it that no longer exists falls back to
+// the tool's normal way in rather than failing.
+function inWorkspace(then) {
+  if (!els.homeScreen.hidden) leaveHome(els.appRoot, then);
+  else then();
+}
+
+function registerRecentToolLaunchers() {
+  const partById = (id) => partsStore.parts.find((part) => part.id === id) || null;
+  registerToolLauncher('pxpin', (ctx) => inWorkspace(() => openPxPinWith(ctx)));
+  registerToolLauncher('pxlink', () => inWorkspace(() => openPxLink()));
+  registerToolLauncher('meshtrim', (ctx) => inWorkspace(() => {
+    openMeshTrim(partById(ctx.partId) || partsStore.selected);
+  }));
+  registerToolLauncher('pierce', (ctx) => inWorkspace(() => {
+    const a = partById(ctx.partId);
+    const b = partById(ctx.partnerId);
+    if (a && b && a.hasPierceRole && b.hasPierceRole) openPiercePainter(a.id, b.id);
+    else showToast('Those two layers are no longer a piercer and a pierced layer — set Pierce up from a layer’s menu.');
+  }));
+  registerToolLauncher('clayer', () => inWorkspace(() => openClayer()));
+  registerToolLauncher('pcreate', () => {
+    if (!els.homeScreen.hidden) { leaveHome(els.pcreateScreen, () => openPCreate()); return; }
+    if (!els.pcreateScreen.hidden) { openPCreate(); return; }
+    transitionScreens({
+      from: els.appRoot,
+      to: els.pcreateScreen,
+      hide: (el) => { el.hidden = true; },
+      show: (el) => { el.hidden = false; },
+    }).then(() => openPCreate());
+  });
+}
+
 function leaveHome(target, then) {
   transitionScreens({
     from: els.homeScreen,
@@ -2532,7 +2544,7 @@ function renderChrome() {
   partSelection.prune(partsStore.parts.map((part) => part.id));
   renderPartBatchBar();
   els.scenePanelToggle.setAttribute('aria-expanded', String(scenePanelOpen));
-  els.scenePanelChevron.textContent = scenePanelOpen ? '▾' : '▴';
+  setIcon(els.scenePanelChevron, scenePanelOpen ? 'chevron-down' : 'chevron-up');
 
   const selected = partsStore.selected;
   els.selectionBar.hidden = !showPanel || !selected;
@@ -2660,7 +2672,7 @@ async function openProjectPicker() {
     row.appendChild(open);
 
     row.appendChild(iconButton({
-      label: `Delete project ${project.name}`, glyph: '🗑',
+      label: `Delete project ${project.name}`, glyph: 'trash',
       onClick: async () => {
         await storage.deleteProject(project.name);
         if (currentProjectName === project.name) currentProjectName = null;
@@ -3054,7 +3066,7 @@ function handleStateReverse() {
   }
   history.run('Reverse to saved state', () => applyProject(restorePoint.data));
   view.fit();
-  showToast('Back to the saved state. Press ↶ to undo.');
+  showToast('Back to the saved state. Undo takes it back.');
 }
 
 function handleStateDiscard() {
@@ -3064,7 +3076,7 @@ function handleStateDiscard() {
     title: 'Discard everything?',
     message:
       'This removes every layer and every bone, leaving an empty canvas. ' +
-      'Your saved projects are not touched, and ↶ undoes it — but nothing else will bring it back.',
+      'Your saved projects are not touched, and Undo brings it back — but nothing else will.',
     confirmLabel: 'Discard everything',
     danger: true,
     onConfirm: () => {
@@ -3073,7 +3085,7 @@ function handleStateDiscard() {
         bonesStore.replaceAll([], null);
       });
       appState.exitAnimateMode(); // nothing left to move; back to Home
-      showToast('Everything discarded. Press ↶ to undo.');
+      showToast('Everything discarded. Undo brings it back.');
     },
   });
 }
@@ -3211,7 +3223,6 @@ function bindEvents() {
     markPierceStale();
     canvasEngine.requestRender();
   });
-  els.pierceOverlayBtn.addEventListener('click', togglePierceOverlay);
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
   const onDepthTyped = () => {
     renderPierceDepthBar();
@@ -3330,6 +3341,7 @@ function bindEvents() {
     if (els.appMenu.contains(event.target)) return;
     closeStateMenu();
   });
+  document.getElementById('checkpointsOpenBtn').addEventListener('click', () => { closeStateMenu(); openCheckpoints(); });
   els.stateSaveBtn.addEventListener('click', handleStateSave);
   els.stateReverseBtn.addEventListener('click', handleStateReverse);
   els.stateDiscardBtn.addEventListener('click', handleStateDiscard);
@@ -3349,6 +3361,8 @@ function bindEvents() {
   // other item -- back out of Rig mode entirely, to Home.
   els.backToMenuBtn.addEventListener('click', () => { closeStateMenu(); requestReturnHome(); });
   els.rigSettingsBtn.addEventListener('click', openRigSettings);
+  // (The screen itself opens from changelogUI.js's shared listener.)
+  document.getElementById('menuChangelogBtn').addEventListener('click', () => closeStateMenu());
   els.leaveConfirmBtn.addEventListener('click', confirmLeaveHome);
   els.leaveCancelBtn.addEventListener('click', cancelLeaveHome);
   els.psaverExportBtn.addEventListener('click', () => { closeStateMenu(); openPSaverExport(); });
@@ -3401,6 +3415,7 @@ export function initUI() {
     const part = partsStore.parts.find((p) => p.id === partId);
     if (part) showToast(`Selected "${part.name}".`);
   });
+  initCheckpoints({ toast: showToast, afterRevert: () => { view.fit(); renderChrome(); } });
   initRigTool(els.canvas);
   initBindTool(els.canvas);
   initPoseTool(els.canvas);
@@ -3496,8 +3511,15 @@ export function initUI() {
     onRigging: () => leaveHome(els.appRoot),
     onPCreate: () => leaveHome(els.pcreateScreen, () => openPCreate()),
   });
+  registerRecentToolLaunchers();
+  initRecentTools();
   initInfoButtons();
-  restorePierceOverlay();
+  initDebugOverlay({
+    context: () => (isMeshTrimOpen() ? 'meshtrim' : currentState),
+    pierceLayers: () => partsStore.parts.some((p) => p.hasPierceRole),
+  });
+  subscribeDebugOverlay(syncDebugViews);
+  setPierceOverlay(debugViewOn('pierceRegions'));
   initAutoSave({ onFailure: (error) => showToast(`Auto-save failed: ${error.message}`) });
   // The recovery slot is a save too, and the indicator has to say so --
   // "Auto-saved 20s ago" is true and useful, and distinguishable from a

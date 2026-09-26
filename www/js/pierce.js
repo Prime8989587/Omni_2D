@@ -1069,7 +1069,7 @@ export function pierceOverlayTexture(part) {
 export function pierceSpreadIssue(part) {
   if (!part || !part.isPierced) return null;
   if (part.pierceSpreadMode === SpreadMode.SEAM && part.pierceSeam.size < 2) {
-    return 'the V is set to split this layer along a seam, but no seam is drawn yet — draw it with Paint regions… → Seam';
+    return 'the V is set to split this layer along a seam, but no seam is drawn yet — draw it with Paint regions…, then Seam';
   }
   if (part.pierceSpreadMode === SpreadMode.PAIR && !partsStore.partnerOf(part)) {
     return 'the V is set to pair this layer with another, but that other half is gone';

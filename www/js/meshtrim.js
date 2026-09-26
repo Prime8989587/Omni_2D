@@ -36,13 +36,17 @@ import { getSetting, setSetting } from './settings.js';
 import { playEnter } from './transitions.js';
 import { pxlinkStore } from './pxlink.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { noteToolUsed } from './recentTools.js';
+import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
+import { PixelPen } from './pixelDraw.js';
+import { debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
 
 const WIRE_COLOR = 'rgba(255, 46, 147, 0.75)';
 const VERTEX_COLOR = '#FF2E93';
 const VERTEX_SELECTED = '#FFFFFF';
 const BOUNDARY_COLOR = 'rgba(255, 46, 147, 0.9)';
 const MAX_ZOOM = 64;
-const VERTEX_DOT = 3; // css px radius at any zoom -- a target, not a texel
+const MAX_BRUSH = 10; // the biggest square one touch-point of the boundary brush covers
 
 const els = {};
 let session = null;
@@ -65,6 +69,7 @@ function cacheElements() {
     'meshTrimRemoveBtn', 'meshTrimBoundaryBtn', 'meshTrimActionRow',
     'meshTrimRemoveVertexBtn', 'meshTrimClearBoundaryBtn', 'meshTrimTrimBtn',
     'meshTrimEditModeToggle', 'meshTrimHint', 'meshTrimOpenBtn',
+    'meshTrimBrushRow', 'meshTrimBrushBtn', 'meshTrimBrushMenu', 'meshTrimBrushPresets',
   ]) els[id] = document.getElementById(id);
 }
 
@@ -136,33 +141,38 @@ function render() {
     }
   }
 
-  // The wireframe -- only ever drawn here, which is the whole point of the
-  // toggle: Bind mode's own canvas is left exactly as it was.
+  // The mesh, as pixel art (pixelDraw.js): the triangle edges are the
+  // Debug overlay's wireframe view, the vertices are this tool's handles
+  // and are always drawn -- they are what Move and Remove aim at.
   const mesh = session.part.mesh;
   if (mesh && session.tool !== 'boundary') {
-    ctx.strokeStyle = WIRE_COLOR;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 0; i < mesh.triangles.length; i += 3) {
-      const a = mesh.vertices[mesh.triangles[i]];
-      const b = mesh.vertices[mesh.triangles[i + 1]];
-      const c = mesh.vertices[mesh.triangles[i + 2]];
-      if (!a || !b || !c) continue;
-      const pa = texelToScreen(a.u, a.v);
-      const pb = texelToScreen(b.u, b.v);
-      const pc = texelToScreen(c.u, c.v);
-      ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
-      ctx.lineTo(pc.x, pc.y); ctx.closePath();
-    }
-    ctx.stroke();
-
-    mesh.vertices.forEach((vertex, index) => {
+    const { dpr } = session;
+    const pen = new PixelPen(ctx, dpr).begin();
+    const points = mesh.vertices.map((vertex) => {
       const p = texelToScreen(vertex.u, vertex.v);
-      ctx.fillStyle = index === session.selected ? VERTEX_SELECTED : VERTEX_COLOR;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, index === session.selected ? VERTEX_DOT + 1.5 : VERTEX_DOT, 0, Math.PI * 2);
-      ctx.fill();
+      return { x: p.x * dpr, y: p.y * dpr };
     });
+    if (debugViewOn('meshWireframe')) {
+      const seen = new Set();
+      for (let i = 0; i < mesh.triangles.length; i += 3) {
+        for (const [j, k] of [[0, 1], [1, 2], [2, 0]]) {
+          const a = mesh.triangles[i + j];
+          const b = mesh.triangles[i + k];
+          const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+          if (seen.has(key) || !points[a] || !points[b]) continue;
+          seen.add(key);
+          pen.line(points[a].x, points[a].y, points[b].x, points[b].y, WIRE_COLOR);
+        }
+      }
+    }
+    points.forEach((p, index) => {
+      const selected = index === session.selected;
+      // A square handle, one cell bigger when selected, with a black rim
+      // so it reads over any artwork.
+      pen.square(p.x, p.y, selected ? 3 : 2, '#000000');
+      pen.square(p.x, p.y, selected ? 2 : 1, selected ? VERTEX_SELECTED : VERTEX_COLOR);
+    });
+    pen.end();
   }
 
   renderChrome();
@@ -199,6 +209,43 @@ function renderChrome() {
     remove: 'Tap a vertex to select it, then Remove. The hole is re-triangulated.',
     boundary: 'Draw a closed loop around what you want to KEEP, then Trim.',
   }[session.tool];
+}
+
+// The boundary brush's size: the same square sizes, menu and saved-size row
+// as CLayer's boundary brush, since it is the same drawing mechanic. A wide
+// brush is for loosely fencing off a big area; the Trim keeps the line
+// itself, so a fine one is for hugging an edge.
+function renderBrush() {
+  const on = session.tool === 'boundary';
+  els.meshTrimBrushRow.hidden = !on;
+  els.meshTrimBrushMenu.hidden = !on || !session.brushMenuOpen;
+  els.meshTrimBrushPresets.hidden = !on;
+  renderBrushButton(els.meshTrimBrushBtn, session.brush);
+  els.meshTrimBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
+
+  els.meshTrimBrushMenu.replaceChildren();
+  for (let size = 1; size <= MAX_BRUSH; size++) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'px-pin__brush';
+    button.textContent = `${size}×${size}`;
+    button.setAttribute('aria-pressed', String(session.brush === size));
+    button.addEventListener('click', () => setBrush(size));
+    els.meshTrimBrushMenu.appendChild(button);
+  }
+
+  renderBrushPresets(els.meshTrimBrushPresets, {
+    key: 'meshTrimBrushPresets',
+    current: () => session.brush,
+    apply: setBrush,
+    format: SQUARE_FORMAT,
+  });
+}
+
+function setBrush(size) {
+  session.brush = size;
+  session.brushMenuOpen = false;
+  renderBrush();
 }
 
 // ---------------------------------------------------------------------------
@@ -308,14 +355,24 @@ function beginBoundaryStroke(texel) {
   extendBoundaryStroke(texel);
 }
 
+// One touch-point covers a brush-sized square, centred the way CLayer's is
+// (an even size leans up-left), so the two brushes land identically.
 function stampAt(u, v) {
-  const x = Math.floor(u);
-  const y = Math.floor(v);
-  if (x < 0 || y < 0 || x >= session.width || y >= session.height) return;
-  const index = y * session.width + x;
-  if (session.boundary.has(index)) return;
-  if (!session.stroke.touched.has(index)) session.stroke.touched.set(index, false);
-  session.boundary.add(index);
+  const size = session.brush;
+  const origin = Math.floor((size - 1) / 2);
+  const cx = Math.floor(u);
+  const cy = Math.floor(v);
+  for (let dy = 0; dy < size; dy++) {
+    for (let dx = 0; dx < size; dx++) {
+      const x = cx - origin + dx;
+      const y = cy - origin + dy;
+      if (x < 0 || y < 0 || x >= session.width || y >= session.height) continue;
+      const index = y * session.width + x;
+      if (session.boundary.has(index)) continue;
+      if (!session.stroke.touched.has(index)) session.stroke.touched.set(index, false);
+      session.boundary.add(index);
+    }
+  }
 }
 
 // Every step between two samples is stamped, so a fast drag leaves an
@@ -493,6 +550,8 @@ function setTool(tool) {
   session.selected = null;
   session.dragging = null;
   abandonStroke();
+  session.brushMenuOpen = false;
+  renderBrush();
   render();
 }
 
@@ -501,6 +560,7 @@ function setTool(tool) {
 export function openMeshTrim(part) {
   if (!part) { showToast('Select a layer first.'); return; }
   cacheElements();
+  noteToolUsed('meshtrim', { partId: part.id });
 
   const bitmap = document.createElement('canvas');
   bitmap.width = part.naturalWidth;
@@ -521,6 +581,8 @@ export function openMeshTrim(part) {
     selected: null,
     dragging: null,
     boundary: new Set(),
+    brush: 1,
+    brushMenuOpen: false,
     stroke: null,
     dirty: false,
   };
@@ -536,6 +598,7 @@ export function openMeshTrim(part) {
   refreshBitmap();
   sizeCanvas();
   fitCamera();
+  renderBrush();
   render();
 }
 
@@ -566,6 +629,11 @@ export function initMeshTrim({ onExit } = {}) {
   els.meshTrimBoundaryBtn.addEventListener('click', () => setTool('boundary'));
   els.meshTrimRemoveVertexBtn.addEventListener('click', removeSelected);
   els.meshTrimClearBoundaryBtn.addEventListener('click', clearBoundary);
+  els.meshTrimBrushBtn.addEventListener('click', () => {
+    if (!session) return;
+    session.brushMenuOpen = !session.brushMenuOpen;
+    renderBrush();
+  });
   els.meshTrimTrimBtn.addEventListener('click', runTrim);
   els.meshTrimEditModeToggle.addEventListener('click', () => {
     setSetting('meshTrimInPlace', !getSetting('meshTrimInPlace'));
@@ -578,6 +646,8 @@ export function initMeshTrim({ onExit } = {}) {
   if (els.meshTrimOpenBtn) {
     els.meshTrimOpenBtn.addEventListener('click', () => openMeshTrim(partsStore.selected));
   }
+
+  subscribeDebugOverlay(() => render());
 
   watchCanvasBox(els.meshTrimCanvas, () => {
     if (!session) return;
@@ -601,6 +671,7 @@ export function meshTrimDebug() {
     panX: session.cam.panX,
     panY: session.cam.panY,
     boundarySize: session.boundary.size,
+    brush: session.brush,
     vertices: mesh ? mesh.vertices.length : 0,
     triangles: mesh ? mesh.triangles.length / 3 : 0,
     problems: mesh ? meshProblems(mesh) : ['no mesh'],

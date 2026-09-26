@@ -20,6 +20,7 @@ import {
 } from './settings.js';
 import { clearAllData } from './storage.js';
 import { transitionHidden, playEnter } from './transitions.js';
+import { setIcon } from './pixelIcons.js';
 
 const els = {};
 let activeSection = 'main';
@@ -28,6 +29,14 @@ let activeSection = 'main';
 // optional callback for anything that screen needs done on the way in.
 let origin = null;
 let onToast = () => {};
+
+// The colour picks offered as one-tap swatches: the app's pink accent
+// first, then a spread that reads against both the checkerboard and most
+// artwork.
+const SWATCHES = [
+  '#FF2E93', '#FFB7C5', '#FFFFFF', '#FFE14D', '#FF8A2E', '#FF3B3B',
+  '#2EE6C8', '#3BA8FF', '#7A5CFF', '#4DFF7A', '#8C8C8C', '#000000',
+];
 
 function field(entry) {
   const wrap = document.createElement('div');
@@ -58,6 +67,7 @@ function field(entry) {
     button.className = 'toggle-chip';
     button.id = `set-${entry.key}`;
     button.setAttribute('aria-pressed', String(Boolean(current)));
+    button.classList.add('toggle-chip--switch');
     button.textContent = current ? 'On' : 'Off';
     button.addEventListener('click', () => setSetting(entry.key, !getSetting(entry.key)));
     row.appendChild(button);
@@ -74,7 +84,14 @@ function field(entry) {
       button.dataset.value = String(option.value);
       button.id = `set-${entry.key}-${String(option.value)}`;
       button.setAttribute('aria-pressed', String(option.value === current));
-      button.textContent = option.label;
+      if (option.icon) {
+        // A direction reads faster as an arrow than as a compass letter;
+        // the letter stays as the accessible name.
+        setIcon(button, option.icon);
+        button.setAttribute('aria-label', option.label);
+      } else {
+        button.textContent = option.label;
+      }
       if (option.note) {
         const note = document.createElement('span');
         note.className = 'settings-choice__note';
@@ -112,17 +129,61 @@ function field(entry) {
   }
 
   if (entry.kind === 'color') {
+    // A row of pixel swatches plus a hex field, instead of the platform's
+    // colour input -- whose button and picker are smooth, rounded, native
+    // widgets drawn by the OS, and the one thing on this screen that could
+    // not be made pixel art. The swatches cover the common picks in one tap;
+    // the hex field reaches any colour at all.
+    const swatches = document.createElement('div');
+    swatches.className = 'settings-swatches';
+    swatches.setAttribute('role', 'group');
+    swatches.setAttribute('aria-label', entry.label);
+    const now = String(current).toUpperCase();
+    for (const colour of SWATCHES) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.className = 'settings-swatch';
+      swatch.style.setProperty('--swatch', colour);
+      swatch.dataset.colour = colour;
+      swatch.setAttribute('aria-label', colour);
+      swatch.setAttribute('aria-pressed', String(colour === now));
+      swatch.addEventListener('click', () => setSetting(entry.key, colour));
+      swatches.appendChild(swatch);
+    }
+    const hexRow = document.createElement('div');
+    hexRow.className = 'settings-hex';
+    const preview = document.createElement('span');
+    preview.className = 'settings-hex__preview';
+    preview.style.setProperty('--swatch', now);
     const input = document.createElement('input');
-    input.type = 'color';
+    input.type = 'text';
+    input.className = 'text-input text-input--inline settings-hex__input';
     input.id = `set-${entry.key}`;
-    input.value = String(current);
-    input.addEventListener('input', () => setSetting(entry.key, input.value));
-    const readout = document.createElement('span');
-    readout.className = 'settings-field__value';
-    readout.textContent = String(current).toUpperCase();
-    input.addEventListener('input', () => { readout.textContent = input.value.toUpperCase(); });
-    row.appendChild(input);
-    row.appendChild(readout);
+    input.value = now;
+    input.maxLength = 7;
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.setAttribute('aria-label', `${entry.label} (hex)`);
+    // Applied the moment it is a complete colour; anything else is left
+    // alone until it is, and put back if abandoned half-typed.
+    const read = () => {
+      const raw = input.value.trim().replace(/^#?/, '#').toUpperCase();
+      return /^#[0-9A-F]{6}$/.test(raw) ? raw : null;
+    };
+    input.addEventListener('input', () => {
+      const colour = read();
+      input.classList.toggle('is-invalid', !colour);
+      if (colour) preview.style.setProperty('--swatch', colour);
+    });
+    input.addEventListener('change', () => {
+      const colour = read();
+      if (colour) setSetting(entry.key, colour);
+      else input.value = String(getSetting(entry.key)).toUpperCase();
+    });
+    input.addEventListener('keydown', (event) => { if (event.key === 'Enter') input.blur(); });
+    hexRow.append(preview, input);
+    row.classList.add('settings-field__row--stack');
+    row.append(swatches, hexRow);
     return wrap;
   }
 
@@ -165,8 +226,15 @@ function renderBody() {
     versionValue.className = 'settings-readout';
     versionValue.id = 'settingsVersion';
     versionValue.textContent = `Omni 2D ${APP_VERSION}`;
+    const whatsNew = document.createElement('button');
+    whatsNew.type = 'button';
+    whatsNew.className = 'btn btn--sm';
+    whatsNew.id = 'settingsChangelogBtn';
+    whatsNew.dataset.openChangelog = '';
+    whatsNew.textContent = 'What\'s new…';
     version.appendChild(versionLabel);
     version.appendChild(versionValue);
+    version.appendChild(whatsNew);
     body.appendChild(version);
 
     const danger = document.createElement('div');

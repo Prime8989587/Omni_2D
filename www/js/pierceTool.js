@@ -28,6 +28,7 @@
 // rather than two. The seam is drawn with that same freehand brush: a
 // stroke is a continuous line of texels however fast the finger moves.
 
+import { PixelPen, cellEdge, gridStrips } from './pixelDraw.js';
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
@@ -35,8 +36,10 @@ import { pinCarriageOffset } from './mesh.js';
 import { pierceSpreadIssue } from './pierce.js';
 import { spreadTargetOf, spreadGeometry, fullSwing } from './spread.js';
 import { SpreadMode } from './parts.js';
-import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
+import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
+import { createIcon } from './pixelIcons.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { noteToolUsed } from './recentTools.js';
 
 // The tip is the app's accent; the pierceable area is deliberately NOT,
 // because the two are painted in the same window and confusing them would
@@ -125,6 +128,7 @@ export function openPiercePainter(partId, partnerId) {
   const piercer = a.isPiercer ? a : b;
   const pierced = a.isPierced ? a : b;
   if (!piercer || !pierced || piercer.id === pierced.id) return;
+  noteToolUsed('pierce', { partId, partnerId });
 
   // The other half of a paired V is drawn alongside, so its hinge can be
   // placed and the two halves seen against each other.
@@ -278,11 +282,7 @@ function drawRegion(ctx, part, at, fill, edge, region = part.pierceRegion) {
     const y = (at.y + v * part.scale) * cam.zoom + cam.panY;
     if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
     ctx.fillRect(x, y, size, size);
-    if (size >= 6) {
-      ctx.strokeStyle = edge;
-      ctx.lineWidth = Math.min(2, Math.max(1, size / 10));
-      ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
-    }
+    if (size >= 6) cellEdge(ctx, x, y, size, Math.min(2, Math.max(1, size / 10)), edge, session.dpr);
   }
 }
 
@@ -356,57 +356,44 @@ function drawHinges(ctx) {
   const { geometry, target, handles } = hingeHandles();
   if (!geometry) return;
   const pierced = session.pierced;
+  const { dpr } = session;
   // Where the V's mouth is, on screen.
-  const mouth = target.mode === SpreadMode.SEAM
+  const mouthCss = target.mode === SpreadMode.SEAM
     ? texelToWindow(pierced, session.piercedAt, geometry.mouth.x, geometry.mouth.y)
     : sceneToWindow(geometry.mouth);
+  // Pixel art on the interface grid (pixelDraw.js), in device pixels.
+  const pen = new PixelPen(ctx, dpr).begin();
+  const dev = (p) => ({ x: p.x * dpr, y: p.y * dpr });
+  const mouth = dev(mouthCss);
   for (const handle of handles) {
     const colour = HALF_COLORS[handle.k % HALF_COLORS.length];
-    const h = handle.point;
+    const h = dev(handle.point);
     // Rest line, hinge to mouth.
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(h.x, h.y);
-    ctx.lineTo(mouth.x, mouth.y);
-    ctx.stroke();
-    // The same line at full opening. Window space is the scene scaled, so
-    // the turn is the same angle here.
+    pen.line(h.x, h.y, mouth.x, mouth.y, colour);
+    // The same line at full opening, dashed. Window space is the scene
+    // scaled, so the turn is the same angle here.
     const angle = handle.half.sigma * fullSwing(handle.half);
     const dx = mouth.x - h.x;
     const dy = mouth.y - h.y;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
-    ctx.setLineDash([6, 5]);
-    ctx.beginPath();
-    ctx.moveTo(h.x, h.y);
-    ctx.lineTo(h.x + dx * cos - dy * sin, h.y + dx * sin + dy * cos);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    pen.line(h.x, h.y, h.x + dx * cos - dy * sin, h.y + dx * sin + dy * cos, colour, { dash: 3 });
   }
   // The mouth, then the grips on top.
-  ctx.beginPath();
-  ctx.arc(mouth.x, mouth.y, 5, 0, Math.PI * 2);
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fill();
+  pen.disc(mouth.x, mouth.y, 5 * dpr, '#FFFFFF');
   handles.forEach((handle) => {
     const colour = HALF_COLORS[handle.k % HALF_COLORS.length];
-    const p = handle.point;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, HANDLE_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = colour;
-    ctx.fill();
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'center';
-    const label = target.mode === SpreadMode.SEAM ? `hinge ${handle.half.side.toUpperCase()}` : handle.part.name;
+    const p = dev(handle.point);
+    const r = HANDLE_RADIUS * dpr;
+    pen.disc(p.x, p.y, r + pen.u, '#000000');
+    pen.disc(p.x, p.y, r, colour);
+    const label = target.mode === SpreadMode.SEAM ? `hinge ${handle.half.side}` : handle.part.name;
     // Two hinges on one spot (the default) label above and below, so both
     // names can be read.
-    ctx.fillText(label, p.x, handle.k === 0 ? p.y - HANDLE_RADIUS - 6 : p.y + HANDLE_RADIUS + 16);
+    const y = handle.k === 0 ? p.y - r - 12 * dpr : p.y + r + 6 * dpr;
+    pen.text(label, p.x, y, '#FFFFFF', { background: '#000000' });
   });
+  pen.end();
 }
 
 // Which hinge a touch is going for, or null for none. On the default setup
@@ -474,20 +461,8 @@ function render() {
   const at = targetPlacement();
   const cell = part.scale * cam.zoom;
   if (cell >= GRID_MIN_CELL_PX) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let u = 0; u <= part.naturalWidth; u++) {
-      const x = (at.x + u * part.scale) * cam.zoom + cam.panX;
-      ctx.moveTo(x, at.y * cam.zoom + cam.panY);
-      ctx.lineTo(x, (at.y + part.sceneHeight) * cam.zoom + cam.panY);
-    }
-    for (let v = 0; v <= part.naturalHeight; v++) {
-      const y = (at.y + v * part.scale) * cam.zoom + cam.panY;
-      ctx.moveTo(at.x * cam.zoom + cam.panX, y);
-      ctx.lineTo((at.x + part.sceneWidth) * cam.zoom + cam.panX, y);
-    }
-    ctx.stroke();
+    gridStrips(ctx, at.x * cam.zoom + cam.panX, at.y * cam.zoom + cam.panY,
+      part.naturalWidth, part.naturalHeight, cell, 'rgba(255, 255, 255, 0.12)', session.dpr);
   }
 
   const halves = [[pierced, piercedAt]];
@@ -514,10 +489,10 @@ function render() {
   const v = mode === SpreadMode.OFF
     ? 'no V'
     : `V ${mode === SpreadMode.PAIR ? 'pair' : `seam ${pierced.pierceSeam.size} px`}, opens ${pierced.pierceSpread} px`;
-  els.pierceWindowStatus.textContent = issue
-    ? `⚠ ${issue}`
-    : `tip ${piercer.pierceRegion.size} px · flesh ${pierced.pierceRegion.size} px · ` +
+  const status = `tip ${piercer.pierceRegion.size} px · flesh ${pierced.pierceRegion.size} px · ` +
       `wall ${pierced.pierceBarrierRegion.size} · ${v} · ${Math.round(cam.zoom * 100)}%`;
+  if (issue) els.pierceWindowStatus.replaceChildren(createIcon('warning'), document.createTextNode(` ${issue}`));
+  else els.pierceWindowStatus.textContent = status;
 }
 
 // What the selected target is for, said where it is being used.
@@ -547,7 +522,7 @@ function renderTools() {
   if (session.partner) els.pierceSwitchHalfBtn.textContent = `Paint the other half (${session.partner.name})`;
   els.pierceToolPaintBtn.setAttribute('aria-pressed', String(session.tool === 'paint'));
   els.pierceToolEraseBtn.setAttribute('aria-pressed', String(session.tool === 'erase'));
-  els.pierceBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
+  renderBrushButton(els.pierceBrushBtn, session.brush);
   els.pierceBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
   els.pierceBrushMenu.hidden = !session.brushMenuOpen;
   // Nothing is painted on the Hinges target, so the brush and the

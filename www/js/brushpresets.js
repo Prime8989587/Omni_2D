@@ -1,19 +1,22 @@
 // Favourite brush sizes, as a row of chips beside the size control.
 //
-// Three tools have an adjustable brush -- Px Pin, the Pierce region
-// painter, and weight painting -- and all three have the same problem:
+// Every tool with an adjustable brush -- Px Pin, the Pierce region painter,
+// weight painting, the Mesh Trim boundary brush, CLayer's boundary brush and
+// PCreate's brush and eraser -- has the same problem:
 // getting back to a size you use constantly means opening a menu and
 // finding it, or dragging a slider from wherever it happens to be. A
 // handful of one-tap shortcuts removes that, and because they are stored
 // in the settings record they are still there next session.
 //
-// ONE RENDERER FOR ALL THREE, because they differ only in their range and
-// in how a size reads: Px Pin and Pierce are whole squares ("4×4"), weight
-// painting is a screen-pixel radius ("45 px"). Everything else -- the
-// chips, the save star, the pressed state, the persistence -- is identical,
-// and three copies of it would be three places for the behaviour to drift.
+// ONE RENDERER FOR ALL OF THEM, because they differ only in their range and
+// in how a size reads: the square brushes are whole squares ("4×4"),
+// weight painting is a screen-pixel radius ("45 px"). Everything else --
+// the chips, the save star, the pressed state, the persistence -- is
+// identical, and a copy per tool would be a place per tool for the
+// behaviour to drift.
 
 import { getSetting, togglePreset, hasPreset, subscribeSettings } from './settings.js';
+import { setIcon } from './pixelIcons.js';
 
 // Renders (or re-renders) one preset row.
 //
@@ -57,7 +60,7 @@ export function renderBrushPresets(container, { key, current, apply, format }) {
   star.type = 'button';
   star.className = 'brush-presets__save';
   star.dataset.presetSave = key;
-  star.textContent = saved ? '★' : '☆';
+  setIcon(star, saved ? 'star' : 'star-outline');
   star.setAttribute('aria-pressed', String(saved));
   star.setAttribute('aria-label', saved
     ? `Forget ${format(now)} as a saved size`
@@ -80,4 +83,16 @@ export function bindBrushPresets(container, options) {
 }
 
 export const SQUARE_FORMAT = (n) => `${n}×${n}`;
+
+// The button that opens a tool's brush-size menu: the size, then a pixel
+// chevron (the menu's own affordance), in one place for every tool.
+export function renderBrushButton(button, size) {
+  if (!button) return;
+  const label = document.createElement('span');
+  label.textContent = `${size} × ${size}`;
+  const chevron = document.createElement('span');
+  chevron.className = 'px-icon--trail';
+  setIcon(chevron, 'chevron-down');
+  button.replaceChildren(label, chevron);
+}
 export const PIXEL_FORMAT = (n) => `${n} px`;

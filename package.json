@@ -1,11 +1,11 @@
 {
   "name": "omni_2d",
-  "version": "1.0.0",
+  "version": "2.5.0",
   "description": "Capacitor-wrapped HTML/JS/Canvas app for Android.",
   "main": "index.js",
   "scripts": {
     "sync": "cap sync android",
-    "test": "node tests/clayer.mjs && node tests/color.mjs && node tests/pixelops.mjs && node tests/contour.mjs && node tests/settings.mjs && node tests/skinning.mjs && node tests/meshedit.mjs && node tests/qol.mjs && node tests/seams.mjs && node tests/pins.mjs && node tests/pxlink.mjs && node tests/spread.mjs"
+    "test": "node tests/clayer.mjs && node tests/color.mjs && node tests/pixelops.mjs && node tests/contour.mjs && node tests/settings.mjs && node tests/skinning.mjs && node tests/meshedit.mjs && node tests/qol.mjs && node tests/seams.mjs && node tests/pins.mjs && node tests/pxlink.mjs && node tests/spread.mjs && node tests/changelog.mjs"
   },
   "repository": {
     "type": "git",

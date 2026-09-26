@@ -87,3 +87,70 @@ export function traceAlphaEdgesInBounds(alpha, width, height, bounds, options = 
   }
   return edges;
 }
+
+// THE OUTLINE CONTOUR MODE DRAWS: the pixels just OUTSIDE a shape.
+//
+// traceAlphaEdges finds the shape's own rim; an outline drawn ON that rim
+// covers the outermost pixel of the artwork, which on pixel art is usually
+// the artist's own line. So what Contour mode paints is the ring of
+// transparent pixels around the shape instead, `thickness` pixels deep --
+// the classic pixel-art outline, which adds to the drawing rather than
+// painting over it, on the artwork's own pixel grid.
+//
+// The neighbourhood is the square one (a pixel diagonally off a corner is
+// in the ring), so a one-pixel outline closes around every corner instead
+// of leaving the corner pixel notched out. Thickness is a square dilation
+// done as two separable running-window passes -- each pixel costs the same
+// however thick the outline is.
+//
+// `bounds` (optional) limits the work to the rectangle the shape lives in;
+// the ring may extend `thickness` beyond it, and is clipped to the buffer.
+// Returns the buffer indices of the ring's pixels.
+export function outlineRing(alpha, width, height, { stride = 4, threshold = 1, thickness = 1, bounds = null } = {}) {
+  const ring = [];
+  if (!alpha || width <= 0 || height <= 0) return ring;
+  const t = Math.max(1, Math.round(thickness));
+  const bx0 = bounds ? Math.floor(bounds.x0) : 0;
+  const by0 = bounds ? Math.floor(bounds.y0) : 0;
+  const bx1 = bounds ? Math.ceil(bounds.x1) : width;
+  const by1 = bounds ? Math.ceil(bounds.y1) : height;
+  const x0 = Math.max(0, bx0 - t);
+  const y0 = Math.max(0, by0 - t);
+  const x1 = Math.min(width, bx1 + t);
+  const y1 = Math.min(height, by1 + t);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w <= 0 || h <= 0) return ring;
+
+  const solid = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y + y0) * width + (x + x0);
+      solid[y * w + x] = (stride === 1 ? alpha[i] : alpha[i * 4 + 3]) >= threshold ? 1 : 0;
+    }
+  }
+
+  // Horizontal pass: is there a solid pixel within t along the row?
+  const across = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    let count = 0;
+    const row = y * w;
+    for (let x = 0; x < Math.min(t, w); x++) count += solid[row + x];
+    for (let x = 0; x < w; x++) {
+      if (x + t < w) count += solid[row + x + t];
+      if (x - t - 1 >= 0) count -= solid[row + x - t - 1];
+      across[row + x] = count > 0 ? 1 : 0;
+    }
+  }
+  // Vertical pass over that: a solid pixel within t in both directions.
+  for (let x = 0; x < w; x++) {
+    let count = 0;
+    for (let y = 0; y < Math.min(t, h); y++) count += across[y * w + x];
+    for (let y = 0; y < h; y++) {
+      if (y + t < h) count += across[(y + t) * w + x];
+      if (y - t - 1 >= 0) count -= across[(y - t - 1) * w + x];
+      if (count > 0 && !solid[y * w + x]) ring.push((y + y0) * width + (x + x0));
+    }
+  }
+  return ring;
+}

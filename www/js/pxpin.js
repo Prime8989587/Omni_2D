@@ -23,14 +23,16 @@
 // landed one finger first, so the stroke is UNDONE rather than left behind
 // as a stray pin. A whole stroke is one undo step.
 
+import { cellEdge, gridStrips } from './pixelDraw.js';
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 import { getSetting } from './settings.js';
 import { haptic } from './haptics.js';
-import { renderBrushPresets, SQUARE_FORMAT } from './brushpresets.js';
+import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { noteToolUsed } from './recentTools.js';
 
 const ACCENT = '#FF2E93';
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
@@ -92,6 +94,16 @@ export function openPxPinPicker() {
   els.pxpinPickerModal.hidden = false;
 }
 
+// Straight back into a session on the same two layers (Recent tools), or
+// the picker if either has gone.
+export function openPxPinWith({ aboveId, belowId } = {}) {
+  const ok = [aboveId, belowId].every((id) => partsStore.parts.some((part) => part.id === id));
+  if (!ok || aboveId === belowId) { openPxPinPicker(); return; }
+  fillSelect(els.pxpinAboveSelect, aboveId);
+  fillSelect(els.pxpinBelowSelect, belowId);
+  startSession();
+}
+
 function closePicker() {
   els.pxpinPickerModal.hidden = true;
 }
@@ -134,6 +146,7 @@ function startSession() {
     return;
   }
   closePicker();
+  noteToolUsed('pxpin', { aboveId: above.id, belowId: below.id });
 
   // The two layers are held BY ID, not by reference: undo and project load
   // rebuild every Part from a snapshot, so a cached object would quietly go
@@ -242,20 +255,8 @@ function render() {
   // Texel grid over the ABOVE layer once cells are big enough to aim at.
   const cell = above.scale * cam.zoom;
   if (cell >= GRID_MIN_CELL_PX) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let u = 0; u <= above.naturalWidth; u++) {
-      const x = (aboveAt.x + u * above.scale) * cam.zoom + cam.panX;
-      ctx.moveTo(x, aboveAt.y * cam.zoom + cam.panY);
-      ctx.lineTo(x, (aboveAt.y + above.sceneHeight) * cam.zoom + cam.panY);
-    }
-    for (let v = 0; v <= above.naturalHeight; v++) {
-      const y = (aboveAt.y + v * above.scale) * cam.zoom + cam.panY;
-      ctx.moveTo(aboveAt.x * cam.zoom + cam.panX, y);
-      ctx.lineTo((aboveAt.x + above.sceneWidth) * cam.zoom + cam.panX, y);
-    }
-    ctx.stroke();
+    gridStrips(ctx, aboveAt.x * cam.zoom + cam.panX, aboveAt.y * cam.zoom + cam.panY,
+      above.naturalWidth, above.naturalHeight, cell, 'rgba(255, 255, 255, 0.12)', session.dpr);
   }
 
   // Pinned pixels: solid pink corner marks + translucent fill, so the pin
@@ -271,11 +272,7 @@ function render() {
     if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
     ctx.fillStyle = 'rgba(255, 46, 147, 0.45)';
     ctx.fillRect(x, y, size, size);
-    if (size >= 6) {
-      ctx.strokeStyle = ACCENT;
-      ctx.lineWidth = Math.min(2, Math.max(1, size / 10));
-      ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
-    }
+    if (size >= 6) cellEdge(ctx, x, y, size, Math.min(2, Math.max(1, size / 10)), ACCENT, session.dpr);
   }
 
   els.pxpinStatus.textContent =
@@ -285,7 +282,7 @@ function render() {
 function renderTools() {
   els.pxpinToolPinBtn.setAttribute('aria-pressed', String(session.tool === 'pin'));
   els.pxpinToolEraseBtn.setAttribute('aria-pressed', String(session.tool === 'erase'));
-  els.pxpinBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
+  renderBrushButton(els.pxpinBrushBtn, session.brush);
   els.pxpinBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
   els.pxpinBrushMenu.hidden = !session.brushMenuOpen;
 

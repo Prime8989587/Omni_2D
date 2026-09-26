@@ -12,6 +12,7 @@
 // adjust it -- one gesture, so a tap that lands a pixel off can be walked
 // onto the joint without lifting.
 
+import { PixelPen } from './pixelDraw.js';
 import { partsStore } from './parts.js';
 import { history } from './history.js';
 import { rasterizeTriangle } from './raster.js';
@@ -22,6 +23,8 @@ import {
 } from './pxlink.js';
 import { playEnter } from './transitions.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { setIcon } from './pixelIcons.js';
+import { noteToolUsed } from './recentTools.js';
 
 const TEAL = '#2EE6C8';
 const HANDLE_RADIUS = 9;
@@ -153,54 +156,48 @@ function render() {
   const { zoom, panX, panY } = session.cam;
   const W = sceneStore.width * zoom;
   const H = sceneStore.height * zoom;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(panX - 0.5, panY - 0.5, W + 1, H + 1);
   ctx.globalAlpha = DIM_ALPHA;
   ctx.drawImage(session.dimBitmap, panX, panY, W, H);
   ctx.globalAlpha = 1;
   ctx.drawImage(session.litBitmap, panX, panY, W, H);
 
+  // Everything on top is pixel art on the interface grid (pixelDraw.js), in
+  // raw device pixels -- no anti-aliased path anywhere.
+  const { dpr } = session;
+  const pen = new PixelPen(ctx, dpr).begin();
+  const dev = (x, y) => { const p = toScreen(x, y); return { x: p.x * dpr, y: p.y * dpr }; };
+  const cell = pen.u / dpr; // one art pixel, in CSS px
+
+  // The canvas border, one cell wide, just outside the scene.
+  pen.box((panX - cell / 2) * dpr, (panY - cell / 2) * dpr, (panX + W + cell / 2) * dpr, (panY + H + cell / 2) * dpr, 'rgba(255, 255, 255, 0.12)');
+
   // Existing links, at their solved positions -- where every member meets.
   for (const link of session.links) {
     if (link.members.length === 0) continue;
-    const p = toScreen(link.members[0].x, link.members[0].y);
-    const focused = link.id === session.focusId;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, focused ? 8 : 5, 0, Math.PI * 2);
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 4;
-    ctx.stroke();
-    ctx.strokeStyle = TEAL;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    const p = dev(link.members[0].x, link.members[0].y);
+    const r = (link.id === session.focusId ? 8 : 5) * dpr;
+    pen.ring(p.x, p.y, r + pen.u, '#000000');
+    pen.ring(p.x, p.y, r - pen.u, '#000000');
+    pen.ring(p.x, p.y, r, TEAL);
   }
 
   // The point being placed: the Pierce window's grip, in PxLink's teal.
   if (session.point) {
-    const p = toScreen(session.point.x, session.point.y);
-    ctx.beginPath();
-    ctx.moveTo(p.x - HANDLE_RADIUS - 6, p.y); ctx.lineTo(p.x + HANDLE_RADIUS + 6, p.y);
-    ctx.moveTo(p.x, p.y - HANDLE_RADIUS - 6); ctx.lineTo(p.x, p.y + HANDLE_RADIUS + 6);
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    ctx.strokeStyle = TEAL;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, HANDLE_RADIUS, 0, Math.PI * 2);
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 4;
-    ctx.stroke();
-    ctx.strokeStyle = TEAL;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('joint', p.x, p.y - HANDLE_RADIUS - 8);
+    const p = dev(session.point.x, session.point.y);
+    const reach = (HANDLE_RADIUS + 6) * dpr;
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      pen.line(p.x - dx * reach, p.y - dy * reach, p.x + dx * reach, p.y + dy * reach, '#000000', { thickness: 3 });
+    }
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      pen.line(p.x - dx * reach, p.y - dy * reach, p.x + dx * reach, p.y + dy * reach, TEAL);
+    }
+    const r = HANDLE_RADIUS * dpr;
+    pen.ring(p.x, p.y, r + pen.u, '#000000');
+    pen.ring(p.x, p.y, r - pen.u, '#000000');
+    pen.ring(p.x, p.y, r, TEAL);
+    pen.text('joint', p.x, p.y - r - 12 * dpr, '#FFFFFF', { background: '#000000' });
   }
+  pen.end();
 
   renderChrome();
 }
@@ -278,7 +275,7 @@ function renderList() {
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'row-btn';
-    del.textContent = '✕';
+    setIcon(del, 'close');
     del.dataset.deleteLink = link.id;
     del.setAttribute('aria-label', `Delete link ${linkName(link)}`);
     del.addEventListener('click', () => askDelete(link.id));
@@ -497,6 +494,7 @@ export function openPxLink() {
     showToast('PxLink joins two or more layers — import another layer first.');
     return;
   }
+  noteToolUsed('pxlink');
   session = {
     // Starts from the layer the user is on, if it can be seen -- a hidden
     // layer is not something anyone means to join by default.

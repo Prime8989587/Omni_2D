@@ -35,12 +35,15 @@
 // way to work a canvas in this app rather than three slightly different
 // ones.
 
+import { cellEdge, gridStrips } from './pixelDraw.js';
 import { Part, partsStore } from './parts.js';
 import { sceneStore } from './scene.js';
 import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName, contentBounds, cropPixels } from './importer.js';
 import { playEnter } from './transitions.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
+import { noteToolUsed } from './recentTools.js';
 
 const BOUNDARY_COLOR = 'rgba(255, 46, 147, 0.85)';
 const FILL_COLOR = 'rgba(58, 219, 126, 0.4)';
@@ -66,7 +69,7 @@ function cacheElements() {
     'clayerOpenBtn', 'clayerFileInput', 'clayerWindow', 'clayerSourceName',
     'clayerStatus', 'clayerDoneBtn', 'clayerCanvas',
     'clayerToolBoundaryBtn', 'clayerToolFillBtn', 'clayerBoundaryRow',
-    'clayerDrawBtn', 'clayerEraseBtn', 'clayerBrushBtn', 'clayerBrushMenu',
+    'clayerDrawBtn', 'clayerEraseBtn', 'clayerBrushBtn', 'clayerBrushMenu', 'clayerBrushPresets',
     'clayerFillHint', 'clayerClearBtn', 'clayerSaveBtn',
     'clayerNameModal', 'clayerNameInput', 'clayerNameConfirmBtn', 'clayerNameCancelBtn',
   ]) {
@@ -169,6 +172,7 @@ function startSession({ name, width, height, pixels, bitmap }) {
   };
 
   els.clayerSourceName.textContent = name;
+  noteToolUsed('clayer');
   els.clayerWindow.hidden = false;
   playEnter(els.clayerWindow);
 
@@ -220,11 +224,7 @@ function drawIndexSet(ctx, indices, width, fill, edge) {
     const y = v * size + cam.panY;
     if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
     ctx.fillRect(x, y, size, size);
-    if (edge && size >= 6) {
-      ctx.strokeStyle = edge;
-      ctx.lineWidth = Math.min(2, Math.max(1, size / 10));
-      ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
-    }
+    if (edge && size >= 6) cellEdge(ctx, x, y, size, Math.min(2, Math.max(1, size / 10)), edge, session.dpr);
   }
 }
 
@@ -244,20 +244,7 @@ function render() {
   // The pixel grid, once cells are big enough to aim at -- the same
   // threshold every other precise-painting window in the app uses.
   if (cam.zoom >= GRID_MIN_CELL_PX) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let u = 0; u <= width; u++) {
-      const x = u * cam.zoom + cam.panX;
-      ctx.moveTo(x, cam.panY);
-      ctx.lineTo(x, height * cam.zoom + cam.panY);
-    }
-    for (let v = 0; v <= height; v++) {
-      const y = v * cam.zoom + cam.panY;
-      ctx.moveTo(cam.panX, y);
-      ctx.lineTo(width * cam.zoom + cam.panX, y);
-    }
-    ctx.stroke();
+    gridStrips(ctx, cam.panX, cam.panY, width, height, cam.zoom, 'rgba(255, 255, 255, 0.12)', session.dpr);
   }
 
   // The fill highlight sits BENEATH the boundary line, so a boundary drawn
@@ -276,11 +263,12 @@ function renderTools() {
   els.clayerToolBoundaryBtn.setAttribute('aria-pressed', String(session.tool === 'boundary'));
   els.clayerToolFillBtn.setAttribute('aria-pressed', String(session.tool === 'fill'));
   els.clayerBoundaryRow.hidden = session.tool !== 'boundary';
+  els.clayerBrushPresets.hidden = session.tool !== 'boundary';
   els.clayerFillHint.hidden = session.tool !== 'fill';
 
   els.clayerDrawBtn.setAttribute('aria-pressed', String(session.boundaryTool === 'draw'));
   els.clayerEraseBtn.setAttribute('aria-pressed', String(session.boundaryTool === 'erase'));
-  els.clayerBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
+  renderBrushButton(els.clayerBrushBtn, session.brush);
   els.clayerBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
   els.clayerBrushMenu.hidden = !session.brushMenuOpen;
 
@@ -298,6 +286,13 @@ function renderTools() {
     });
     els.clayerBrushMenu.appendChild(button);
   }
+
+  renderBrushPresets(els.clayerBrushPresets, {
+    key: 'clayerBrushPresets',
+    current: () => session.brush,
+    apply: (size) => { session.brush = size; session.brushMenuOpen = false; renderTools(); },
+    format: SQUARE_FORMAT,
+  });
 }
 
 // ---------------------------------------------------------------------------

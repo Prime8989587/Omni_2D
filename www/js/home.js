@@ -25,28 +25,70 @@
 
 import { playEnter } from './transitions.js';
 import { shouldRenderFrame } from './settings.js';
+import { effectiveDpr } from './pixelScale.js';
+import { PIXEL } from './pixelIcons.js';
 
 const SAKURA = '#FFB7C5'; // the light pink the visual identity specifies
 const PETAL_COUNT = 34;
-const MIN_SCALE = 2; // device-independent pixels per petal "pixel"
-const MAX_SCALE = 4;
+// ONE pixel density for every petal: PIXEL (2) CSS px per petal pixel, the
+// same as every icon and flower in the app. Petals differ in which sprite
+// they use -- a big one and a small one, for depth -- never in how big a
+// pixel of them is.
+const DENSITY = PIXEL;
 
-// The petal, as a pixel-art sprite: one row per line, each entry a run of
-// [startColumn, length]. Drawn as filled rectangles on a whole-pixel grid,
-// which is what keeps the edges hard at any scale.
-// Narrow at the stem end, widening out, with the notch at the wide end
-// that makes a cherry-blossom petal read as one rather than as a generic
-// blob. Six by six is the smallest grid that still carries the notch.
-const PETAL_ROWS = [
-  [[2, 2]],
-  [[1, 4]],
-  [[0, 6]],
-  [[0, 6]],
-  [[0, 6]],
-  [[0, 2], [4, 2]], // the notch
+// The petals, as pixel-art sprites ('#' filled). The big one narrows at the
+// stem and carries the notch at its wide end that makes a cherry-blossom
+// petal read as one rather than as a generic blob; six by six is the
+// smallest grid that still carries the notch. The small one is the same
+// idea at four by four, for petals further away.
+const SPRITES = [
+  [
+    '..##..',
+    '.####.',
+    '######',
+    '######',
+    '######',
+    '##..##',
+  ],
+  [
+    '.##.',
+    '####',
+    '####',
+    '#..#',
+  ],
 ];
-const PETAL_W = 6;
-const PETAL_H = 6;
+
+// TUMBLING WITHOUT ROTATING. A pixel sprite cannot be turned by an arbitrary
+// angle without resampling it -- which is exactly the blur this app does not
+// allow. What it can do is take any of the eight symmetries of its square
+// grid: the four quarter turns, each optionally mirrored. Those are exact
+// (every pixel lands on a pixel), and stepping through them as a petal
+// spins -- a quarter turn at a time, flipping over now and then -- reads as
+// tumbling, the way it does in any hand-animated sprite. Precomputed once.
+function symmetries(rows) {
+  const n = rows.length;
+  const at = (grid, x, y) => grid[y][x] === '#';
+  const variants = [];
+  for (let flip = 0; flip < 2; flip++) {
+    for (let turn = 0; turn < 4; turn++) {
+      const cells = [];
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+          // Map the output cell back to a source cell: undo the turn, then
+          // the mirror.
+          let sx = x;
+          let sy = y;
+          for (let t = 0; t < turn; t++) [sx, sy] = [sy, n - 1 - sx];
+          if (flip) sx = n - 1 - sx;
+          if (at(rows, sx, sy)) cells.push([x, y]);
+        }
+      }
+      variants.push(cells);
+    }
+  }
+  return variants;
+}
+const FRAMES = SPRITES.map(symmetries);
 
 const els = {};
 let petals = [];
@@ -61,7 +103,8 @@ function random(min, max) {
 }
 
 function makePetal(width, height, fromTop = false) {
-  const scale = Math.round(random(MIN_SCALE, MAX_SCALE));
+  const sprite = Math.random() < 0.6 ? 0 : 1;
+  const near = sprite === 0;
   return {
     x: random(0, Math.max(1, width)),
     // On the FIRST fill, petals are scattered across the whole screen so
@@ -71,17 +114,22 @@ function makePetal(width, height, fromTop = false) {
     // visibly bare for the first several seconds, which is the one moment
     // it most needs to look alive.
     y: fromTop ? random(-40, Math.max(1, height)) : random(-60, -10),
-    scale,
-    // Bigger petals fall slightly faster: a cheap depth cue that costs
-    // nothing and stops the field looking flat.
-    fall: random(8, 20) * (scale / MAX_SCALE) + 6,
+    sprite,
+    // Bigger (nearer) petals fall a little faster: a cheap depth cue that
+    // costs nothing and stops the field looking flat.
+    fall: near ? random(14, 26) : random(8, 16),
     drift: random(-10, 10),
     swayAmplitude: random(6, 22),
     swayPeriod: random(2.5, 6),
     phase: random(0, Math.PI * 2),
-    spin: random(-0.5, 0.5),
-    angle: random(0, Math.PI * 2),
-    alpha: random(0.55, 1),
+    // Quarter turns per second, and how often it flips over.
+    spin: random(-1.6, 1.6),
+    angle: random(0, 4),
+    flipEvery: random(2, 7),
+    flipClock: random(0, 7),
+    flipped: Math.random() < 0.5,
+    // Three flat opacities rather than a continuum: nearer is more solid.
+    alpha: near ? (Math.random() < 0.5 ? 1 : 0.8) : 0.6,
     // Set while a finger holds it, and for a moment after release.
     held: false,
     vx: 0,
@@ -90,14 +138,15 @@ function makePetal(width, height, fromTop = false) {
 }
 
 function petalSize(petal) {
-  return { w: PETAL_W * petal.scale, h: PETAL_H * petal.scale };
+  const n = SPRITES[petal.sprite].length * DENSITY;
+  return { w: n, h: n };
 }
 
 function resize() {
   const canvas = els.canvas;
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = effectiveDpr();
   canvas.width = Math.max(1, Math.round(rect.width * dpr));
   canvas.height = Math.max(1, Math.round(rect.height * dpr));
   els.cssWidth = rect.width;
@@ -110,26 +159,18 @@ function resize() {
 }
 
 function drawPetal(ctx, petal) {
-  const { w, h } = petalSize(petal);
-  ctx.save();
+  const frames = FRAMES[petal.sprite];
+  const turn = ((Math.floor(petal.angle) % 4) + 4) % 4;
+  const cells = frames[(petal.flipped ? 4 : 0) + turn];
+  // The petal's corner snapped to the art-pixel grid, so it moves a whole
+  // petal-pixel at a time like any sprite, and each of its pixels is an
+  // exact square of device pixels.
+  const x0 = Math.round(petal.x / DENSITY) * DENSITY;
+  const y0 = Math.round(petal.y / DENSITY) * DENSITY;
   ctx.globalAlpha = petal.alpha;
-  ctx.translate(petal.x + w / 2, petal.y + h / 2);
-  ctx.rotate(petal.angle);
   ctx.fillStyle = SAKURA;
-  // Whole-pixel rectangles, drawn from the sprite table. No paths, no
-  // curves, no smoothing -- the same "a texel is filled or it is not" rule
-  // the drawing tools follow.
-  for (let row = 0; row < PETAL_ROWS.length; row++) {
-    for (const [start, length] of PETAL_ROWS[row]) {
-      ctx.fillRect(
-        Math.round(-w / 2 + start * petal.scale),
-        Math.round(-h / 2 + row * petal.scale),
-        length * petal.scale,
-        petal.scale
-      );
-    }
-  }
-  ctx.restore();
+  for (const [cx, cy] of cells) ctx.fillRect(x0 + cx * DENSITY, y0 + cy * DENSITY, DENSITY, DENSITY);
+  ctx.globalAlpha = 1;
 }
 
 // The token the Screen Rate governor keys this loop's pacing off. Any
@@ -165,6 +206,11 @@ function step(time) {
       petal.vx *= 0.94;
       petal.vy *= 0.94;
       petal.angle += petal.spin * dt;
+      petal.flipClock += dt;
+      if (petal.flipClock >= petal.flipEvery) {
+        petal.flipClock = 0;
+        petal.flipped = !petal.flipped;
+      }
 
       const { w, h } = petalSize(petal);
       // Off the bottom: recycled to the top, keeping its own character.

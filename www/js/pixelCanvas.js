@@ -34,13 +34,15 @@
 // now, when they fit and whenever a pinch ends -- anchored where the fingers
 // were, so settling onto the grid does not yank the view.
 
+import { effectiveDpr } from './pixelScale.js';
+
 // Sizes the backing store to the canvas's CSS box at the current device
 // pixel ratio. Returns the box (CSS px) and the ratio, or null when the
 // canvas has no box -- it is hidden -- in which case nothing is touched.
 export function fitBackingStore(canvas) {
   const rect = canvas.getBoundingClientRect();
   if (!(rect.width > 0) || !(rect.height > 0)) return null;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = effectiveDpr();
   const width = Math.max(1, Math.round(rect.width * dpr));
   const height = Math.max(1, Math.round(rect.height * dpr));
   // Assigning a canvas's size clears it, so only when it actually changes.

@@ -13,10 +13,7 @@
     <canvas id="homePetals" class="home__petals" aria-hidden="true"></canvas>
     <div class="home__content">
       <h1 class="home__wordmark" aria-label="oOmni2D">
-        <span class="wordmark-oo" aria-hidden="true">
-          <span class="wordmark-oo__loop wordmark-oo__loop--small"></span>
-          <span class="wordmark-oo__loop wordmark-oo__loop--large"></span>
-        </span><span class="home__wordmark-text" aria-hidden="true">mni2D</span>
+        <span class="wordmark-oo" aria-hidden="true"></span><span class="home__wordmark-text" aria-hidden="true">mni2D</span>
       </h1>
       <p class="home__tagline">Rig it, or draw it.</p>
       <div class="home__actions">
@@ -24,6 +21,8 @@
         <button id="homePcreateBtn" class="btn btn--lg btn--flourish home__btn" type="button">PCreate</button>
         <button id="homeSettingsBtn" class="btn btn--lg home__btn home__btn--quiet" type="button">Settings</button>
       </div>
+      <div id="homeRecentTools" class="recent-tools recent-tools--home" data-recent-tools hidden></div>
+      <button id="homeChangelogBtn" class="home__version" type="button" data-open-changelog><span data-app-version>v</span> · What's new</button>
       <p class="home__hint">Drag the petals if you like — they will drift on from wherever you drop them.</p>
     </div>
   </section>
@@ -31,15 +30,13 @@
   <div id="app" class="app" hidden>
     <header class="topbar">
       <button id="importBtn" class="btn btn--flourish" type="button">Import</button>
-      <button id="fitViewBtn" class="btn btn--icon" type="button" aria-label="Fit the whole canvas on screen" title="Fit">&#10530;</button>
-      <button id="undoBtn" class="btn btn--icon" type="button" aria-label="Undo" title="Undo" disabled>&#8634;</button>
-      <button id="redoBtn" class="btn btn--icon" type="button" aria-label="Redo" title="Redo" disabled>&#8635;</button>
-      <button id="appMenuBtn" class="btn btn--icon" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="appMenu" aria-label="Save, open and discard" title="Save / Open / Discard">&#8801;</button>
+      <button id="fitViewBtn" class="btn btn--icon" type="button" aria-label="Fit the whole canvas on screen" title="Fit"><span data-icon="fit"></span></button>
+      <button id="undoBtn" class="btn btn--icon" type="button" aria-label="Undo" title="Undo" disabled><span data-icon="undo"></span></button>
+      <button id="redoBtn" class="btn btn--icon" type="button" aria-label="Redo" title="Redo" disabled><span data-icon="redo"></span></button>
+      <button id="debugBtn" class="btn btn--icon btn--debug" type="button" data-debug-toggle aria-pressed="false" aria-haspopup="dialog" aria-label="Debug overlay" title="Debug overlay"><span data-icon="bug"></span></button>
+      <button id="appMenuBtn" class="btn btn--icon" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="appMenu" aria-label="Save, open and discard" title="Save / Open / Discard"><span data-icon="menu"></span></button>
       <div id="logo" class="logo" aria-label="oOmni2D">
-        <span class="wordmark-oo" aria-hidden="true">
-          <span class="wordmark-oo__loop wordmark-oo__loop--small"></span>
-          <span class="wordmark-oo__loop wordmark-oo__loop--large"></span>
-        </span><span aria-hidden="true">mni2D</span>
+        <span class="wordmark-oo" aria-hidden="true"></span><span aria-hidden="true">mni2D</span>
       </div>
       <div id="saveClock" class="save-clock" role="status" aria-live="polite" title="When this project was last written to disk">Not saved yet</div>
       <div id="modeLabel" class="mode-label" hidden>
@@ -49,8 +46,9 @@
 
       <div id="appMenu" class="app-menu" hidden>
         <p class="app-menu__group">Navigation</p>
-        <button id="backToMenuBtn" class="app-menu__item" type="button">◀ Back to Menu</button>
+        <button id="backToMenuBtn" class="app-menu__item" type="button"><span class="px-icon--lead" data-icon="triangle-left"></span>Back to Menu</button>
         <button id="rigSettingsBtn" class="app-menu__item" type="button">Settings…</button>
+        <button id="menuChangelogBtn" class="app-menu__item" type="button" data-open-changelog>What's new…</button>
         <p class="app-menu__group">Project</p>
         <button id="saveProjectBtn" class="app-menu__item" type="button">Save project…</button>
         <button id="openProjectBtn" class="app-menu__item" type="button">Open project…</button>
@@ -60,11 +58,15 @@
         <p class="app-menu__group">CLayer — extract a layer by hand</p>
         <button id="clayerOpenBtn" class="app-menu__item" type="button">CLayer: New extraction…</button>
         <p class="app-menu__group">Saved state</p>
+        <button id="checkpointsOpenBtn" class="app-menu__item" type="button">Checkpoints…</button>
         <button id="stateSaveBtn" class="app-menu__item" type="button">Save state</button>
         <button id="stateReverseBtn" class="app-menu__item" type="button">Reverse</button>
         <button id="stateDiscardBtn" class="app-menu__item app-menu__item--danger" type="button">Discard everything</button>
       </div>
     </header>
+
+    <!-- The last three tools used, newest first (recentTools.js). -->
+    <div id="recentToolsBar" class="recent-tools" data-recent-tools hidden></div>
 
     <main id="canvasWrap" class="canvas-wrap">
       <canvas id="canvas" class="canvas"></canvas>
@@ -111,7 +113,7 @@
 
         <button id="scenePanelToggle" class="scene-panel__header" type="button" aria-expanded="true" aria-controls="scenePartsList">
           <span>Scene Parts (<span id="scenePartsCount">0</span>)</span>
-          <span id="scenePanelChevron" class="scene-panel__chevron" aria-hidden="true">&#9662;</span>
+          <span id="scenePanelChevron" class="scene-panel__chevron" data-icon="chevron-down" aria-hidden="true"></span>
         </button>
 
         <div class="list-tools">
@@ -156,22 +158,22 @@
             <select id="boneLayerSelect" class="select-input"></select>
           </label>
           <div class="bone-editor__row bone-editor__nudges">
-            <button id="nudgeLeftBtn" class="btn btn--nudge" type="button" aria-label="Move bone left">&#8592;</button>
-            <button id="nudgeUpBtn" class="btn btn--nudge" type="button" aria-label="Move bone up">&#8593;</button>
-            <button id="nudgeDownBtn" class="btn btn--nudge" type="button" aria-label="Move bone down">&#8595;</button>
-            <button id="nudgeRightBtn" class="btn btn--nudge" type="button" aria-label="Move bone right">&#8594;</button>
-            <button id="rotateCcwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone counter-clockwise">&#8634;</button>
-            <button id="rotateCwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone clockwise">&#8635;</button>
+            <button id="nudgeLeftBtn" class="btn btn--nudge" type="button" aria-label="Move bone left"><span data-icon="arrow-left"></span></button>
+            <button id="nudgeUpBtn" class="btn btn--nudge" type="button" aria-label="Move bone up"><span data-icon="arrow-up"></span></button>
+            <button id="nudgeDownBtn" class="btn btn--nudge" type="button" aria-label="Move bone down"><span data-icon="arrow-down"></span></button>
+            <button id="nudgeRightBtn" class="btn btn--nudge" type="button" aria-label="Move bone right"><span data-icon="arrow-right"></span></button>
+            <button id="rotateCcwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone counter-clockwise"><span data-icon="rotate-left"></span></button>
+            <button id="rotateCwBtn" class="btn btn--nudge" type="button" aria-label="Rotate bone clockwise"><span data-icon="rotate-right"></span></button>
           </div>
 
-          <label class="slider-field slider-field--wide">
+          <label id="rigDebugField" class="slider-field slider-field--wide" hidden>
             <span>Debug: rotate <b id="rigDebugValue">0°</b></span>
             <input id="rigDebugSlider" class="slider" type="range" min="-180" max="180" step="1" />
           </label>
 
           <div class="field-label-row">
             <div class="field-label joint-label">Follows parent</div>
-            <button class="info-btn" type="button" data-info="joint-type" aria-haspopup="true" aria-expanded="false" aria-label="What do Rigid, Physics and Pivot mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+            <button class="info-btn" type="button" data-info="joint-type" aria-haspopup="true" aria-expanded="false" aria-label="What do Rigid, Physics and Pivot mean?"><span data-icon="info"></span></button>
           </div>
           <div class="segmented joint-picker" role="group" aria-label="How this bone follows its parent">
             <button id="jointRigidBtn" class="segmented__btn" type="button" aria-pressed="true">Rigid</button>
@@ -202,7 +204,7 @@
 
         <button id="skeletonToggle" class="scene-panel__header" type="button" aria-expanded="true" aria-controls="boneList">
           <span>Skeleton (<span id="boneCount">0</span>)</span>
-          <span id="skeletonChevron" class="scene-panel__chevron" aria-hidden="true">&#9662;</span>
+          <span id="skeletonChevron" class="scene-panel__chevron" data-icon="chevron-down" aria-hidden="true"></span>
         </button>
 
         <div class="list-tools">
@@ -255,7 +257,7 @@
       </div>
 
       <div id="rigControls" class="control-row" hidden>
-        <button id="rigExitBtn" class="btn btn--icon" type="button" aria-label="Exit rig mode">&#10005;</button>
+        <button id="rigExitBtn" class="btn btn--icon" type="button" aria-label="Exit rig mode"><span data-icon="exit"></span></button>
         <button id="addBoneBtn" class="btn btn--flourish" type="button">Add Bone</button>
       </div>
 
@@ -276,7 +278,7 @@
 
         <div class="field-label-row">
           <div class="field-label">Weight tool</div>
-          <button class="info-btn" type="button" data-info="weight-tool" aria-haspopup="true" aria-expanded="false" aria-label="What do Paint and Erase do to weights?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="weight-tool" aria-haspopup="true" aria-expanded="false" aria-label="What do Paint and Erase do to weights?"><span data-icon="info"></span></button>
         </div>
         <div class="segmented" role="group" aria-label="Weight painting tool">
           <button id="weightPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
@@ -304,13 +306,13 @@
           <button id="showPartsTab" class="segmented__btn is-active" type="button">Parts</button>
           <button id="showBonesTab" class="segmented__btn" type="button">Bones</button>
         </div>
-        <button id="bindRiggedOnlyToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show: All layers</button>
+        <button id="bindRiggedOnlyToggle" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false">Show: All layers</button>
 
         <ul id="bindList" class="scene-parts"></ul>
       </div>
 
       <div id="bindControls" class="control-row" hidden>
-        <button id="bindExitBtn" class="btn btn--icon" type="button" aria-label="Exit bind mode">&#10005;</button>
+        <button id="bindExitBtn" class="btn btn--icon" type="button" aria-label="Exit bind mode"><span data-icon="exit"></span></button>
         <span id="bindStatus" class="bind-status"></span>
       </div>
 
@@ -322,18 +324,18 @@
         <button id="bindBtn" class="btn btn--lg btn--flourish" type="button">Bind</button>
         <button id="rigBtn" class="btn btn--lg btn--flourish" type="button">Rig</button>
         <button id="animateBtn" class="btn btn--lg btn--flourish-4" type="button">
-          <span class="flourish flourish--tl" aria-hidden="true">&#10047;</span>
-          <span class="flourish flourish--tr" aria-hidden="true">&#10047;</span>
+          <span class="flourish flourish--tl" aria-hidden="true"></span>
+          <span class="flourish flourish--tr" aria-hidden="true"></span>
           Animate
-          <span class="flourish flourish--bl" aria-hidden="true">&#10047;</span>
-          <span class="flourish flourish--br" aria-hidden="true">&#10047;</span>
+          <span class="flourish flourish--bl" aria-hidden="true"></span>
+          <span class="flourish flourish--br" aria-hidden="true"></span>
         </button>
       </div>
 
       <p id="animateHint" class="rig-hint" hidden></p>
 
       <div id="animateControls" class="control-row" hidden>
-        <button id="exitBtn" class="btn btn--icon" type="button" aria-label="Exit animate mode">&#10005;</button>
+        <button id="exitBtn" class="btn btn--icon" type="button" aria-label="Exit animate mode"><span data-icon="exit"></span></button>
         <button id="startBtn" class="btn btn--flourish" type="button" disabled>Start</button>
         <button id="stopBtn" class="btn btn--flourish" type="button" disabled>Stop</button>
       </div>
@@ -349,7 +351,7 @@
         <span class="pose-layer__label">Drag moves</span>
         <button id="poseLayerBtn" class="btn btn--sm pose-layer__btn" type="button"
           aria-haspopup="true" aria-expanded="false" aria-controls="poseLayerMenu">
-          <span id="poseLayerBtnText">Whole character</span> &#8942;
+          <span id="poseLayerBtnText">Whole character</span><span class="px-icon--trail" data-icon="kebab"></span>
         </button>
         <div id="poseLayerMenu" class="app-menu pose-layer__menu" hidden></div>
       </div>
@@ -360,7 +362,7 @@
       </div>
 
       <div id="movePad" class="move-pad" role="application" aria-label="Drag to move the character" hidden>
-        <span class="move-pad__glyph" aria-hidden="true">&#10021;</span>
+        <span class="move-pad__glyph" data-icon="move" aria-hidden="true"></span>
         <span class="move-pad__label">Drag here — keeps your finger off the character</span>
       </div>
     </footer>
@@ -376,7 +378,7 @@
 
         <div class="field-label-row">
           <div class="field-label">Frame rate</div>
-          <button class="info-btn" type="button" data-info="export-fps" aria-haspopup="true" aria-expanded="false" aria-label="What does frame rate change?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="export-fps" aria-haspopup="true" aria-expanded="false" aria-label="What does frame rate change?"><span data-icon="info"></span></button>
         </div>
         <label class="slider-field slider-field--wide">
           <span>Frames per second <b id="exportFpsValue">12</b></span>
@@ -425,7 +427,7 @@
 
         <div class="field-label-row">
           <div class="field-label">Pierce role</div>
-          <button class="info-btn" type="button" data-info="pierce-role" aria-haspopup="true" aria-expanded="false" aria-label="What do Piercer and Pierced mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pierce-role" aria-haspopup="true" aria-expanded="false" aria-label="What do Piercer and Pierced mean?"><span data-icon="info"></span></button>
         </div>
         <div class="segmented" role="group" aria-label="Pierce role">
           <button id="pierceRoleNoneBtn" class="segmented__btn" type="button" aria-pressed="true">None</button>
@@ -437,12 +439,12 @@
         <div id="piercePhysicsRow" hidden>
           <div class="field-label-row">
             <div class="field-label">Physics direction</div>
-            <button class="info-btn" type="button" data-info="pierce-physics" aria-haspopup="true" aria-expanded="false" aria-label="What does each physics direction mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+            <button class="info-btn" type="button" data-info="pierce-physics" aria-haspopup="true" aria-expanded="false" aria-label="What does each physics direction mean?"><span data-icon="info"></span></button>
           </div>
           <div class="segmented" role="group" aria-label="Which side's movement drives the contact">
-            <button id="piercePhysicsPiercerBtn" class="segmented__btn" type="button" aria-pressed="true">Piercer</button>
-            <button id="piercePhysicsPiercedBtn" class="segmented__btn" type="button" aria-pressed="false">Pierced</button>
-            <button id="piercePhysicsBothBtn" class="segmented__btn" type="button" aria-pressed="false">Both</button>
+            <button id="piercePhysicsPiercerBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="true">Piercer</button>
+            <button id="piercePhysicsPiercedBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">Pierced</button>
+            <button id="piercePhysicsBothBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">Both</button>
           </div>
           <p id="piercePhysicsHint" class="joint-hint"></p>
         </div>
@@ -450,7 +452,7 @@
         <div id="pierceSpreadRow" hidden>
           <div class="field-label-row">
             <div class="field-label">V spread — two halves that part</div>
-            <button class="info-btn" type="button" data-info="pierce-spread" aria-haspopup="true" aria-expanded="false" aria-label="How does the V spread work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+            <button class="info-btn" type="button" data-info="pierce-spread" aria-haspopup="true" aria-expanded="false" aria-label="How does the V spread work?"><span data-icon="info"></span></button>
           </div>
           <div class="segmented" role="group" aria-label="What the two halves are">
             <button id="pierceSpreadOffBtn" class="segmented__btn" type="button" aria-pressed="true">Off</button>
@@ -471,18 +473,18 @@
         <div id="pierceDepthSummary" hidden>
           <div class="field-label-row">
             <div class="field-label">Depths</div>
-            <button class="info-btn" type="button" data-info="pierce-depths" aria-haspopup="true" aria-expanded="false" aria-label="What do Enter and End points mean?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+            <button class="info-btn" type="button" data-info="pierce-depths" aria-haspopup="true" aria-expanded="false" aria-label="What do Enter and End points mean?"><span data-icon="info"></span></button>
           </div>
           <p id="pierceDepthReadout" class="modal__text"></p>
           <button id="pierceEditDepthsBtn" class="toggle-chip toggle-chip--wide" type="button">Edit Enter / Dent / End Points…</button>
         </div>
 
         <button id="piercePaintBtn" class="toggle-chip toggle-chip--wide" type="button">Paint regions…</button>
-        <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Show painted regions on the canvas</button>
+        <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" data-debug-toggle aria-pressed="false" aria-haspopup="dialog"><span class="px-icon--lead" data-icon="bug"></span>Debug overlay…</button>
         <p class="joint-hint">
-          A testing aid, right on the artwork: tips pink, pierceable cyan,
-          seams violet and walls white — plus the live contact reading and how
-          open the V is. Leave it off for normal work.
+          The region tint (tips pink, pierceable cyan, seams violet, walls
+          white) and the live contact readout live in the Debug overlay,
+          with every other testing view. Leave it off for normal work.
         </p>
         <button id="pierceRemoveBtn" class="btn btn--sm btn--danger px-pin-launch" type="button">Remove Pierce Role</button>
 
@@ -502,7 +504,7 @@
         </p>
         <div class="field-row">
           <div class="field-label">Dent Trigger Distance</div>
-          <button class="info-btn" type="button" data-info="pierce-dent-start" aria-haspopup="true" aria-expanded="false" aria-label="What is the Dent Trigger Distance?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pierce-dent-start" aria-haspopup="true" aria-expanded="false" aria-label="What is the Dent Trigger Distance?"><span data-icon="info"></span></button>
         </div>
         <p class="modal__text">
           A separate gap: where the V <b>starts to open</b>. Contact,
@@ -636,6 +638,23 @@
       </div>
     </div>
 
+    <!-- Named checkpoints of this session (checkpoints.js). -->
+    <div id="checkpointsModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="checkpointsTitle">
+        <h2 id="checkpointsTitle" class="modal__title">Checkpoints</h2>
+        <p class="modal__text">Snapshots of this session you can jump back to — everything, physics included. They last until the app closes; for keeps, use Save project or PSaver.</p>
+        <div class="control-row checkpoint-new">
+          <input id="checkpointNameInput" class="text-input text-input--inline" type="text" maxlength="40" placeholder="e.g. before physics tuning" aria-label="Checkpoint name" autocomplete="off" />
+          <button id="checkpointSaveBtn" class="btn btn--sm btn--flourish" type="button"><span class="px-icon--lead" data-icon="flag"></span>Save</button>
+        </div>
+        <ul id="checkpointList" class="checkpoint-list"></ul>
+        <p id="checkpointEmpty" class="list-tools__empty">No checkpoints yet — name one and tap Save.</p>
+        <div class="modal__actions">
+          <button id="checkpointCloseBtn" class="btn btn--cancel" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
     <div id="stateConfirmModal" class="modal-backdrop" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="stateConfirmTitle">
         <h2 id="stateConfirmTitle" class="modal__title">Save this state?</h2>
@@ -662,7 +681,7 @@
             <input id="canvasHeightInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
           </label>
         </div>
-        <button id="canvasMirrorToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">⇄ Mirror: Off</button>
+        <button id="canvasMirrorToggle" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false">Mirror: Off</button>
         <div class="modal__actions">
           <button id="applyCanvasSizeBtn" class="btn btn--flourish" type="button">Apply</button>
           <button id="cancelCanvasSizeBtn" class="btn" type="button">Cancel</button>
@@ -699,12 +718,12 @@
       <footer class="px-pin__controls">
         <div class="px-pin__row-label">
           <span>Paint tool</span>
-          <button class="info-btn" type="button" data-info="pxpin-tool" aria-haspopup="true" aria-expanded="false" aria-label="What does pinning a pixel do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pxpin-tool" aria-haspopup="true" aria-expanded="false" aria-label="What does pinning a pixel do?"><span data-icon="info"></span></button>
         </div>
         <div class="segmented">
-          <button id="pxpinToolPinBtn" class="segmented__btn" type="button" aria-pressed="true"><img class="pixel-icon" src="icons/icon-pin.png" alt="📌" aria-hidden="true"> Pin</button>
-          <button id="pxpinToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">⌫ Eraser Pin</button>
-          <button id="pxpinBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pxpinBrushMenu">1 × 1 ⌄</button>
+          <button id="pxpinToolPinBtn" class="segmented__btn" type="button" aria-pressed="true"><span class="px-icon--lead" data-icon="pin"></span>Pin</button>
+          <button id="pxpinToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false"><span class="px-icon--lead" data-icon="eraser"></span>Eraser Pin</button>
+          <button id="pxpinBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pxpinBrushMenu"><span>1 × 1</span><span class="px-icon--trail" data-icon="chevron-down"></span></button>
         </div>
         <div id="pxpinBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
         <div id="pxpinBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
@@ -730,7 +749,7 @@
       <footer class="px-pin__controls">
         <div class="px-pin__row-label">
           <span>Paint target</span>
-          <button class="info-btn" type="button" data-info="pierce-targets" aria-haspopup="true" aria-expanded="false" aria-label="What does each paint target do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pierce-targets" aria-haspopup="true" aria-expanded="false" aria-label="What does each paint target do?"><span data-icon="info"></span></button>
         </div>
         <div class="segmented" role="group" aria-label="Which region to paint">
           <button id="pierceTargetTipBtn" class="segmented__btn" type="button" aria-pressed="true">Tip</button>
@@ -743,7 +762,7 @@
         <div id="pierceToolRow" class="segmented" role="group" aria-label="Paint tools">
           <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
           <button id="pierceToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
-          <button id="pierceBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pierceBrushMenu">1 × 1 ⌄</button>
+          <button id="pierceBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pierceBrushMenu"><span>1 × 1</span><span class="px-icon--trail" data-icon="chevron-down"></span></button>
         </div>
         <div id="pierceBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
         <div id="pierceBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
@@ -770,7 +789,7 @@
       <footer class="px-pin__controls">
         <div class="px-pin__row-label">
           <span>Tool</span>
-          <button class="info-btn" type="button" data-info="clayer-tools" aria-haspopup="true" aria-expanded="false" aria-label="What do Boundary and Fill do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="clayer-tools" aria-haspopup="true" aria-expanded="false" aria-label="What do Boundary and Fill do?"><span data-icon="info"></span></button>
         </div>
         <div class="segmented" role="group" aria-label="CLayer tool">
           <button id="clayerToolBoundaryBtn" class="segmented__btn" type="button" aria-pressed="true">Boundary</button>
@@ -779,9 +798,10 @@
         <div id="clayerBoundaryRow" class="segmented" role="group" aria-label="Boundary brush">
           <button id="clayerDrawBtn" class="segmented__btn" type="button" aria-pressed="true">Draw</button>
           <button id="clayerEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
-          <button id="clayerBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="clayerBrushMenu">1 × 1 ⌄</button>
+          <button id="clayerBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="clayerBrushMenu"><span>1 × 1</span><span class="px-icon--trail" data-icon="chevron-down"></span></button>
         </div>
         <div id="clayerBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <div id="clayerBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
         <p id="clayerFillHint" class="joint-hint" hidden>Tap inside a fully closed boundary loop to fill it. A gap anywhere in the line will be reported rather than filled.</p>
         <div class="modal__actions">
           <button id="clayerClearBtn" class="btn btn--sm btn--danger" type="button">Clear boundary</button>
@@ -847,7 +867,7 @@
             <input id="pcreateHeightInput" class="text-input text-input--inline" type="number" min="8" max="3072" step="1" inputmode="numeric" />
           </label>
         </div>
-        <button id="pcreateMirrorToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">⇄ Mirror: Off</button>
+        <button id="pcreateMirrorToggle" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false">Mirror: Off</button>
         <div class="modal__actions">
           <button id="pcreateSizeCreateBtn" class="btn btn--flourish" type="button">Create</button>
           <button id="pcreateSizeCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
@@ -857,17 +877,17 @@
 
     <div id="pcreateWindow" class="px-pin" hidden>
       <header class="px-pin__bar">
-        <button id="pcreateBackToMenuBtn" class="btn btn--icon" type="button" aria-label="Back to Menu" title="Back to Menu">&#8962;</button>
+        <button id="pcreateBackToMenuBtn" class="btn btn--icon" type="button" aria-label="Back to Menu" title="Back to Menu"><span data-icon="home"></span></button>
         <span class="px-pin__title">PCreate — <b id="pcreateCanvasLabel"></b></span>
         <span id="pcreateStatus" class="px-pin__status"></span>
-        <button id="pcreateSettingsBtn" class="btn btn--icon" type="button" aria-label="Settings" title="Settings">&#9881;</button>
+        <button id="pcreateSettingsBtn" class="btn btn--icon" type="button" aria-label="Settings" title="Settings"><span data-icon="gear"></span></button>
         <button id="pcreateDoneBtn" class="btn btn--sm" type="button">Done</button>
       </header>
       <canvas id="pcreateCanvas" class="px-pin__canvas"></canvas>
       <footer class="px-pin__controls">
         <div class="px-pin__row-label">
           <span>Layers</span>
-          <button class="info-btn" type="button" data-info="pcreate-layers" aria-haspopup="true" aria-expanded="false" aria-label="How do PCreate layers work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-layers" aria-haspopup="true" aria-expanded="false" aria-label="How do PCreate layers work?"><span data-icon="info"></span></button>
         </div>
         <div class="pcreate-palette-row">
           <span id="pcreateLayerCount" class="pcreate-palette-name">1 layer</span>
@@ -877,14 +897,15 @@
 
         <div class="px-pin__row-label">
           <span>Tool</span>
-          <button class="info-btn" type="button" data-info="pcreate-tools" aria-haspopup="true" aria-expanded="false" aria-label="What does each tool do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-tools" aria-haspopup="true" aria-expanded="false" aria-label="What does each tool do?"><span data-icon="info"></span></button>
         </div>
         <div id="pcreateToolStrip" class="pcreate-tool-strip" role="group" aria-label="Drawing tool"></div>
 
         <div id="pcreateBrushRow" class="segmented" role="group" aria-label="Brush size" hidden>
-          <button id="pcreateBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pcreateBrushMenu">1 × 1 ⌄</button>
+          <button id="pcreateBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pcreateBrushMenu"><span>1 × 1</span><span class="px-icon--trail" data-icon="chevron-down"></span></button>
         </div>
         <div id="pcreateBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <div id="pcreateBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes" hidden></div>
 
         <div id="pcreateShapeRow" class="segmented" role="group" aria-label="Shape style" hidden>
           <button id="pcreateShapeFilledBtn" class="segmented__btn" type="button" aria-pressed="true">Filled</button>
@@ -904,14 +925,14 @@
         </div>
 
         <div class="pcreate-action-row">
-          <button id="pcreateUndoBtn" class="btn btn--sm" type="button" disabled>↶ Undo</button>
-          <button id="pcreateRedoBtn" class="btn btn--sm" type="button" disabled>↷ Redo</button>
+          <button id="pcreateUndoBtn" class="btn btn--sm" type="button" disabled><span class="px-icon--lead" data-icon="undo"></span>Undo</button>
+          <button id="pcreateRedoBtn" class="btn btn--sm" type="button" disabled><span class="px-icon--lead" data-icon="redo"></span>Redo</button>
           <button id="pcreateSaveWorkBtn" class="btn btn--sm" type="button">Save work</button>
         </div>
 
         <div class="px-pin__row-label">
           <span>Color</span>
-          <button class="info-btn" type="button" data-info="pcreate-color" aria-haspopup="true" aria-expanded="false" aria-label="How does the color picker work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-color" aria-haspopup="true" aria-expanded="false" aria-label="How does the color picker work?"><span data-icon="info"></span></button>
         </div>
         <div class="pcreate-color-row">
           <canvas id="pcreateWheelCanvas" class="pcreate-wheel" width="200" height="200"></canvas>
@@ -928,7 +949,7 @@
 
         <div class="px-pin__row-label">
           <span>Palette</span>
-          <button class="info-btn" type="button" data-info="pcreate-palette" aria-haspopup="true" aria-expanded="false" aria-label="How do saved palettes work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-palette" aria-haspopup="true" aria-expanded="false" aria-label="How do saved palettes work?"><span data-icon="info"></span></button>
         </div>
         <div class="pcreate-palette-row">
           <span id="pcreateLoadedPaletteName" class="pcreate-palette-name">No palette loaded</span>
@@ -939,7 +960,7 @@
 
         <div class="px-pin__row-label">
           <span>Auto Palette</span>
-          <button class="info-btn" type="button" data-info="pcreate-auto-palette" aria-haspopup="true" aria-expanded="false" aria-label="What is the Auto Palette?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-auto-palette" aria-haspopup="true" aria-expanded="false" aria-label="What is the Auto Palette?"><span data-icon="info"></span></button>
         </div>
         <div class="pcreate-palette-row">
           <span id="pcreateAutoCount" class="pcreate-palette-name">Nothing on the canvas yet</span>
@@ -949,7 +970,7 @@
 
         <div class="px-pin__row-label">
           <span>Shadow</span>
-          <button class="info-btn" type="button" data-info="pcreate-shadow" aria-haspopup="true" aria-expanded="false" aria-label="How does the shadow generator work?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-shadow" aria-haspopup="true" aria-expanded="false" aria-label="How does the shadow generator work?"><span data-icon="info"></span></button>
         </div>
         <div id="pcreateShadowDirs" class="pcreate-dir-grid" role="group" aria-label="Light direction"></div>
         <label class="slider-field">
@@ -962,18 +983,18 @@
           <button id="pcreateShadowAutoBtn" class="btn btn--sm" type="button">Auto</button>
           <button id="pcreateShadowApplyBtn" class="btn btn--flourish" type="button">Add Shadow</button>
         </div>
-        <button id="pcreateShadowToggleBtn" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false" disabled>Shadow: none yet</button>
+        <button id="pcreateShadowToggleBtn" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false" disabled>Shadow: none yet</button>
 
         <div class="px-pin__row-label">
           <span>Transform</span>
-          <button class="info-btn" type="button" data-info="pcreate-transform" aria-haspopup="true" aria-expanded="false" aria-label="What do Rotate and Flip apply to?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-transform" aria-haspopup="true" aria-expanded="false" aria-label="What do Rotate and Flip apply to?"><span data-icon="info"></span></button>
         </div>
         <div id="pcreateTransformTarget" class="pcreate-transform-target">Applies to the whole canvas</div>
         <div class="pcreate-action-row">
-          <button id="pcreateRotateCcwBtn" class="btn btn--sm" type="button">⟲ 90°</button>
-          <button id="pcreateRotateCwBtn" class="btn btn--sm" type="button">⟳ 90°</button>
-          <button id="pcreateFlipHBtn" class="btn btn--sm" type="button">↔ Flip Left/Right</button>
-          <button id="pcreateFlipVBtn" class="btn btn--sm" type="button">↕ Flip Up/Down</button>
+          <button id="pcreateRotateCcwBtn" class="btn btn--sm" type="button"><span class="px-icon--lead" data-icon="rotate-left-90"></span>90°</button>
+          <button id="pcreateRotateCwBtn" class="btn btn--sm" type="button"><span class="px-icon--lead" data-icon="rotate-right-90"></span>90°</button>
+          <button id="pcreateFlipHBtn" class="btn btn--sm" type="button"><span class="px-icon--lead" data-icon="flip-h"></span>Flip Left/Right</button>
+          <button id="pcreateFlipVBtn" class="btn btn--sm" type="button"><span class="px-icon--lead" data-icon="flip-v"></span>Flip Up/Down</button>
         </div>
         <label class="slider-field">
           <span>Free angle <b id="pcreateAngleLabel">0°</b></span>
@@ -985,9 +1006,9 @@
 
         <div class="px-pin__row-label">
           <span>Editing an imported image</span>
-          <button class="info-btn" type="button" data-info="pcreate-edit-mode" aria-haspopup="true" aria-expanded="false" aria-label="What does this setting do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+          <button class="info-btn" type="button" data-info="pcreate-edit-mode" aria-haspopup="true" aria-expanded="false" aria-label="What does this setting do?"><span data-icon="info"></span></button>
         </div>
-        <button id="pcreateEditModeToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false">Always edit a copy</button>
+        <button id="pcreateEditModeToggle" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false">Always edit a copy</button>
 
         <div class="modal__actions">
           <button id="pcreateSaveLayerBtn" class="btn btn--flourish" type="button">Import to Main…</button>
@@ -1070,6 +1091,7 @@
     <header class="px-pin__bar">
       <span class="px-pin__title">Mesh Trim — <b id="meshTrimTitle"></b></span>
       <span id="meshTrimStatus" class="px-pin__status"></span>
+      <button id="meshTrimDebugBtn" class="btn btn--sm btn--icon btn--debug" type="button" data-debug-toggle aria-pressed="false" aria-haspopup="dialog" aria-label="Debug overlay" title="Debug overlay"><span data-icon="bug"></span></button>
       <button id="meshTrimDoneBtn" class="btn btn--sm" type="button">Done</button>
     </header>
 
@@ -1078,7 +1100,7 @@
     <footer class="px-pin__controls">
       <div class="px-pin__row-label">
         <span>Tool</span>
-        <button class="info-btn" type="button" data-info="mesh-trim" aria-haspopup="true" aria-expanded="false" aria-label="What does Mesh Trim do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        <button class="info-btn" type="button" data-info="mesh-trim" aria-haspopup="true" aria-expanded="false" aria-label="What does Mesh Trim do?"><span data-icon="info"></span></button>
       </div>
       <div id="meshTrimToolRow" class="segmented" role="group" aria-label="Mesh Trim tool">
         <button id="meshTrimMoveBtn" class="segmented__btn" type="button" aria-pressed="true">Move</button>
@@ -1087,13 +1109,19 @@
         <button id="meshTrimBoundaryBtn" class="segmented__btn" type="button" aria-pressed="false">Trim Boundary</button>
       </div>
 
+      <div id="meshTrimBrushRow" class="segmented" role="group" aria-label="Boundary brush size" hidden>
+        <button id="meshTrimBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="meshTrimBrushMenu"><span>1 × 1</span><span class="px-icon--trail" data-icon="chevron-down"></span></button>
+      </div>
+      <div id="meshTrimBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+      <div id="meshTrimBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes" hidden></div>
+
       <div id="meshTrimActionRow" class="control-row">
         <button id="meshTrimRemoveVertexBtn" class="btn btn--sm btn--danger" type="button" hidden>Remove vertex</button>
         <button id="meshTrimClearBoundaryBtn" class="btn btn--sm btn--cancel" type="button" hidden>Clear boundary</button>
         <button id="meshTrimTrimBtn" class="btn btn--sm btn--flourish" type="button" hidden>Trim</button>
       </div>
 
-      <button id="meshTrimEditModeToggle" class="toggle-chip toggle-chip--wide" type="button" aria-pressed="false" hidden>Trim onto a copy</button>
+      <button id="meshTrimEditModeToggle" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false" hidden>Trim onto a copy</button>
 
       <p id="meshTrimHint" class="px-pin__hint"></p>
     </footer>
@@ -1117,7 +1145,7 @@
     <footer class="px-pin__controls pxlink__controls">
       <div class="px-pin__row-label">
         <span>Layers to join</span>
-        <button class="info-btn" type="button" data-info="pxlink" aria-haspopup="true" aria-expanded="false" aria-label="What does PxLink do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        <button class="info-btn" type="button" data-info="pxlink" aria-haspopup="true" aria-expanded="false" aria-label="What does PxLink do?"><span data-icon="info"></span></button>
       </div>
       <div id="pxlinkLayerChips" class="pxlink__chips" role="group" aria-label="Layers to join"></div>
 
@@ -1163,9 +1191,21 @@
        rendered from the schema in settings.js, so a new preference is one
        table entry rather than an entry plus markup plus a listener. -->
 
+  <!-- ==================== What's new ====================
+       The app's version and every release it has had (changelog.js). Opens
+       over whatever screen asked for it; closing uncovers that screen. -->
+  <section id="changelogScreen" class="settings-screen changelog-screen" hidden aria-label="What's new">
+    <header class="px-pin__bar">
+      <button id="changelogBackBtn" class="btn btn--icon" type="button" aria-label="Back" title="Back"><span data-icon="back"></span></button>
+      <span class="px-pin__title">What's new</span>
+      <span id="changelogVersion" class="px-pin__status"></span>
+    </header>
+    <div id="changelogBody" class="settings-body changelog-body"></div>
+  </section>
+
   <section id="settingsScreen" class="settings-screen" hidden aria-label="Settings">
     <header class="px-pin__bar">
-      <button id="settingsBackBtn" class="btn btn--icon" type="button" aria-label="Back" title="Back">&#9664;</button>
+      <button id="settingsBackBtn" class="btn btn--icon" type="button" aria-label="Back" title="Back"><span data-icon="back"></span></button>
       <span class="px-pin__title">Settings</span>
       <span id="settingsStatus" class="px-pin__status"></span>
     </header>
@@ -1209,6 +1249,21 @@
   </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
+
+
+  <!-- Debug overlay (debugOverlay.js): the master switch and the views that apply here. -->
+  <div id="debugModal" class="modal-backdrop debug-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="debugTitle">
+      <h2 id="debugTitle" class="modal__title"><span class="px-icon--lead" data-icon="bug"></span>Debug overlay</h2>
+      <p class="modal__text">Testing views, drawn right on the work. Showing what applies in <b id="debugWhere">—</b>.</p>
+      <button id="debugMasterBtn" class="toggle-chip toggle-chip--wide toggle-chip--switch debug-master" type="button" aria-pressed="false">Debug overlay: Off</button>
+      <ul id="debugViewList" class="debug-view-list"></ul>
+      <p id="debugViewEmpty" class="list-tools__empty" hidden>No debug views apply here.</p>
+      <div class="modal__actions">
+        <button id="debugCloseBtn" class="btn btn--cancel" type="button">Close</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="js/app.js"></script>
 </body>

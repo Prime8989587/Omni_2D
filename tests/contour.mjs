@@ -4,7 +4,7 @@
 // Hand-written alpha grids with known answers, so "does this find the right
 // edge" is settled arithmetically rather than by screenshotting a rig.
 
-import { traceAlphaEdges, traceAlphaEdgesInBounds } from '../www/js/contour.js';
+import { traceAlphaEdges, traceAlphaEdgesInBounds, outlineRing } from '../www/js/contour.js';
 
 const report = [];
 const say = (ok, name, detail = '') => report.push({ ok, name, detail });
@@ -198,6 +198,87 @@ const at = (g, x, y) => y * g.width + x;
   ]);
   eq(traceAlphaEdges(plane, 3, 3, { stride: 1 }).length, 1,
     'a stride-1 alpha plane traces the same as an RGBA buffer');
+}
+
+
+// ---------------------------------------------------------------------------
+// outlineRing: the pixels just outside a shape -- what Contour mode paints.
+
+const picture = (g, set) => {
+  const rows = [];
+  for (let y = 0; y < g.height; y++) {
+    let row = '';
+    for (let x = 0; x < g.width; x++) row += set.has(at(g, x, y)) ? 'o' : (g.data[at(g, x, y) * 4 + 3] ? '#' : '.');
+    rows.push(row);
+  }
+  return rows;
+};
+
+{
+  const g = grid([
+    '.......',
+    '.......',
+    '...#...',
+    '..###..',
+    '...#...',
+    '.......',
+    '.......',
+  ]);
+  const one = picture(g, new Set(outlineRing(g.data, g.width, g.height, { thickness: 1 })));
+  eq(one.join('/'), [
+    '.......',
+    '..ooo..',
+    '.oo#oo.',
+    '.o###o.',
+    '.oo#oo.',
+    '..ooo..',
+    '.......',
+  ].join('/'), 'a 1 px outline wraps the shape from outside, corners closed', one.join(' / '));
+  const ring = outlineRing(g.data, g.width, g.height, { thickness: 1 });
+  say(ring.every((i) => g.data[i * 4 + 3] === 0), 'the outline never covers a pixel of the artwork');
+
+  const two = picture(g, new Set(outlineRing(g.data, g.width, g.height, { thickness: 2 })));
+  eq(two.join('/'), [
+    '.ooooo.',
+    'ooooooo',
+    'ooo#ooo',
+    'oo###oo',
+    'ooo#ooo',
+    'ooooooo',
+    '.ooooo.',
+  ].join('/'), 'thickness 2 grows the ring a second pixel outward, never inward', two.join(' / '));
+}
+
+{
+  // A hole inside a shape is outlined too: its transparent pixels border it.
+  const g = grid([
+    '#####',
+    '#...#',
+    '#...#',
+    '#...#',
+    '#####',
+  ]);
+  const ring = new Set(outlineRing(g.data, g.width, g.height, { thickness: 1 }));
+  eq(ring.size, 8, 'an enclosed hole gets a ring on its inside', `got ${ring.size}`);
+  say(!ring.has(at(g, 2, 2)), 'the middle of a 3x3 hole is more than one pixel from the shape');
+}
+
+{
+  // Bounds restrict the work to one shape without changing its answer.
+  const g = grid([
+    '#.........',
+    '..........',
+    '.....##...',
+    '.....##...',
+    '..........',
+  ]);
+  const all = new Set(outlineRing(g.data, g.width, g.height, { thickness: 1 }));
+  const bounded = outlineRing(g.data, g.width, g.height, { thickness: 1, bounds: { x0: 5, y0: 2, x1: 7, y1: 4 } });
+  say(bounded.length === 12 && bounded.every((i) => all.has(i)),
+    'bounded to one shape, the ring is that shape\'s ring and nothing of the other', `got ${bounded.length}`);
+  eq(outlineRing(g.data, g.width, g.height, { thickness: 1, bounds: { x0: 0, y0: 0, x1: 1, y1: 1 } }).length, 3,
+    'a shape in the corner is clipped at the buffer edge, not wrapped');
+  eq(outlineRing(null, 4, 4).length, 0, 'no buffer, no ring');
 }
 
 // ---------------------------------------------------------------------------

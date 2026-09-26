@@ -6735,6 +6735,200 @@ The PxLink browser suite (34 checks, now including a file saved under the
 old name), the V suite (34), the twelve browser regression suites and
 `npm test` all pass.
 
+## 2.5.0: recent tools, checkpoints, a versioned changelog, brush presets everywhere, one Debug overlay, Contour, and pixel art all the way down
+
+Seven UI/UX items, no new core mechanics.
+
+### The version number, and where it starts
+
+The app had no version before this. Its history was replayed commit by
+commit under one rule (`www/js/changelog.js`, `nextVersion()`):
+
+- **Minor** (1.0.0 → 1.1.0): something new — a tool, a window, a screen, a
+  mode, a file format, or an app-wide redesign.
+- **Patch** (1.0.0 → 1.0.1): a fix or refinement of something that exists.
+- CI-only and docs-only commits are not releases.
+- Digits count like an odometer: 1.0.9 → 1.1.0, 1.9.0 → 2.0.0.
+
+**1.0.0 is Part 6 (9 September)**, the first complete app (import, rig,
+bind, physics, Free Move). Replaying every shipped change after it lands on
+**2.4.3** for the PxLink rename, so this batch, which adds screens and an
+app-wide redesign, is **2.5.0** (Android `versionCode` 250 =
+major·100 + minor·10 + patch). The in-app **What's new** screen (Home, the ☰
+menu and Settings → About) lists all 62 releases, newest first.
+
+**Logging a release:** add an entry at the top of `RELEASES`, one step on
+from the one below, and bump `package.json` and `android/app/build.gradle`.
+`tests/changelog.mjs` replays the whole list through `nextVersion()` and
+fails if any version, date order, `package.json`, `versionName` or
+`versionCode` disagrees, so the log cannot fall behind the app.
+
+### 1. Recent tools (`recentTools.js`)
+
+- **The row.** A row under the top bar, and on Home, shows the last three
+  tools actually *opened*, newest first.
+- **What counts as opened.** A cancelled Px Pin picker, or a PxLink refused
+  for want of a second layer, does not count.
+- **Reopening.** Each tool records what it needs to reopen exactly as it
+  was: Px Pin its two layers, the Pierce painter its pair, Mesh Trim its
+  layer.
+- **Persistence.** The list is kept in local storage.
+- **Launchers.** Tools register launchers from `ui.js`, so the module
+  depends on none of them.
+
+### 2. Checkpoints (`checkpoints.js`)
+
+- **What they are.** ☰ → Checkpoints… saves named, in-session snapshots of
+  the whole project (the same serialisation undo and autosave use).
+- **How they differ.** PSaver writes files and Save state is one slot kept
+  across restarts. Checkpoints are many, named and instant, and they end
+  with the session.
+- **Revert.** It runs through undo, so a wrong revert is one Undo away.
+  Reverting never alters the checkpoint.
+- **Delete.** It takes a second tap to confirm.
+
+### 4. Brush presets in every brush tool
+
+The same saved-sizes row (`brushpresets.js`) now covers all six brush tools:
+
+- Px Pin
+- weight painting
+- Pierce region painting
+- Mesh Trim's boundary brush, which gained a size menu of stamped squares
+  matching CLayer's footprint
+- CLayer's boundary brush
+- PCreate, where brush and eraser keep separate favourites and shade uses
+  the brush's
+
+Each list is its own setting (`kind: 'presets'`), so it persists.
+
+### 5. One Debug overlay (`debugOverlay.js`)
+
+- **One switch.** The bug button (top bar, and Mesh Trim's header) opens
+  one panel with a master switch, plus a switch per view. Both are
+  remembered.
+- **Views.** The panel offers only the views that apply where you are:
+  - **Pierce regions:** the region tint that used to be the Pierce popup's
+    own toggle.
+  - **Pierce depth readout.**
+  - **Mesh wireframe:** in Bind, the selected layer; elsewhere, every
+    layer's actual draw geometry; in Mesh Trim, its triangle edges, while
+    the vertex handles always show.
+  - **Bone rotate slider:** the raw "Debug: rotate" sliders in Rig and Bind.
+- **Where each view is offered.** Free Move drops the slider; Mesh Trim
+  offers only its wireframe.
+- **Legacy.** A user who had the old pierce overlay on starts with the
+  master on.
+
+### 6. Contour (Settings → Rig)
+
+- **Modes.**
+  - **Off.**
+  - **Per-layer outline:** the currently selected layer only, re-rasterised
+    on its own so it outlines its own shape even where others cover it.
+  - **Full silhouette:** the composed character.
+- **What is drawn.** The outline is the ring of pixels just outside the
+  artwork, `thickness` scene pixels deep (`contour.js` `outlineRing()`,
+  headless-tested). It never paints over the artist's edge pixels.
+- **How it is drawn.** It is painted into its own bitmap on the scene's
+  pixel grid and composited exactly like the artwork. It stays out of
+  exported GIFs.
+- **Colour.** Twelve pixel swatches (pink accent first) plus a hex field
+  replace the native colour input.
+
+### 7. Pixel art, no exceptions
+
+**Density.** Every piece of UI art is one density: 2 CSS px per art pixel.
+
+**Icons.** All 70 are pixel art, drawn from ASCII grids into crisp-edged
+SVG paths (`pixelIcons.js`):
+- arrow-left/right/up/down, arrow-nw/ne/sw/se
+- chevron-up/down/left/right, triangle-up/down/left/right
+- close, star, star-outline, diamond, warning, branch, info, check, dot,
+  plus, minus
+- undo, redo, rotate-left, rotate-right, rotate-left-90, rotate-right-90
+- fit, menu, kebab, exit, back, home, gear
+- eye, eye-off, lock, unlock, trash, pencil, eraser, move
+- flip-h, flip-v, mirror
+- pin, link, pierce, mesh, scissors, brush, bug, flag, scroll, clock,
+  bucket, shade, circle, triangle, square, select, picker, blend, sliders
+
+**Sprites.**
+- the sakura flower (8×8 art = 16×16 px, four exact quarter-turn frames,
+  `steps(4)`)
+- the oO wordmark
+- the slider handle (and disabled)
+- switch off/on
+- checkbox off/on
+- two petal sprites, each with its eight grid symmetries
+
+The old PNG icons are gone.
+
+**Controls.**
+- **Sliders:** pixel track with block fill and a pixel handle.
+- **Toggles:** pixel switches for Mirror, grid snap, destructive vs copy,
+  rigged-only, shadow, the Debug overlay and every Settings on/off.
+  Physics Direction, a three-way choice, gets pixel radio pips.
+- **Dropdowns:** pixel menus over the hidden native `select`, which stays
+  the source of truth.
+- **Colour wheel:** 25×25 visible 8 px blocks, each one flat colour, and a
+  tap picks exactly the block's colour. The marker is a hard two-colour
+  frame.
+
+**Shadows and motion.**
+- **Shadows and glows:** stepped `drop-shadow`s with zero blur.
+- **Button press:** a 2 px drop (a scale transform blurred it).
+- **Screen transitions:** opacity in `steps(4)`.
+
+**Canvases.** Every overlay on every canvas is drawn by `pixelDraw.js` as
+whole cells in device space: Bresenham lines, midpoint rings, discs,
+polygons, and a 3×5 bitmap font for handle labels. That covers:
+- the main canvas: grid edge, snap cell, part outline, bone wedges, joints,
+  dashed parent links, placement ring, wireframes, weight dots, PxLink
+  rings
+- the PxLink, Pierce, Px Pin, CLayer and PCreate windows
+- the Pierce depth ruler, which also got a whole-device-pixel backing store
+  (it had been browser-resampled from a fixed 480×300)
+
+**Petals.** They move on the art grid and tumble through exact
+rotations/mirrors, never `ctx.rotate`.
+
+**Turned camera.** A two-finger turned view used to resample the artwork
+with blending. It now composes the picture at scene resolution and turns it
+on the GPU with NEAREST sampling and anti-aliasing off (`pixelRotate.js`),
+so every screen pixel is one of the artwork's own pixels. This applies in
+the main canvas and in PCreate.
+
+**Fractional pixel ratios.** On a phone at DPR 2.625, the viewport is scaled
+so CSS px land on whole device pixels (`pixelScale.js`; Android enables
+`setUseWideViewPort`).
+
+**Verified (scratchpad scripts, real app, phone viewport, real taps):**
+- **Items 1–3:** 17/17 checks.
+- **Items 4–6:** 40/40 checks, covering all six preset rows, a real 6×6
+  Mesh Trim stamp, debug views per context and persistence, and contour
+  per-layer/silhouette/colour/thickness/off, with exact colour pixels on
+  the canvas.
+- **Smooth-element sweep:** 24 screens, 2,205 element checks, zero rounded
+  corners, blurred shadows, soft gradients, scaled or rotated transforms,
+  native selects or colour pickers, raster images, non-pixel fonts or
+  non-crisp SVGs.
+- **Canvas calls:** zero calls to `arc`, `stroke`, `strokeRect`,
+  `fillText`, `rotate`, curves or `shadowBlur` over the whole walk.
+- **Positive control:** the same sweep on 2.4.3 flags the old rotating
+  flower glyphs, system-font buttons, round loops and native selects, and
+  18 anti-aliased canvas calls just entering Rig.
+- **Turned view:** 91 → 23 distinct colours, with no blend fringe.
+- **Regressions:** all unit tests, the 12 browser suites, PxLink 34/34 and
+  the V 34/34.
+
+**Honest limits.**
+- **Text:** the OS still rasterises text with its own anti-aliasing, which
+  a web page cannot turn off. The two pixel fonts keep that to the edges of
+  their square pixels.
+- **No WebGL:** on a device without WebGL, the turned view falls back to
+  the old blended rotation.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

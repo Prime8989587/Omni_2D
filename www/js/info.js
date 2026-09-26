@@ -251,7 +251,7 @@ const TOPICS = {
       'Every tool draws on the SELECTED layer only. Tap a layer’s name to ' +
       'select it; the list runs top of the stack first, matching what you ' +
       'see on the canvas.\n\n' +
-      'The "⋮" on a row opens Rename, Move up/down, Duplicate, Delete and ' +
+      'The three-dot button on a row opens Rename, Move up/down, Duplicate, Delete and ' +
       'that layer’s Opacity. Duplicate makes a genuinely independent copy ' +
       '— painting on one does not touch the other.\n\n' +
       'Rotate and Flip with nothing selected apply to the WHOLE canvas, ' +

@@ -54,10 +54,10 @@
   --color-disabled: #4d4d4d;
   --color-disabled-bg: #0d0d0d;
 
-  /* Neither font ships the arrows/dingbats used as compact icon glyphs
-     throughout the app (fit ⤢, undo/redo ↺↻, chevrons, nudge arrows...),
-     so those stay on the ORIGINAL system stack rather than silently
-     falling back to whatever the browser picks per missing glyph. */
+  /* Neither pixel font has the arrows and dingbats the app once used as
+     icons (⤢ ↺ ↻ ≡ ⋮ ▾ ★ ✕...). Those are all pixel-art icons now
+     (pixelIcons.js), so no text in the app needs this stack; it stays
+     only as the last resort behind the two pixel faces. */
   --font-fallback: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-header: 'Press Start 2P', var(--font-fallback);
   --font-body: 'VT323', var(--font-fallback);
@@ -103,6 +103,19 @@
      resolution-independent (calc(100% - Npx) works at any box size), so
      one definition covers a 38px icon button and a 512px canvas wrapper
      alike. */
+  /* PIXEL SHADOWS -- NO BLUR ANYWHERE.
+     Depth is a hard, solid offset in two steps (a dark pixel band, then a
+     fainter one), the way pixel art has always drawn a drop shadow; a glow
+     is a hard 2px ring. A blur radius would be the one thing on screen
+     with no pixel edge at all. drop-shadow() rather than box-shadow
+     because every box here is clip-path'd to its stepped corners, and
+     only a filter follows that clipped shape. */
+  --pixel-shadow: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.9)) drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.45));
+  --pixel-glow-accent: drop-shadow(2px 0 0 var(--color-accent)) drop-shadow(-2px 0 0 var(--color-accent))
+    drop-shadow(0 2px 0 var(--color-accent)) drop-shadow(0 -2px 0 var(--color-accent));
+  --pixel-glow-danger: drop-shadow(2px 0 0 var(--color-danger)) drop-shadow(-2px 0 0 var(--color-danger))
+    drop-shadow(0 2px 0 var(--color-danger)) drop-shadow(0 -2px 0 var(--color-danger));
+
   --pixel-clip: polygon(
     4px 0, calc(100% - 4px) 0, calc(100% - 4px) 2px, calc(100% - 2px) 2px,
     calc(100% - 2px) 4px, 100% 4px, 100% calc(100% - 4px),
@@ -148,7 +161,7 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
-button, input, select {
+button, input, select, textarea {
   font-family: inherit;
   font-synthesis: none;
   -webkit-font-smoothing: none;
@@ -199,7 +212,6 @@ button, input, select {
 .mode-label__dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
   background: var(--color-accent);
 }
 
@@ -244,7 +256,7 @@ button, input, select {
   clip-path: var(--pixel-clip-lg);
   overflow: hidden;
   background: var(--color-bg);
-  transition: border-color 0.15s ease, filter 0.15s ease;
+  transition: border-color 0.15s steps(2);
 }
 
 .canvas-wrap.is-animate-mode,
@@ -262,23 +274,21 @@ button, input, select {
   margin: 0;
   padding: 4px 6px;
   max-width: calc(100% - 12px);
-  font-family: var(--font-mono, monospace);
-  font-size: 10px;
-  line-height: 1.4;
+  font-family: var(--font-body);
+  font-size: var(--text-label);
+  line-height: 1;
   white-space: pre;
   color: #b9f6ff;
   background: rgba(0, 0, 0, 0.72);
-  border: 1px solid rgba(46, 230, 255, 0.5);
+  border: 2px solid rgba(46, 230, 255, 0.5);
   pointer-events: none;
   z-index: 3;
 }
 
 .canvas-wrap.is-recording {
   border-color: var(--color-danger);
-  /* box-shadow would be cut off at the clip-path boundary -- a glow drawn
-     around the box's rendered (post-clip) shape instead of its geometry
-     survives the pixel-stepped corners. */
-  filter: drop-shadow(0 0 5px rgba(244, 67, 54, 0.55));
+  /* A hard 2px red ring round the clipped shape, not a blurred glow. */
+  filter: var(--pixel-glow-danger);
 }
 
 .canvas {
@@ -302,10 +312,9 @@ button, input, select {
 
 .canvas-empty-hint {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  margin: 0;
+  inset: 0;
+  height: fit-content;
+  margin: auto;
   width: 80%;
   text-align: center;
   color: rgba(255, 255, 255, 0.35);
@@ -333,37 +342,33 @@ button, input, select {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background-color 0.07s ease, color 0.07s ease, opacity 0.07s ease,
-    transform 0.07s ease;
+  transition: background-color 0.07s steps(1), color 0.07s steps(1), opacity 0.07s steps(1);
 }
 
-/* PRESS: shrink a little, darken a lot, and do both fast.
-   The scale is small on purpose -- 96% is enough to read as "that moved
-   under my finger" without the label visibly jumping -- and the darker
-   pink is a genuinely darker shade of the SAME accent rather than a grey,
-   so a pressed button still looks like part of this app. 70ms out, which
-   is quick enough to feel like a response to the touch rather than an
-   animation playing afterwards. */
+/* PRESS: sink one art pixel and darken, the way a pixel-art button
+   presses. It used to shrink to 96% -- but a scale transform resamples
+   the whole button, text and stepped corners included, through a smooth
+   filter for as long as the finger is down (measured: 4 blended colours
+   along the edges even at a whole-number pixel ratio). A 2px drop moves
+   it by whole pixels and resamples nothing. The darker pink is a
+   genuinely darker shade of the SAME accent rather than a grey, so a
+   pressed button still looks like part of this app. */
 .btn:active:not(:disabled) {
   background: var(--color-accent-dark);
   color: #000000;
-  transform: scale(0.96);
+  top: 2px;
 }
 
 .btn--lg {
   min-height: 56px;
 }
 
-/* Icon-only buttons hold a single arrow/symbol glyph (fit, undo, redo,
-   exit, the app menu's ≡...) that neither pixel font includes, so they
-   keep the original system glyphs rather than silently falling back one
-   character at a time. */
+/* Icon-only buttons (fit, undo, redo, exit, the app menu...) hold one
+   pixel-art icon, drawn in the button's own colour. */
 .btn--icon {
   padding: 0;
   width: 48px;
   height: 48px;
-  font-family: var(--font-fallback);
-  font-size: 20px;
   flex: 0 0 auto;
 }
 
@@ -373,14 +378,11 @@ button, input, select {
   flex: 0 0 auto;
 }
 
-/* Nudge buttons are also pure glyphs (arrows, rotate icons) -- same
-   reasoning as .btn--icon. */
+/* Nudge buttons hold one pixel icon each (arrows, rotate). */
 .btn--nudge {
   flex: 1;
   min-width: 0;
   padding: 12px 4px;
-  font-family: var(--font-fallback);
-  font-size: 18px;
 }
 
 .btn--cancel,
@@ -408,51 +410,42 @@ button, input, select {
 }
 
 /* ---------- Decorative flourishes ----------
-   Small pink flower marks on primary/CTA buttons (Import, Start, Stop,
-   Animate, Save as GIF/MP4), matching the app's visual identity. Utility
-   icon buttons (Exit) and destructive actions (Cancel) intentionally have
-   none, same as in the reference design. Purely decorative -- hidden from
-   screen readers and never intercepts taps.
+   Small pink flowers on primary/CTA buttons (Import, Start, Stop, Animate,
+   Save as GIF/MP4), matching the app's visual identity. Utility icon
+   buttons (Exit) and destructive actions (Cancel) intentionally have none.
+   Purely decorative -- hidden from screen readers and never intercepts
+   taps.
 
-   They rotate continuously and slowly: a small bit of ambient life on
-   every screen that carries one, dialogs included, rather than a static
-   mark. The character itself (U+273F) is not in either pixel font, so
-   the flourish keeps the original system glyph on purpose -- it is
-   hand-drawn pixel-art-styled already and was never part of the running
-   text this task restyles. */
+   Each is the pixel-art sakura from pixelIcons.js (FLOWER_FRAMES): an 8x8
+   drawing at the app's 2px art pixel, so exactly 16x16 -- the same grid as
+   the oO mark and the Press Start 2P headers. It still turns, but the way
+   pixel art turns: in exact quarter turns, one tick a second, each frame a
+   lossless rotation of the drawing. It used to be the system font's ✿
+   glyph under a smooth CSS rotate, which resampled it through a blur on
+   every frame of the spin. The four frames sit side by side in one
+   sprite; stepping background-position shows one at a time, and nothing
+   is ever drawn in between. */
 
 .btn--flourish::before,
 .btn--flourish::after {
-  content: '\273F';
+  content: '';
 }
 
-/* FIXED 16x16px, everywhere a flower appears -- the same crisp,
-   pixel-grid-multiple size the oO wordmark mark and the app's Press
-   Start 2P headers use (see --text-header), rather than a font-size left
-   to whatever happened to look right in one spot. An explicit box (not
-   just a font-size) is what makes the size actually fixed: font metrics
-   vary by character and by browser, a bare font-size does not guarantee a
-   16px result, an explicit width/height/line-height box does. */
 .btn--flourish::before,
 .btn--flourish::after,
 .flourish {
   position: absolute;
   width: 16px;
   height: 16px;
-  font-family: var(--font-fallback);
-  font-size: 16px;
-  line-height: 16px;
-  text-align: center;
-  color: var(--color-accent);
+  background: var(--sprite-flower) 0 0 / 64px 16px no-repeat;
   pointer-events: none;
   user-select: none;
-  transform-origin: center;
-  animation: flower-spin 10s linear infinite;
+  animation: flower-tick 4s steps(4) infinite;
 }
 
-@keyframes flower-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@keyframes flower-tick {
+  from { background-position: 0 0; }
+  to { background-position: -64px 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -503,19 +496,14 @@ button, input, select {
 .px-pin__controls::after,
 .pcreate-color-row::after,
 .modal::before {
-  content: '\273F';
+  content: '';
   position: absolute;
   width: 16px;
   height: 16px;
-  font-family: var(--font-fallback);
-  font-size: 16px;
-  line-height: 16px;
-  text-align: center;
-  color: var(--color-accent);
+  background: var(--sprite-flower) 0 0 / 64px 16px no-repeat;
   pointer-events: none;
   user-select: none;
-  transform-origin: center;
-  animation: flower-spin 10s linear infinite;
+  animation: flower-tick 4s steps(4) infinite;
 }
 
 .scene-panel::after,
@@ -629,8 +617,7 @@ button, input, select {
 }
 
 .scene-panel__chevron {
-  font-family: var(--font-fallback);
-  font-size: 14px;
+  display: inline-flex;
 }
 
 .scene-parts {
@@ -1041,7 +1028,7 @@ button, input, select {
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip-lg);
   background: rgba(255, 46, 147, 0.08);
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+  filter: var(--pixel-shadow);
 }
 
 .px-pin__brush {
@@ -1093,7 +1080,7 @@ button, input, select {
      getting crisper. */
   width: 200px;
   height: 200px;
-  border-radius: 50%;
+  image-rendering: pixelated;
   touch-action: none;
   flex: 0 0 auto;
   /* Deliberately NOT image-rendering: pixelated. The wheel is a smooth
@@ -1181,11 +1168,12 @@ button, input, select {
   height: 16px;
   line-height: 14px;
   padding: 0;
-  border: 1px solid var(--color-accent);
-  border-radius: 50%;
+  border: 2px solid var(--color-accent);
   background: var(--color-surface);
   color: var(--color-accent);
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 
@@ -1353,6 +1341,9 @@ button, input, select {
 .pierce-draw__canvas {
   display: block;
   width: 100%;
+  /* Fixed shape, so sizing the backing store to the box (at whole device
+     pixels) can never feed back into the box's own height. */
+  aspect-ratio: 8 / 5;
   height: auto;
   background: var(--color-bg);
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -1455,7 +1446,7 @@ button, input, select {
   font-size: var(--text-body);
   line-height: 1.4;
   text-align: center;
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+  filter: var(--pixel-shadow);
 }
 
 /* ---------- Export modal ---------- */
@@ -1526,11 +1517,9 @@ button, input, select {
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip-lg);
   padding: 24px;
-  /* A faint lift off the dimmed backdrop -- subtle, not a heavy drop
-     shadow, and computed from the box's actual (pixel-clipped) shape
-     rather than its rectangular geometry so the glow follows the
-     stepped outline instead of ignoring it. */
-  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.55));
+  /* Lifted off the dimmed backdrop by a hard stepped shadow that follows
+     the box's clipped, stepped outline. */
+  filter: var(--pixel-shadow);
 }
 
 .field-label {
@@ -1560,10 +1549,8 @@ button, input, select {
 
 .text-input:focus {
   outline: none;
-  /* box-shadow's ring would be cut off outside the clip-path boundary;
-     a drop-shadow glow is computed from the rendered shape instead and
-     survives it. */
-  filter: drop-shadow(0 0 4px rgba(255, 46, 147, 0.7));
+  /* A hard 2px ring round the clipped shape, not a blurred glow. */
+  filter: var(--pixel-glow-accent);
 }
 
 .modal__actions {
@@ -1606,10 +1593,11 @@ button, input, select {
   justify-content: center;
 }
 
-/* Pure glyph buttons (✕ close, ⋮ more) -- same reasoning as .btn--icon. */
+/* Icon buttons on a row (close, more): one pixel icon each. */
 .row-btn {
-  font-family: var(--font-fallback);
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .row-btn[aria-pressed="true"] {
@@ -1650,7 +1638,7 @@ button, input, select {
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip-lg);
   background: rgba(255, 46, 147, 0.08);
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+  filter: var(--pixel-shadow);
 }
 
 .row-aside__btn {
@@ -1679,20 +1667,6 @@ button, input, select {
 
 .row-aside__btn:disabled {
   opacity: 0.35;
-}
-
-/* The small pixel-art icons that replace the layer-row emoji (rename,
-   show/hide, lock/unlock) -- same nearest-neighbour rule as the imported
-   character art, just at icon scale. */
-.pixel-icon {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  margin-right: 2px;
-  vertical-align: middle;
-  image-rendering: pixelated;
-  image-rendering: -moz-crisp-edges;
-  image-rendering: crisp-edges;
 }
 
 /* A small persistent on/off button -- the canvas-size Mirror toggle and
@@ -2058,9 +2032,7 @@ button, input, select {
 }
 
 .move-pad__glyph {
-  font-family: var(--font-fallback);
-  font-size: 34px;
-  line-height: 1;
+  display: inline-flex;
 }
 
 .move-pad__label {
@@ -2088,7 +2060,7 @@ button, input, select {
   clip-path: var(--pixel-clip-lg);
   background: var(--color-surface);
   overflow: hidden;
-  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.55));
+  filter: var(--pixel-shadow);
 }
 
 /* ---------- Free Move: which layer's bone a drag moves ---------- */
@@ -2289,9 +2261,8 @@ button, input, select {
   justify-content: center;
 }
 
-/* The visible glyph is a 16px pixel-art icon -- see icon-info.png, drawn
-   in the same two-tone (white ring, pink fill) style as the layer-row
-   icons -- but the actual touch target reaches well past it. A phone
+/* The visible glyph is the pixel-art "info" icon (pixelIcons.js), but the
+   actual touch target reaches well past it. A phone
    finger is bigger than a hint mark, and this is the same trick
    .btn--nudge and the row kebabs use: grow the invisible hit area, not
    the visible glyph. */
@@ -2317,7 +2288,6 @@ button, input, select {
 .info-btn[aria-expanded="true"] {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: 50%;
 }
 
 .info-popover {
@@ -2337,7 +2307,7 @@ button, input, select {
   clip-path: var(--pixel-clip);
   background: var(--color-surface);
   color: var(--color-text);
-  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.5));
+  filter: var(--pixel-shadow);
 }
 
 .info-popover__title {
@@ -2368,13 +2338,13 @@ button, input, select {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid rgba(255, 46, 147, 0.5);
-  border-radius: 50%;
+  border: 2px solid rgba(255, 46, 147, 0.5);
+  clip-path: var(--pixel-clip);
   background: transparent;
   color: var(--color-accent);
-  font-family: var(--font-fallback);
-  font-size: 16px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 
@@ -2434,8 +2404,8 @@ button, input, select {
   flex: 1 1 0;
   min-height: 44px;
   padding: 8px 4px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  clip-path: var(--pixel-clip);
   background: transparent;
   color: rgba(255, 255, 255, 0.6);
   font: inherit;
@@ -2487,8 +2457,8 @@ button, input, select {
 .settings-choice {
   min-height: 40px;
   padding: 6px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  clip-path: var(--pixel-clip);
   background: transparent;
   color: rgba(255, 255, 255, 0.7);
   font: inherit;
@@ -2614,11 +2584,13 @@ button, input, select {
   flex: 0 0 auto;
 }
 
+.wordmark-oo {
+  background: var(--sprite-wordmark) 0 0 / 16px 16px no-repeat;
+}
+
+/* The two CSS circles the mark used to be drawn with. */
 .wordmark-oo__loop {
-  position: absolute;
-  border: 2px solid var(--color-accent);
-  border-radius: 50%;
-  background: transparent;
+  display: none;
 }
 
 /* The small loop's bottom-left corner and the large loop's top-right
@@ -2677,21 +2649,21 @@ button, input, select {
    keeps this smooth on a phone mid-project rather than hitching. */
 
 @keyframes screen-in {
-  from { opacity: 0; transform: translateX(18px); }
-  to { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes screen-out {
-  from { opacity: 1; transform: translateX(0); }
-  to { opacity: 0; transform: translateX(-18px); }
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 .screen-enter {
-  animation: screen-in var(--screen-transition) ease-out;
+  animation: screen-in var(--screen-transition) steps(4, jump-none);
 }
 
 .screen-leave {
-  animation: screen-out var(--screen-transition) ease-in forwards;
+  animation: screen-out var(--screen-transition) steps(4, jump-none) forwards;
   pointer-events: none; /* nothing is tappable on its way out */
 }
 
@@ -2710,4 +2682,564 @@ button, input, select {
 #pierceSpreadPartnerRow .select-input {
   flex: 1;
   min-width: 0;
+}
+
+/* ==========================================================================
+   PIXEL CONTROLS
+   Everything below replaces something the browser or the platform would
+   otherwise draw smooth: icons, dropdowns, sliders, switches, checkboxes,
+   scrollbars. The drawings themselves live in pixelIcons.js and reach this
+   file as --sprite-* custom properties (published at start-up), so there
+   is one copy of each.
+   ========================================================================== */
+
+html, body, * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
+}
+
+input, textarea {
+  caret-color: var(--color-accent);
+}
+
+/* ---- Icons: pixel grids drawn with crisp edges in currentColor */
+.px-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.px-icon__svg {
+  display: block;
+}
+
+.px-icon--lead {
+  margin-right: 8px;
+}
+
+.px-icon--trail {
+  margin-left: 8px;
+}
+
+.btn {
+  gap: 8px;
+}
+
+/* ---- Dropdowns: the native select stays (it holds the value); a pixel
+   button and menu stand in for the system's own dropdown dialog. */
+.px-select__native {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden;
+}
+
+.px-select {
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.px-select:disabled {
+  border-color: var(--color-disabled);
+  color: var(--color-disabled);
+}
+
+.px-select__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.px-select__chevron {
+  color: var(--color-accent);
+}
+
+.px-select__menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--color-surface);
+  border: 2px solid var(--color-accent);
+  clip-path: var(--pixel-clip-lg);
+  filter: var(--pixel-shadow);
+}
+
+.px-select__option {
+  -webkit-tap-highlight-color: transparent;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--text-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.px-select__option[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.px-select__option:active {
+  background: var(--color-accent-dark);
+}
+
+/* ---- Sliders: a blocky track whose filled part is a row of 4px blocks,
+   and a gripped pixel handle -- never the platform's smooth pill and
+   circle. --fill is set per slider by pixelControls.js. */
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  accent-color: auto;
+  height: 36px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 10px;
+  border: 2px solid var(--color-accent);
+  background:
+    repeating-linear-gradient(90deg, var(--color-accent) 0 4px, var(--color-accent-dark) 4px 6px)
+      0 0 / var(--fill, 0%) 100% no-repeat,
+    var(--color-bg);
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 20px;
+  margin-top: -7px;
+  border: 0;
+  background: var(--sprite-slider-handle) 0 0 / 16px 20px no-repeat;
+}
+
+.slider:disabled::-webkit-slider-runnable-track {
+  border-color: var(--color-disabled);
+  background: var(--color-disabled-bg);
+}
+
+.slider:disabled::-webkit-slider-thumb {
+  background-image: var(--sprite-slider-handle-disabled);
+}
+
+.slider::-moz-range-track {
+  height: 6px;
+  border: 2px solid var(--color-accent);
+  background: var(--color-bg);
+}
+
+.slider::-moz-range-thumb {
+  width: 16px;
+  height: 20px;
+  border: 0;
+  border-radius: 0;
+  background: var(--sprite-slider-handle) 0 0 / 16px 20px no-repeat;
+}
+
+/* ---- Switches: every on/off toggle wears a pixel switch -- knob left,
+   off; knob right, on -- drawn in the toggle's own text colour. */
+.toggle-chip--switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.toggle-chip--switch::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 24px;
+  height: 12px;
+  background: var(--sprite-switch-off) 0 0 / 24px 12px no-repeat;
+}
+
+.toggle-chip--switch[aria-pressed="true"]::before {
+  background-image: var(--sprite-switch-on);
+}
+
+/* ---- Checkboxes */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 0;
+  background: var(--sprite-checkbox-off) 0 0 / 16px 16px no-repeat;
+  cursor: pointer;
+}
+
+input[type="checkbox"]:checked {
+  background-image: var(--sprite-checkbox-on);
+}
+
+/* ---- The platform's own little widgets inside inputs */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  display: none;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ---- Scrollbars: square, solid, pink */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-accent-dark);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------- What's new ---------- */
+
+.changelog-screen {
+  z-index: 70; /* over Settings, which can open it */
+}
+
+.changelog-body {
+  padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+.changelog-intro {
+  margin-bottom: 16px;
+}
+
+.changelog-intro__version {
+  margin: 0 0 8px;
+  color: var(--color-accent);
+  font-family: var(--font-header);
+  font-size: var(--text-header);
+  line-height: 1.5;
+}
+
+.changelog-entry {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+}
+
+.changelog-entry--latest {
+  border-color: var(--color-accent);
+}
+
+.changelog-entry__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-label);
+}
+
+.changelog-entry__version {
+  color: var(--color-accent);
+  font-size: var(--text-button);
+}
+
+.changelog-entry__kind {
+  padding: 0 6px;
+  border: 2px solid currentColor;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+}
+
+.changelog-entry__kind--minor,
+.changelog-entry__kind--first {
+  color: var(--color-accent);
+}
+
+.changelog-entry__date {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.changelog-entry__title {
+  margin: 6px 0;
+  font-size: var(--text-body);
+  font-weight: normal;
+  color: var(--color-text);
+}
+
+.changelog-entry__notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.changelog-entry__notes li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 4px;
+}
+
+.changelog-entry__notes .px-icon {
+  margin-top: 4px;
+  color: var(--color-accent);
+}
+
+.home__version {
+  -webkit-tap-highlight-color: transparent;
+  margin-top: 12px;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 183, 197, 0.8);
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+/* ---------- Checkpoints ---------- */
+
+.checkpoint-new {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.checkpoint-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.checkpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 2px solid rgba(255, 46, 147, 0.35);
+  clip-path: var(--pixel-clip);
+}
+
+.checkpoint-row__info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.checkpoint-row__name {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-accent);
+}
+
+.checkpoint-row__info small {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: var(--text-label);
+}
+
+/* ---------- Recent tools ---------- */
+
+.recent-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 16px 8px;
+  overflow-x: auto;
+}
+
+.recent-tools--home {
+  justify-content: center;
+  margin: 12px 0 0;
+}
+
+.recent-tools__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: rgba(255, 183, 197, 0.8);
+  font-size: var(--text-label);
+  text-transform: uppercase;
+}
+
+.recent-tools__chip {
+  -webkit-tap-highlight-color: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 2px solid rgba(255, 46, 147, 0.45);
+  clip-path: var(--pixel-clip);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-label);
+  cursor: pointer;
+}
+
+.recent-tools__chip--latest {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.recent-tools__chip:active {
+  background: var(--color-accent-dark);
+  position: relative;
+  top: 2px;
+}
+
+/* ===================================================================== */
+/* Settings colour field: pixel swatches + hex (replaces input type=color) */
+
+.settings-field__row--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.settings-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 32px);
+  gap: 4px;
+}
+
+.settings-swatch {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 2px solid #000;
+  background: var(--swatch);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+}
+
+/* The picked swatch: a hard two-colour frame, no glow. */
+.settings-swatch[aria-pressed='true'] {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--color-accent);
+}
+
+.settings-hex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-hex__preview {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #fff;
+  background: var(--swatch);
+}
+
+.settings-hex__input {
+  width: 10ch;
+  text-transform: uppercase;
+}
+
+.settings-hex__input.is-invalid {
+  border-color: var(--color-danger, #FF3B3B);
+}
+
+/* ===================================================================== */
+/* Debug overlay */
+
+.debug-modal {
+  z-index: 66; /* over the tool windows (55) and the Pierce popup, under toasts */
+}
+
+.btn--debug[aria-pressed='true'] {
+  color: #000;
+  background: var(--color-accent);
+}
+
+.debug-master {
+  margin: 4px 0 8px;
+}
+
+.debug-view-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.debug-view {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.debug-view__hint {
+  font-size: var(--text-label);
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.4;
+}
+
+/* A view whose own switch is on but whose master is off: shown, dimmed,
+   so the list never claims something is on screen when it is not. */
+.debug-view .is-muted {
+  opacity: 0.45;
+}
+
+/* A pixel radio pip for a one-of-several choice (Physics Direction): a
+   hollow 8px square, filled when chosen -- the switch's three-way cousin. */
+.segmented__btn--radio::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  box-sizing: border-box;
+}
+
+.segmented__btn--radio[aria-pressed='true']::before {
+  background: currentColor;
+  box-shadow: inset 0 0 0 2px var(--color-bg);
 }

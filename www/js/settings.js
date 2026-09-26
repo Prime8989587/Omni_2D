@@ -34,7 +34,7 @@
 
 import { loadSettings, saveSettings } from './storage.js';
 
-export const APP_VERSION = '1.0.0';
+export { APP_VERSION } from './changelog.js';
 
 // The eight compass directions, matching PCreate's own shadow table so a
 // default set here means exactly what it means in the drawing window.
@@ -157,9 +157,10 @@ export const SCHEMA = [
     hint: 'Which way the generated shadow falls, before you adjust it.',
     default: 'se',
     options: [
-      { value: 'nw', label: '↖' }, { value: 'n', label: '↑' }, { value: 'ne', label: '↗' },
-      { value: 'w', label: '←' }, { value: 'e', label: '→' },
-      { value: 'sw', label: '↙' }, { value: 's', label: '↓' }, { value: 'se', label: '↘' },
+      { value: 'nw', label: 'NW', icon: 'arrow-nw' }, { value: 'n', label: 'N', icon: 'arrow-up' },
+      { value: 'ne', label: 'NE', icon: 'arrow-ne' }, { value: 'w', label: 'W', icon: 'arrow-left' },
+      { value: 'e', label: 'E', icon: 'arrow-right' }, { value: 'sw', label: 'SW', icon: 'arrow-sw' },
+      { value: 's', label: 'S', icon: 'arrow-down' }, { value: 'se', label: 'SE', icon: 'arrow-se' },
     ],
   },
   {
@@ -248,6 +249,42 @@ export const SCHEMA = [
     min: 10,
     max: 120,
     default: [20, 45, 90],
+  },
+  // The other three square brushes. PCreate keeps two lists because its
+  // brush and its eraser are reached for at different sizes -- a fine line
+  // and a wide wipe -- so one shared row would always be half wrong.
+  // Manual shading paints with the brush and uses the brush's list.
+  {
+    key: 'clayerBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 2, 4],
+  },
+  {
+    key: 'meshTrimBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 3, 6],
+  },
+  {
+    key: 'pcreateBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 2, 4],
+  },
+  {
+    key: 'pcreateEraserPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 4, 8],
   },
   {
     key: 'meshTrimInPlace',

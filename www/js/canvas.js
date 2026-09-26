@@ -20,16 +20,19 @@ import { isLinked, ensureLinkMesh, linkPositions } from './pxlink.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
-import { traceAlphaEdges, traceAlphaEdgesInBounds } from './contour.js';
+import { outlineRing } from './contour.js';
 import { getSetting, shouldRenderFrame } from './settings.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture,
   pierceReadout, pierceHold,
 } from './pierce.js';
 import { spreadActive, spreadMasks } from './spread.js';
+import { effectiveDpr } from './pixelScale.js';
+import { debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
+import { PixelPen } from './pixelDraw.js';
+import { NearestRotator } from './pixelRotate.js';
 
 const ACCENT = '#FF2E93';
-const SELECTION_OUTLINE_PX = 2;
 
 // Child bones are drawn in a lighter pink than roots, so the hierarchy is
 // readable at a glance without consulting the list.
@@ -235,9 +238,9 @@ function renderScene(boneTransforms) {
 
   let touched = dirty;
   for (const entry of drawList) touched = unionBounds(touched, entry.bounds);
-  // Returned even when there is nothing to redraw: the contour is drawn in
-  // screen space every frame (a pan or a zoom moves it without the scene
-  // bitmap changing at all), so it needs the draw list regardless.
+  // Returned even when there is nothing to redraw: the contour and the
+  // wireframe view are built from it every frame, whether or not the scene
+  // bitmap changed.
   if (!touched) return drawList;
 
   clearRegion(buffer, sceneWidth, sceneHeight, touched.x0, touched.y0, touched.x1, touched.y1);
@@ -279,96 +282,146 @@ function renderScene(boneTransforms) {
 // ---------------------------------------------------------------------------
 // Contour
 //
-// Drawn in SCREEN space from the scene's alpha, not baked into the scene
-// bitmap. Three reasons: the outline stays one screen pixel's worth of
-// weight per unit of thickness at any zoom rather than becoming a smear
-// when zoomed in; it can never contaminate the artwork the rasterizer just
-// composed; and captureFrame(), which runs off that same bitmap, keeps
-// exporting the character alone, with no rigging aid drawn into the GIF.
+// The outline is the ring of pixels just OUTSIDE the artwork (contour.js
+// outlineRing), `thickness` scene pixels deep, painted into a bitmap of its
+// own on the SCENE's pixel grid and composited exactly the way the artwork
+// is. So it is pixel art in the same sense the character is: whole scene
+// pixels, hard edges, growing with the zoom like the thing it outlines,
+// and never painted over the artist's own edge pixels. It stays out of the
+// scene bitmap itself so captureFrame(), which reads that bitmap, keeps
+// exporting the character alone with no rigging aid drawn into the GIF.
 //
-// The per-layer mode needs each part's own silhouette rather than the
-// composited one, so it re-rasterizes each part alone into a scratch
-// buffer. That buffer is allocated once and cleared only over the part's
-// own bounds, so the cost is proportional to the artwork's area rather
-// than to the canvas area times the layer count.
+// Per-layer mode outlines the SELECTED layer only -- the one being worked
+// on -- re-rasterized on its own into a scratch buffer, so it is outlined
+// as its own shape even where other layers cover it. Full silhouette
+// outlines the composed scene: overlapping layers read as ONE shape, which
+// is the whole difference between the two modes.
 
 let contourScratch = null;
 let contourScratchSize = 0;
+let contourScratchUsed = null; // the rectangle last frame's layer was drawn into
+let contourCanvas = null;
+let contourCtx = null;
+let contourRect = null; // where this frame's ring sits, in scene pixels
 
 function contourScratchBuffer() {
   const needed = sceneWidth * sceneHeight * 4;
   if (!contourScratch || contourScratchSize !== needed) {
     contourScratch = new Uint8ClampedArray(needed);
     contourScratchSize = needed;
+    contourScratchUsed = null;
   }
   return contourScratch;
 }
 
-function paintContourEdges(edges, color, thickness) {
-  if (edges.length === 0) return;
-  const zoom = view.zoom;
-  // Thickness is applied by drawing a BIGGER rectangle per edge pixel
-  // rather than by growing the edge set, which keeps the trace O(area)
-  // whatever thickness is chosen. The rect is centred on its pixel, so a
-  // thicker outline grows evenly to both sides of the true boundary
-  // instead of drifting inward.
-  const size = zoom * thickness;
-  const inset = (size - zoom) / 2;
-  ctx.fillStyle = color;
-  for (const index of edges) {
-    const x = index % sceneWidth;
-    const y = (index - x) / sceneWidth;
-    const p = view.toCanvas(x, y);
-    ctx.fillRect(p.x - inset, p.y - inset, size, size);
-  }
+function contourRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex));
+  const n = m ? parseInt(m[1], 16) : 0xFF2E93;
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-function drawContour(drawList) {
-  const mode = getSetting('contourMode');
-  if (mode === 'off' || !sceneImage) return;
+function clampBounds(bounds) {
+  const x0 = Math.max(0, Math.floor(bounds.x0));
+  const y0 = Math.max(0, Math.floor(bounds.y0));
+  const x1 = Math.min(sceneWidth, Math.ceil(bounds.x1));
+  const y1 = Math.min(sceneHeight, Math.ceil(bounds.y1));
+  return x1 > x0 && y1 > y0 ? { x0, y0, x1, y1 } : null;
+}
 
-  const color = getSetting('contourColor');
+// The ring for this frame, as a list of scene-pixel indices.
+function contourRing(drawList) {
+  const mode = getSetting('contourMode');
+  if (mode === 'off' || !sceneImage) return [];
   const thickness = getSetting('contourThickness');
 
   if (mode === 'silhouette') {
-    // The composed scene: overlapping layers read as ONE shape, which is
-    // the entire difference between this mode and the one below.
-    paintContourEdges(
-      traceAlphaEdges(sceneImage.data, sceneWidth, sceneHeight),
-      color, thickness
-    );
-    return;
+    let bounds = null;
+    for (const entry of drawList) if (entry.bounds) bounds = unionBounds(bounds, entry.bounds);
+    const area = bounds && clampBounds(bounds);
+    return area ? outlineRing(sceneImage.data, sceneWidth, sceneHeight, { thickness, bounds: area }) : [];
   }
 
-  // Per-layer: every part outlined on its own, including where one covers
-  // another, so the stack is legible as separate pieces while rigging.
+  const selected = partsStore.selected;
+  const entry = selected ? drawList.find((e) => e.part === selected) : null;
+  const area = entry && entry.bounds ? clampBounds(entry.bounds) : null;
+  if (!area) return [];
   const scratch = contourScratchBuffer();
-  for (const { part, geometry, mask, bounds } of drawList) {
-    if (!bounds) continue;
-    const x0 = Math.max(0, Math.floor(bounds.x0));
-    const y0 = Math.max(0, Math.floor(bounds.y0));
-    const x1 = Math.min(sceneWidth, Math.ceil(bounds.x1));
-    const y1 = Math.min(sceneHeight, Math.ceil(bounds.y1));
-    if (x1 <= x0 || y1 <= y0) continue;
-
-    clearRegion(scratch, sceneWidth, sceneHeight, x0, y0, x1, y1);
-    const { positions, uvs, triangles } = geometry;
-    for (let i = 0; i < triangles.length; i += 3) {
-      const a = triangles[i];
-      const b = triangles[i + 1];
-      const c = triangles[i + 2];
-      rasterizeTriangle(
-        scratch, sceneWidth, sceneHeight,
-        part.pixels, part.naturalWidth, part.naturalHeight,
-        positions[a], positions[b], positions[c],
-        uvs[a], uvs[b], uvs[c], mask
-      );
-    }
-    paintContourEdges(
-      traceAlphaEdgesInBounds(scratch, sceneWidth, sceneHeight, { x0, y0, x1, y1 }),
-      color, thickness
+  const used = contourScratchUsed;
+  if (used) clearRegion(scratch, sceneWidth, sceneHeight, used.x0, used.y0, used.x1, used.y1);
+  clearRegion(scratch, sceneWidth, sceneHeight, area.x0, area.y0, area.x1, area.y1);
+  contourScratchUsed = area;
+  const { positions, uvs, triangles } = entry.geometry;
+  for (let i = 0; i < triangles.length; i += 3) {
+    const a = triangles[i];
+    const b = triangles[i + 1];
+    const c = triangles[i + 2];
+    rasterizeTriangle(
+      scratch, sceneWidth, sceneHeight,
+      selected.pixels, selected.naturalWidth, selected.naturalHeight,
+      positions[a], positions[b], positions[c],
+      uvs[a], uvs[b], uvs[c], entry.mask
     );
   }
+  return outlineRing(scratch, sceneWidth, sceneHeight, { thickness, bounds: area });
+}
+
+function buildContour(drawList) {
+  contourRect = null;
+  const ring = contourRing(drawList);
+  if (ring.length === 0) return;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const index of ring) {
+    const x = index % sceneWidth;
+    const y = (index - x) / sceneWidth;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const w = maxX - minX + 1;
+  const h = maxY - minY + 1;
+  if (!contourCanvas) {
+    contourCanvas = document.createElement('canvas');
+    contourCtx = contourCanvas.getContext('2d');
+  }
+  if (contourCanvas.width !== w || contourCanvas.height !== h) {
+    contourCanvas.width = w;
+    contourCanvas.height = h;
+  }
+  const image = contourCtx.createImageData(w, h);
+  const [r, g, b] = contourRgb(getSetting('contourColor'));
+  for (const index of ring) {
+    const x = index % sceneWidth;
+    const y = (index - x) / sceneWidth;
+    const o = ((y - minY) * w + (x - minX)) * 4;
+    image.data[o] = r;
+    image.data[o + 1] = g;
+    image.data[o + 2] = b;
+    image.data[o + 3] = 255;
+  }
+  contourCtx.putImageData(image, 0, 0);
+  contourRect = { x: minX, y: minY, w, h, pixels: ring.length };
+}
+
+// Composited with the same transform as the scene bitmap -- same zoom,
+// same pan, same camera angle -- so ring and artwork share one grid.
+function drawContour() {
+  if (!contourRect) return;
+  const p = view.toCanvas(contourRect.x, contourRect.y);
+  ctx.drawImage(
+    contourCanvas,
+    0, 0, contourRect.w, contourRect.h,
+    p.x, p.y, contourRect.w * view.zoom, contourRect.h * view.zoom
+  );
+}
+
+// Test window: what the contour drew this frame.
+export function contourDebug() {
+  return contourRect ? { ...contourRect, mode: getSetting('contourMode') } : { pixels: 0, mode: getSetting('contourMode') };
 }
 
 // ---------------------------------------------------------------------------
@@ -434,32 +487,120 @@ function checkerPattern() {
 
 function drawGrid() {
   const origin = view.toCanvas(0, 0);
-  const width = sceneStore.width * view.zoom;
-  const height = sceneStore.height * view.zoom;
-
   ctx.fillStyle = checkerPattern();
-  ctx.fillRect(origin.x, origin.y, width, height);
-
-  ctx.strokeStyle = GRID_EDGE;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(origin.x - 0.5, origin.y - 0.5, width + 1, height + 1);
+  ctx.fillRect(origin.x, origin.y, sceneStore.width * view.zoom, sceneStore.height * view.zoom);
 }
 
-// Highlights one grid cell -- the pixel a bone endpoint is snapped to --
-// so it is unmistakable that snapping happened.
-function drawSnapCell(cell) {
-  const p = view.toCanvas(cell.x, cell.y);
-  ctx.fillStyle = SNAP_CELL_FILL;
-  ctx.fillRect(p.x, p.y, view.zoom, view.zoom);
-  ctx.strokeStyle = ACCENT;
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(p.x, p.y, view.zoom, view.zoom);
+// Rig mode's veil over the character, in the scene's own frame like the
+// checkerboard it sits on, so the two always cover exactly the same area.
+function drawVeil() {
+  const origin = view.toCanvas(0, 0);
+  ctx.fillStyle = RIG_VEIL;
+  ctx.fillRect(origin.x, origin.y, sceneStore.width * view.zoom, sceneStore.height * view.zoom);
+}
+
+// ---------------------------------------------------------------------------
+// The turned view
+
+const rotator = new NearestRotator();
+let pictureCanvas = null;
+let pictureCtx = null;
+let checkerScene = null;
+let checkerSceneKey = '';
+
+// The checkerboard at one cell per scene pixel -- exactly what the straight-on
+// pattern shows, dark on the scene's (0, 0).
+function sceneChecker() {
+  const light = CHECKER_STRENGTHS[getSetting('checkerStrength')] || CHECKER_LIGHT;
+  const key = `${sceneWidth}x${sceneHeight}:${light}`;
+  if (checkerScene && checkerSceneKey === key) return checkerScene;
+  checkerScene = document.createElement('canvas');
+  checkerScene.width = sceneWidth;
+  checkerScene.height = sceneHeight;
+  const c = checkerScene.getContext('2d');
+  c.fillStyle = CHECKER_DARK;
+  c.fillRect(0, 0, sceneWidth, sceneHeight);
+  c.fillStyle = light;
+  for (let y = 0; y < sceneHeight; y++) {
+    for (let x = (y + 1) % 2; x < sceneWidth; x += 2) c.fillRect(x, y, 1, 1);
+  }
+  checkerSceneKey = key;
+  return checkerScene;
+}
+
+function drawTurnedPicture(isRig, angle) {
+  if (!sceneCanvas) return false;
+  if (!pictureCanvas) {
+    pictureCanvas = document.createElement('canvas');
+    pictureCtx = pictureCanvas.getContext('2d');
+  }
+  if (pictureCanvas.width !== sceneWidth || pictureCanvas.height !== sceneHeight) {
+    pictureCanvas.width = sceneWidth;
+    pictureCanvas.height = sceneHeight;
+  }
+  const c = pictureCtx;
+  c.imageSmoothingEnabled = false;
+  c.clearRect(0, 0, sceneWidth, sceneHeight);
+  c.drawImage(sceneChecker(), 0, 0);
+  c.drawImage(sceneCanvas, 0, 0);
+  if (contourRect) c.drawImage(contourCanvas, 0, 0, contourRect.w, contourRect.h, contourRect.x, contourRect.y, contourRect.w, contourRect.h);
+  if (isRig) {
+    c.fillStyle = RIG_VEIL;
+    c.fillRect(0, 0, sceneWidth, sceneHeight);
+  }
+  return rotator.draw(ctx, pictureCanvas, {
+    x: view.panX * dpr,
+    y: view.panY * dpr,
+    width: sceneWidth * view.zoom * dpr,
+    height: sceneHeight * view.zoom * dpr,
+    angle,
+    cx: (viewWidth / 2) * dpr,
+    cy: (viewHeight / 2) * dpr,
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Screen-space overlays
+//
+// EVERY OVERLAY IS PIXEL ART. Canvas paths are anti-aliased with no way to
+// turn that off, so nothing below strokes or fills a path: each shape is
+// worked out as cells of the interface's pixel grid (pixelDraw.js -- one
+// cell is one art pixel, the same 2 px an icon's pixel is) and filled as
+// solid squares in raw device pixels. Bones, handles, rings, dashed links,
+// wireframes: all hard-edged at any zoom, any camera angle, any screen.
+//
+// Positions go through view.toScreen, which applies the camera's rotation,
+// then onto device pixels -- the only space where "a whole pixel" is a
+// promise the screen keeps.
 
-function drawPartOutline(part) {
+function toDevice(x, y) {
+  const p = view.toScreen(x, y);
+  return { x: p.x * dpr, y: p.y * dpr };
+}
+
+// The canvas border, one cell wide and just OUTSIDE the scene so it never
+// sits on a pixel of artwork.
+function drawGridEdge(pen) {
+  const out = pen.u / dpr / view.zoom / 2;
+  const W = sceneStore.width;
+  const H = sceneStore.height;
+  pen.polyline([
+    toDevice(-out, -out), toDevice(W + out, -out), toDevice(W + out, H + out), toDevice(-out, H + out),
+  ], GRID_EDGE);
+}
+
+// Highlights one grid cell -- the pixel a bone endpoint is snapped to --
+// so it is unmistakable that snapping happened.
+function drawSnapCell(pen, cell) {
+  const corners = [
+    toDevice(cell.x, cell.y), toDevice(cell.x + 1, cell.y),
+    toDevice(cell.x + 1, cell.y + 1), toDevice(cell.x, cell.y + 1),
+  ];
+  pen.polygon(corners, SNAP_CELL_FILL);
+  pen.polyline(corners, ACCENT);
+}
+
+function drawPartOutline(pen, part) {
   // The quad where the part is DRAWN, not where its coordinates say it is.
   // A piercer held back at its End Point is the one case where those differ,
   // and an outline left behind at the raw dragged position would be ringing
@@ -471,60 +612,47 @@ function drawPartOutline(part) {
   const placed = back
     ? quad.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
     : quad;
-  const corners = placed.map((p) => view.toCanvas(p.x, p.y));
-  ctx.beginPath();
-  ctx.moveTo(corners[0].x, corners[0].y);
-  for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
-  ctx.closePath();
-  ctx.lineWidth = SELECTION_OUTLINE_PX;
-  ctx.strokeStyle = ACCENT;
-  ctx.stroke();
+  pen.polyline(placed.map((p) => toDevice(p.x, p.y)), ACCENT);
 }
 
 // A bone is drawn as a tapered wedge: widest just past the head, tapering
 // to a point at the tail, so its direction is obvious at a glance.
-function drawBone(bone, isSelected) {
-  const head = view.toCanvas(...Object.values(bonesStore.worldHead(bone)));
-  const tail = view.toCanvas(...Object.values(bonesStore.worldTail(bone)));
+function drawBone(pen, bone, isSelected) {
+  const headScene = bonesStore.worldHead(bone);
+  const tailScene = bonesStore.worldTail(bone);
+  const head = toDevice(headScene.x, headScene.y);
+  const tail = toDevice(tailScene.x, tailScene.y);
   const length = Math.hypot(tail.x - head.x, tail.y - head.y);
-  if (length < 0.5) return;
+  if (length < 0.5 * dpr) return;
 
   const dirX = (tail.x - head.x) / length;
   const dirY = (tail.y - head.y) / length;
-  const width = Math.min(Math.max(length * 0.14, 3), 11);
+  const width = Math.min(Math.max(length * 0.14, 3 * dpr), 11 * dpr);
   const shoulder = Math.min(length * 0.25, width * 2);
-
   const shoulderX = head.x + dirX * shoulder;
   const shoulderY = head.y + dirY * shoulder;
   const perpX = -dirY * width;
   const perpY = dirX * width;
+  const wedge = [
+    head,
+    { x: shoulderX + perpX, y: shoulderY + perpY },
+    tail,
+    { x: shoulderX - perpX, y: shoulderY - perpY },
+  ];
 
-  ctx.beginPath();
-  ctx.moveTo(head.x, head.y);
-  ctx.lineTo(shoulderX + perpX, shoulderY + perpY);
-  ctx.lineTo(tail.x, tail.y);
-  ctx.lineTo(shoulderX - perpX, shoulderY - perpY);
-  ctx.closePath();
-
-  ctx.fillStyle = bone.isRoot ? ROOT_FILL : CHILD_FILL;
-  ctx.fill();
-  ctx.strokeStyle = bone.isRoot ? ROOT_STROKE : CHILD_STROKE;
-  ctx.lineWidth = isSelected ? 3 : 1.5;
-  ctx.stroke();
+  pen.polygon(wedge, bone.isRoot ? ROOT_FILL : CHILD_FILL);
+  // Selected reads heavier: a two-cell outline instead of one.
+  pen.polyline(wedge, bone.isRoot ? ROOT_STROKE : CHILD_STROKE, { thickness: isSelected ? 2 : 1 });
 
   if (isSelected) {
-    for (const [point, radius] of [[head, 7], [tail, 5]]) {
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-      ctx.fillStyle = ACCENT;
-      ctx.fill();
-    }
+    pen.disc(head.x, head.y, 7 * dpr, ACCENT);
+    pen.disc(tail.x, tail.y, 5 * dpr, ACCENT);
   }
 }
 
 // When a child's head has been dragged away from its parent's tail, a
 // dashed line keeps the relationship visible.
-function drawParentLink(bone) {
+function drawParentLink(pen, bone) {
   const parent = bonesStore.parentOf(bone);
   if (!parent) return;
 
@@ -532,81 +660,67 @@ function drawParentLink(bone) {
   const head = bonesStore.worldHead(bone);
   if (Math.hypot(head.x - parentTail.x, head.y - parentTail.y) < 0.5) return;
 
-  const from = view.toCanvas(parentTail.x, parentTail.y);
-  const to = view.toCanvas(head.x, head.y);
-  ctx.save();
-  ctx.beginPath();
-  ctx.setLineDash([4, 4]);
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(to.x, to.y);
-  ctx.strokeStyle = CHILD_STROKE;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.restore();
+  const from = toDevice(parentTail.x, parentTail.y);
+  const to = toDevice(head.x, head.y);
+  pen.line(from.x, from.y, to.x, to.y, CHILD_STROKE, { dash: 2 });
 }
 
-function drawSkeleton() {
-  const origin = view.toCanvas(0, 0);
-  ctx.fillStyle = RIG_VEIL;
-  ctx.fillRect(origin.x, origin.y, sceneStore.width * view.zoom, sceneStore.height * view.zoom);
-
-  for (const bone of bonesStore.bones) drawParentLink(bone);
+function drawSkeleton(pen) {
+  for (const bone of bonesStore.bones) drawParentLink(pen, bone);
 
   const selectedId = bonesStore.selectedId;
   for (const bone of bonesStore.bones) {
     if (!bonesStore.isVisible(bone)) continue;
-    drawBone(bone, bone.id === selectedId);
+    drawBone(pen, bone, bone.id === selectedId);
   }
 
   const cell = getSnapCell();
-  if (cell) drawSnapCell(cell);
+  if (cell) drawSnapCell(pen, cell);
 
   // A bone mid-placement: ring the head while we wait for the tail tap.
   const placement = getPlacement();
   if (placement && placement.head) {
-    const p = view.toCanvas(placement.head.x, placement.head.y);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-    ctx.strokeStyle = ACCENT;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    const p = toDevice(placement.head.x, placement.head.y);
+    pen.ring(p.x, p.y, 8 * dpr, ACCENT);
   }
 }
 
-// Bind mode overlay: the mesh wireframe plus a per-vertex heatmap of how
-// strongly the selected bone influences each vertex.
-function drawMeshOverlay(part, boneTransforms, boneId) {
-  const { vertices, triangles } = part.mesh;
-  const points = deformVerticesSnapped(part.mesh, part, boneTransforms).map((p) => view.toCanvas(p.x, p.y));
-
-  ctx.save();
-  ctx.beginPath();
-  for (let i = 0; i < triangles.length; i += 3) {
-    const a = points[triangles[i]];
-    const b = points[triangles[i + 1]];
-    const c = points[triangles[i + 2]];
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineTo(c.x, c.y);
-    ctx.closePath();
+// A mesh's triangle edges, each drawn once however many triangles share it.
+function drawWireframe(pen, points, triangles, color) {
+  const seen = new Set();
+  const edge = (i, j) => {
+    const key = i < j ? `${i}:${j}` : `${j}:${i}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    pen.line(points[i].x, points[i].y, points[j].x, points[j].y, color);
+  };
+  for (let t = 0; t < triangles.length; t += 3) {
+    edge(triangles[t], triangles[t + 1]);
+    edge(triangles[t + 1], triangles[t + 2]);
+    edge(triangles[t + 2], triangles[t]);
   }
-  ctx.strokeStyle = MESH_WIRE;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.restore();
+}
+
+// Bind mode overlay: the selected layer's wireframe (a Debug overlay view)
+// plus a per-vertex heatmap of how strongly the selected bone influences
+// each vertex -- the heatmap is the weight painter's own readout, not a
+// debug view, so it is always drawn.
+function drawMeshOverlay(pen, part, boneTransforms, boneId) {
+  const { vertices, triangles } = part.mesh;
+  const points = deformVerticesSnapped(part.mesh, part, boneTransforms).map((p) => toDevice(p.x, p.y));
+
+  if (debugViewOn('meshWireframe')) drawWireframe(pen, points, triangles, MESH_WIRE);
 
   if (!boneId) return;
-
   for (let i = 0; i < vertices.length; i++) {
     const weight = vertices[i].weights[boneId] || 0;
     // Unweighted vertices get no dot at all, so "this bone controls
     // nothing here" reads as clearly as full influence does.
     if (weight <= 0.01) continue;
-
-    ctx.beginPath();
-    ctx.arc(points[i].x, points[i].y, 2 + weight * 3, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 46, 147, ${0.15 + weight * 0.85})`;
-    ctx.fill();
+    // Stepped to four strengths, so the dots are four flat colours rather
+    // than a continuous blend.
+    const step = Math.ceil(weight * 4) / 4;
+    pen.disc(points[i].x, points[i].y, (2 + step * 3) * dpr, `rgba(255, 46, 147, ${0.25 + step * 0.75})`);
   }
 }
 
@@ -623,24 +737,6 @@ function render() {
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, viewWidth, viewHeight);
 
-  // THE CAMERA'S ANGLE, applied once, here, to the context.
-  //
-  // Everything below draws in the unrotated frame through view.toCanvas,
-  // and this carries the whole picture round together -- checkerboard,
-  // artwork, contour, skeleton, handles, mesh overlay. Turning each of
-  // them separately would mean every drawing call growing a rotation it
-  // could get subtly wrong; turning the context means none of them can.
-  // The black backdrop above is deliberately outside it, so a rotated
-  // view has no unpainted corners.
-  const angle = view.rotation;
-  if (angle !== 0) {
-    ctx.translate(viewWidth / 2, viewHeight / 2);
-    ctx.rotate(angle);
-    ctx.translate(-viewWidth / 2, -viewHeight / 2);
-  }
-
-  drawGrid();
-
   const isRig = appState.state === AppState.RIG;
   const isBind = appState.state === AppState.BIND;
   // One snapshot per frame drives every bound part's skinning.
@@ -648,49 +744,85 @@ function render() {
 
   const drawList = renderScene(boneTransforms);
   captureFrame();
-  if (sceneCanvas) {
-    ctx.drawImage(
-      sceneCanvas,
-      0, 0, sceneWidth, sceneHeight,
-      view.panX, view.panY, sceneWidth * view.zoom, sceneHeight * view.zoom
-    );
+  // After captureFrame(), which is what keeps the contour out of exported
+  // animations.
+  if (drawList) buildContour(drawList);
+
+  // THE PICTURE: checkerboard, artwork, then the outline (it belongs to the
+  // character, so bone handles stay on top of it and remain grabbable),
+  // then Rig mode's veil. All of it is IMAGES on the scene's own pixel grid.
+  //
+  // Straight on, they are drawn at whole device pixels per scene pixel and
+  // nothing is resampled. With the camera turned, they are composed at
+  // scene resolution and turned by pixelRotate.js -- nearest sampling, so a
+  // turned view is still made of the artwork's own unblended pixels. (The
+  // 2D context's own rotate() is only the fallback for a device with no
+  // WebGL: it blends.) The black backdrop above is outside all this, so a
+  // turned view has no unpainted corners.
+  const angle = view.rotation;
+  const turned = angle !== 0 && drawTurnedPicture(isRig, angle);
+  if (!turned) {
+    if (angle !== 0) {
+      ctx.translate(viewWidth / 2, viewHeight / 2);
+      ctx.rotate(angle);
+      ctx.translate(-viewWidth / 2, -viewHeight / 2);
+    }
+    drawGrid();
+    if (sceneCanvas) {
+      ctx.drawImage(
+        sceneCanvas,
+        0, 0, sceneWidth, sceneHeight,
+        view.panX, view.panY, sceneWidth * view.zoom, sceneHeight * view.zoom
+      );
+    }
+    drawContour();
+    if (isRig) drawVeil();
   }
 
-  // After the artwork, before the skeleton: the outline belongs to the
-  // character, so bone handles stay on top of it and remain grabbable.
-  // Note this runs AFTER captureFrame(), which is what keeps the contour
-  // out of exported animations.
-  if (drawList) drawContour(drawList);
+  // Everything after this is an overlay, drawn cell by cell in device space
+  // (toDevice applies the camera's angle to each point), which is what
+  // keeps them hard-edged when the view is turned.
+  const pen = new PixelPen(ctx, dpr).begin();
+  drawGridEdge(pen);
 
-  if (isRig) drawSkeleton();
+  if (isRig) drawSkeleton(pen);
 
   // Free Move draws NOTHING but the character: no bone bodies, no
   // handles, no parent links, no gizmo of any kind. A drag anywhere moves
   // it, so there is nothing to aim at and nothing to get in the way of
-  // watching it move.
+  // watching it move. (The Debug overlay's views are the exception, and
+  // only when asked for.)
 
   if (isBind) {
     const part = partsStore.selected;
     if (part && part.mesh && part.mesh.isBound && boneTransforms) {
-      drawMeshOverlay(part, boneTransforms, bonesStore.selectedId);
+      drawMeshOverlay(pen, part, boneTransforms, bonesStore.selectedId);
     }
     // Bones draw on top so the user can see what they are painting toward.
     for (const bone of bonesStore.bones) {
       if (!bonesStore.isVisible(bone)) continue;
-      drawBone(bone, bone.id === bonesStore.selectedId);
+      drawBone(pen, bone, bone.id === bonesStore.selectedId);
+    }
+  } else if (drawList && debugViewOn('meshWireframe')) {
+    // Everywhere else the wireframe is every layer's: the geometry each one
+    // is actually drawn with this frame, deformed, split or plain quad.
+    for (const { geometry } of drawList) {
+      const points = geometry.positions.map((p) => toDevice(p.x, p.y));
+      drawWireframe(pen, points, geometry.triangles, MESH_WIRE);
     }
   }
 
   // PxLink points, where the rig is being built -- so the joints that hold
   // separate layers together are visible alongside the bones. Not in Free
   // Move, which draws nothing but the character.
-  if (isRig || isBind) drawPxLinkMarkers(boneTransforms);
+  if (isRig || isBind) drawPxLinkMarkers(pen, boneTransforms);
 
   // The selection outline belongs to the Home screen, where layers are
   // what you manipulate. Rig, Bind and Free Move are all about the
   // skeleton, so the outline would just be noise over the artwork.
   const selected = appState.state === AppState.HOME ? partsStore.selected : null;
-  if (selected) drawPartOutline(selected);
+  if (selected) drawPartOutline(pen, selected);
+  pen.end();
 
   drawPierceProbe();
 
@@ -699,30 +831,20 @@ function render() {
 
 // A ring at each PxLink point, at the SOLVED position -- where every member
 // of the link actually meets. Teal, like nothing else on the canvas, and one
-// ring however many layers the link joins, since they all meet there.
+// ring however many layers the link joins, since they all meet there. A
+// black ring either side keeps it readable over any artwork.
 const PXLINK_RING = '#2EE6C8';
-function drawPxLinkMarkers(boneTransforms) {
+function drawPxLinkMarkers(pen, boneTransforms) {
   const links = linkPositions(boneTransforms || NO_BONES);
-  if (links.length === 0) return;
-  ctx.save();
   for (const link of links) {
     if (link.members.length === 0) continue;
     const at = link.members[0];
-    const p = view.toCanvas(at.x, at.y);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 4;
-    ctx.stroke();
-    ctx.strokeStyle = PXLINK_RING;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.fillStyle = PXLINK_RING;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-    ctx.fill();
+    const p = toDevice(at.x, at.y);
+    pen.ring(p.x, p.y, 7 * dpr + pen.u, '#000000');
+    pen.ring(p.x, p.y, 7 * dpr - pen.u, '#000000');
+    pen.ring(p.x, p.y, 7 * dpr, PXLINK_RING);
+    pen.square(p.x, p.y, 0, PXLINK_RING);
   }
-  ctx.restore();
 }
 
 // The contact readout, in the same frame as the pixels it describes.
@@ -732,7 +854,7 @@ function drawPxLinkMarkers(boneTransforms) {
 // solver that is not running at all.
 function drawPierceProbe() {
   if (!probeEl) return;
-  if (!pierceOverlayEnabled()) {
+  if (!debugViewOn('pierceReadout')) {
     probeEl.hidden = true;
     return;
   }
@@ -815,7 +937,7 @@ export function requestRender() {
 
 function resize() {
   if (!canvasEl) return;
-  dpr = window.devicePixelRatio || 1;
+  dpr = effectiveDpr();
   // The canvas's own box, not the wrapper's: the wrapper's rect includes
   // its border, which would leave the backing store a few pixels larger
   // than the element and skew every touch coordinate.
@@ -848,6 +970,7 @@ export function initCanvas(canvas) {
   view.subscribe(requestRender);
   // Placing a bone's head changes what to draw without touching a store.
   subscribeRig(requestRender);
+  subscribeDebugOverlay(requestRender);
   resize();
 }
 

@@ -49,6 +49,8 @@
 // below it -- just built against this window's own camera instead of
 // view.js's.
 
+import { cellEdge, gridStrips, frameOutside, PixelPen } from './pixelDraw.js';
+import { NearestRotator } from './pixelRotate.js';
 import { Part, partsStore } from './parts.js';
 import { playEnter } from './transitions.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
@@ -72,6 +74,10 @@ import {
 // timeline rather than a place on the project's.
 import { createHistory } from './history.js';
 import { getSetting, setSetting, subscribeSettings } from './settings.js';
+import { effectiveDpr } from './pixelScale.js';
+import { createIcon, setIcon } from './pixelIcons.js';
+import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
+import { noteToolUsed } from './recentTools.js';
 
 const MAX_ZOOM = 64; // css px per canvas px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -84,27 +90,27 @@ const COPY_OFFSET = 4; // where a duplicate lands, so it is visibly its own thin
 
 // The eight compass directions a drop shadow can fall in, as unit steps.
 const SHADOW_DIRECTIONS = [
-  { key: 'nw', dx: -1, dy: -1, label: '↖' },
-  { key: 'n', dx: 0, dy: -1, label: '↑' },
-  { key: 'ne', dx: 1, dy: -1, label: '↗' },
-  { key: 'w', dx: -1, dy: 0, label: '←' },
-  { key: 'e', dx: 1, dy: 0, label: '→' },
-  { key: 'sw', dx: -1, dy: 1, label: '↙' },
-  { key: 's', dx: 0, dy: 1, label: '↓' },
-  { key: 'se', dx: 1, dy: 1, label: '↘' },
+  { key: 'nw', dx: -1, dy: -1, icon: 'arrow-nw' },
+  { key: 'n', dx: 0, dy: -1, icon: 'arrow-up' },
+  { key: 'ne', dx: 1, dy: -1, icon: 'arrow-ne' },
+  { key: 'w', dx: -1, dy: 0, icon: 'arrow-left' },
+  { key: 'e', dx: 1, dy: 0, icon: 'arrow-right' },
+  { key: 'sw', dx: -1, dy: 1, icon: 'arrow-sw' },
+  { key: 's', dx: 0, dy: 1, icon: 'arrow-down' },
+  { key: 'se', dx: 1, dy: 1, icon: 'arrow-se' },
 ];
 
 const TOOLS = [
-  { key: 'brush', label: 'Brush' },
-  { key: 'eraser', label: 'Eraser' },
-  { key: 'fill', label: 'Fill' },
-  { key: 'shade', label: 'Shade' },
-  { key: 'circle', label: 'Circle' },
-  { key: 'triangle', label: 'Triangle' },
-  { key: 'square', label: 'Square' },
-  { key: 'select', label: 'Select' },
-  { key: 'pick', label: 'Pick Color' },
-  { key: 'blend', label: 'Blend' },
+  { key: 'brush', label: 'Brush', icon: 'brush' },
+  { key: 'eraser', label: 'Eraser', icon: 'eraser' },
+  { key: 'fill', label: 'Fill', icon: 'bucket' },
+  { key: 'shade', label: 'Shade', icon: 'shade' },
+  { key: 'circle', label: 'Circle', icon: 'circle' },
+  { key: 'triangle', label: 'Triangle', icon: 'triangle' },
+  { key: 'square', label: 'Square', icon: 'square' },
+  { key: 'select', label: 'Select', icon: 'select' },
+  { key: 'pick', label: 'Pick Color', icon: 'picker' },
+  { key: 'blend', label: 'Blend', icon: 'blend' },
 ];
 
 const BRUSH_TOOLS = new Set(['brush', 'eraser', 'shade']);
@@ -139,7 +145,14 @@ const CASCADE_STEP = 8;
 const CASCADE_WRAP = 6;
 
 const WHEEL_SIZE = 200;
-const WHEEL_RADIUS = 96; // leaves room for the marker ring at full saturation
+const WHEEL_RADIUS = 96; // leaves room for the marker frame at full saturation
+// The wheel is pixel art: a grid of visible square blocks, WHEEL_BLOCK css px
+// each, every block one flat colour -- the hue and saturation at its centre.
+// 200 / 8 = 25 blocks across, an odd count, so one block sits exactly on the
+// centre and is pure white. A block IS a pick: tapping anywhere inside one
+// selects exactly the colour it shows.
+const WHEEL_BLOCK = 8;
+const WHEEL_BLOCKS = Math.floor(WHEEL_SIZE / WHEEL_BLOCK);
 
 const els = {};
 let session = null;
@@ -177,7 +190,7 @@ function cacheElements() {
     'pcreateWheelCanvas', 'pcreateSwatch', 'pcreateValueSlider', 'pcreateValueLabel', 'pcreateHexInput',
     'pcreateLoadedPaletteName', 'pcreateSaveColorBtn', 'pcreatePalettesBtn', 'pcreateSwatchStrip',
     'pcreateEditModeToggle', 'pcreateSaveLayerBtn',
-    'pcreateToolStrip', 'pcreateBrushRow', 'pcreateBrushBtn', 'pcreateBrushMenu',
+    'pcreateToolStrip', 'pcreateBrushRow', 'pcreateBrushBtn', 'pcreateBrushMenu', 'pcreateBrushPresets',
     'pcreateShapeRow', 'pcreateShapeFilledBtn', 'pcreateShapeOutlineBtn',
     'pcreateFillHint', 'pcreatePickHint', 'pcreateBlendHint', 'pcreateSelectHint',
     'pcreateSelectionRow', 'pcreateSelectionStatus', 'pcreateSelCopyBtn',
@@ -241,7 +254,7 @@ function closeSizeModal() {
 
 function renderMirrorToggle() {
   els.pcreateMirrorToggle.setAttribute('aria-pressed', String(blankMirror));
-  els.pcreateMirrorToggle.textContent = `⇄ Mirror: ${blankMirror ? 'On' : 'Off'}`;
+  els.pcreateMirrorToggle.textContent = `Mirror: ${blankMirror ? 'On' : 'Off'}`;
 }
 
 function handleMirrorToggle() {
@@ -473,6 +486,7 @@ function uniqueLayerName(base) {
 // Session
 
 function startSession({ kind, name, width, height, pixels, bitmap, layers = null }) {
+  noteToolUsed('pcreate');
   session = {
     kind,
     sourceName: name,
@@ -773,9 +787,76 @@ function drawGrid(ctx) {
   const h = height * cam.zoom;
   ctx.fillStyle = checkerPattern(ctx);
   ctx.fillRect(cam.panX, cam.panY, w, h);
-  ctx.strokeStyle = GRID_EDGE;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(cam.panX - 0.5, cam.panY - 0.5, w + 1, h + 1);
+  frameOutside(ctx, cam.panX, cam.panY, w, h, GRID_EDGE, session.dpr);
+}
+
+// The layers, bottom of the stack first. Each layer's shadow is drawn
+// immediately before that layer's own artwork, so the shadow sits under the
+// thing casting it while still falling over everything below -- which is
+// what a stack of cut-out sheets each casting onto the one beneath looks
+// like. `cam` is the camera to draw through: the real one, or the identity
+// one the turned view composes at.
+function drawPicture(ctx, cam) {
+  const { width, height } = session;
+  for (const layer of session.layers) {
+    if (layer.opacity <= 0) continue;
+    ctx.globalAlpha = layer.opacity;
+    if (layer.shadow && layer.shadowVisible) {
+      const [r, g, b, a] = layer.shadow.color;
+      drawIndexSet(ctx, layer.shadow.indices, `rgba(${r}, ${g}, ${b}, ${a / 255})`, null, cam);
+    }
+    ctx.drawImage(layer.bitmap, cam.panX, cam.panY, width * cam.zoom, height * cam.zoom);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// The selection, the boundary and a shape being dragged out.
+function drawMarks(ctx, cam) {
+  const { width, height } = session;
+  if (session.selection) drawIndexSet(ctx, session.selection, SELECTION_TINT, SELECTION_EDGE, cam);
+  if (session.boundary.size) drawIndexSet(ctx, session.boundary, BOUNDARY_COLOR, null, cam);
+  if (session.shapeDrag) {
+    const preview = SHAPE_FUNCTIONS[session.tool](
+      session.shapeDrag.from, session.shapeDrag.to, width, height, session.shapeFilled
+    );
+    drawIndexSet(ctx, preview, SHAPE_PREVIEW, null, cam);
+  }
+}
+
+const rotator = new NearestRotator();
+let turnedCanvas = null;
+let turnedCtx = null;
+const TEXEL_CAMERA = { zoom: 1, panX: 0, panY: 0 };
+
+function drawTurnedPicture(ctx) {
+  const { cam, width, height, dpr } = session;
+  if (!turnedCanvas) {
+    turnedCanvas = document.createElement('canvas');
+    turnedCtx = turnedCanvas.getContext('2d');
+  }
+  if (turnedCanvas.width !== width || turnedCanvas.height !== height) {
+    turnedCanvas.width = width;
+    turnedCanvas.height = height;
+  }
+  const c = turnedCtx;
+  c.imageSmoothingEnabled = false;
+  c.clearRect(0, 0, width, height);
+  // The checkerboard at one cell per texel, as the straight-on view shows it.
+  c.fillStyle = GRID_DARK;
+  c.fillRect(0, 0, width, height);
+  c.fillStyle = GRID_LIGHT;
+  for (let y = 0; y < height; y++) for (let x = (y + 1) % 2; x < width; x += 2) c.fillRect(x, y, 1, 1);
+  drawPicture(c, TEXEL_CAMERA);
+  drawMarks(c, TEXEL_CAMERA);
+  return rotator.draw(ctx, turnedCanvas, {
+    x: cam.panX * dpr,
+    y: cam.panY * dpr,
+    width: width * cam.zoom * dpr,
+    height: height * cam.zoom * dpr,
+    angle: cam.rotation,
+    cx: (session.cssWidth / 2) * dpr,
+    cy: (session.cssHeight / 2) * dpr,
+  });
 }
 
 function render() {
@@ -789,59 +870,43 @@ function render() {
   ctx.fillStyle = '#101014';
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
 
-  // The camera's angle, applied once to the context so the checkerboard,
-  // every layer, the texel grid and the tool previews all turn together.
-  // The backdrop above is outside it, so a turned view has no bare corners.
-  if (cam.rotation !== 0) {
-    ctx.translate(session.cssWidth / 2, session.cssHeight / 2);
-    ctx.rotate(cam.rotation);
-    ctx.translate(-session.cssWidth / 2, -session.cssHeight / 2);
-  }
-
-  drawGrid(ctx);
-
-  // Bottom of the stack first. Each layer's shadow is drawn immediately
-  // before that layer's own artwork, so the shadow sits under the thing
-  // casting it while still falling over everything below -- which is what
-  // a stack of cut-out sheets each casting onto the one beneath looks
-  // like.
-  for (const layer of session.layers) {
-    if (layer.opacity <= 0) continue;
-    ctx.globalAlpha = layer.opacity;
-    if (layer.shadow && layer.shadowVisible) {
-      const [r, g, b, a] = layer.shadow.color;
-      drawIndexSet(ctx, layer.shadow.indices, `rgba(${r}, ${g}, ${b}, ${a / 255})`, null);
+  // THE CAMERA'S ANGLE. Straight on, everything is drawn at whole device
+  // pixels per texel. Turned, the whole picture -- checkerboard, every
+  // layer and shadow, the selection and previews -- is composed at one
+  // texel per pixel and turned by pixelRotate.js with nearest sampling, so
+  // the turned view is still the drawing's own unblended pixels (the
+  // context's rotate() is only the no-WebGL fallback, and it blends). The
+  // per-texel grid lines are left out of a turned view: at an angle they
+  // would cut across the very pixels they are meant to outline.
+  if (cam.rotation !== 0 && drawTurnedPicture(ctx)) {
+    const pen = new PixelPen(ctx, session.dpr).begin();
+    const corner = (u, v) => {
+      const x = cam.panX + u * cam.zoom - session.cssWidth / 2;
+      const y = cam.panY + v * cam.zoom - session.cssHeight / 2;
+      const c = Math.cos(cam.rotation);
+      const s2 = Math.sin(cam.rotation);
+      return {
+        x: (session.cssWidth / 2 + x * c - y * s2) * session.dpr,
+        y: (session.cssHeight / 2 + x * s2 + y * c) * session.dpr,
+      };
+    };
+    pen.polyline([corner(0, 0), corner(width, 0), corner(width, height), corner(0, height)], GRID_EDGE);
+    pen.end();
+  } else {
+    if (cam.rotation !== 0) {
+      ctx.translate(session.cssWidth / 2, session.cssHeight / 2);
+      ctx.rotate(cam.rotation);
+      ctx.translate(-session.cssWidth / 2, -session.cssHeight / 2);
     }
-    ctx.drawImage(layer.bitmap, cam.panX, cam.panY, width * cam.zoom, height * cam.zoom);
-  }
-  ctx.globalAlpha = 1;
+    drawGrid(ctx);
+    drawPicture(ctx, cam);
 
-  // The per-texel grid, once cells are big enough to aim a single pixel at
-  // -- the same threshold CLayer and the Pierce painter already use.
-  if (cam.zoom >= GRID_MIN_CELL_PX) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let u = 0; u <= width; u++) {
-      const x = u * cam.zoom + cam.panX;
-      ctx.moveTo(x, cam.panY);
-      ctx.lineTo(x, height * cam.zoom + cam.panY);
+    // The per-texel grid, once cells are big enough to aim a single pixel at
+    // -- the same threshold CLayer and the Pierce painter already use.
+    if (cam.zoom >= GRID_MIN_CELL_PX) {
+      gridStrips(ctx, cam.panX, cam.panY, width, height, cam.zoom, 'rgba(255, 255, 255, 0.12)', session.dpr);
     }
-    for (let v = 0; v <= height; v++) {
-      const y = v * cam.zoom + cam.panY;
-      ctx.moveTo(cam.panX, y);
-      ctx.lineTo(width * cam.zoom + cam.panX, y);
-    }
-    ctx.stroke();
-  }
-
-  if (session.selection) drawIndexSet(ctx, session.selection, SELECTION_TINT, SELECTION_EDGE);
-  if (session.boundary.size) drawIndexSet(ctx, session.boundary, BOUNDARY_COLOR, null);
-  if (session.shapeDrag) {
-    const preview = SHAPE_FUNCTIONS[session.tool](
-      session.shapeDrag.from, session.shapeDrag.to, width, height, session.shapeFilled
-    );
-    drawIndexSet(ctx, preview, SHAPE_PREVIEW, null);
+    drawMarks(ctx, cam);
   }
 
   const selectionNote = session.selection ? ` · ${session.selection.size} px selected` : '';
@@ -849,8 +914,8 @@ function render() {
     `${width}×${height} · ${Math.round(cam.zoom * 100)}%${selectionNote}`;
 }
 
-function drawIndexSet(ctx, indices, fill, edge) {
-  const { cam, width } = session;
+function drawIndexSet(ctx, indices, fill, edge, cam = session.cam) {
+  const { width } = session;
   const size = cam.zoom;
   ctx.fillStyle = fill;
   for (const index of indices) {
@@ -858,13 +923,9 @@ function drawIndexSet(ctx, indices, fill, edge) {
     const v = (index - u) / width;
     const x = u * size + cam.panX;
     const y = v * size + cam.panY;
-    if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
+    if (cam === session.cam && (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight)) continue;
     ctx.fillRect(x, y, size, size);
-    if (edge && size >= 6) {
-      ctx.strokeStyle = edge;
-      ctx.lineWidth = Math.min(2, Math.max(1, size / 10));
-      ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
-    }
+    if (edge && size >= 6) cellEdge(ctx, x, y, size, Math.min(2, Math.max(1, size / 10)), edge, session.dpr);
   }
 }
 
@@ -1819,7 +1880,7 @@ function renderShadowControls() {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'pcreate-dir';
-      button.textContent = direction.label;
+      setIcon(button, direction.icon);
       button.setAttribute('aria-label', `Shadow falls ${direction.key.toUpperCase()}`);
       button.setAttribute('aria-pressed', String(session && session.shadowDirection === direction.key));
       button.addEventListener('click', () => {
@@ -1977,7 +2038,9 @@ function renderTools() {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'pcreate-tool';
-    button.textContent = tool.label;
+    const icon = createIcon(tool.icon);
+    icon.classList.add('pcreate-tool__icon');
+    button.append(icon, document.createTextNode(tool.label));
     button.dataset.tool = tool.key;
     button.setAttribute('aria-pressed', String(session.tool === tool.key));
     button.addEventListener('click', () => selectTool(tool.key));
@@ -1987,7 +2050,7 @@ function renderTools() {
   const isBrush = BRUSH_TOOLS.has(session.tool) || session.tool === 'select';
   els.pcreateBrushRow.hidden = !isBrush;
   els.pcreateBrushMenu.hidden = !isBrush || !session.brushMenuOpen;
-  els.pcreateBrushBtn.textContent = `${session.brush} × ${session.brush} ⌄`;
+  renderBrushButton(els.pcreateBrushBtn, session.brush);
   els.pcreateBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
 
   els.pcreateBrushMenu.replaceChildren();
@@ -2003,6 +2066,19 @@ function renderTools() {
       renderTools();
     });
     els.pcreateBrushMenu.appendChild(button);
+  }
+
+  // The saved sizes follow the tool: the eraser has its own favourites,
+  // shading paints with the brush and shares the brush's. Select's lasso
+  // has no brush footprint worth saving, so it gets no row.
+  els.pcreateBrushPresets.hidden = !BRUSH_TOOLS.has(session.tool);
+  if (BRUSH_TOOLS.has(session.tool)) {
+    renderBrushPresets(els.pcreateBrushPresets, {
+      key: session.tool === 'eraser' ? 'pcreateEraserPresets' : 'pcreateBrushPresets',
+      current: () => session.brush,
+      apply: (size) => { session.brush = size; session.brushMenuOpen = false; renderTools(); },
+      format: SQUARE_FORMAT,
+    });
   }
 
   els.pcreateShapeRow.hidden = !SHAPE_TOOLS.has(session.tool);
@@ -2056,7 +2132,7 @@ function renderTools() {
 // stretching left for the browser to do -- every physical pixel the wheel
 // occupies is one this code actually computed a colour for.
 function wheelDevicePixelSize() {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = effectiveDpr();
   return Math.max(1, Math.round(WHEEL_SIZE * dpr));
 }
 
@@ -2073,36 +2149,53 @@ function sizeWheelCanvas() {
   wheelBitmap = null; // stale at the old resolution -- rebuild it to match
 }
 
+// The colour a block shows, or null for a block outside the round wheel.
+// Saturation reaches 1 at the outermost ring of blocks, not at a radius no
+// block centre can sit on.
+const WHEEL_FULL = WHEEL_RADIUS - WHEEL_BLOCK / 2;
+function wheelBlockColour(bx, by) {
+  const dx = (bx + 0.5) * WHEEL_BLOCK - WHEEL_SIZE / 2;
+  const dy = (by + 0.5) * WHEEL_BLOCK - WHEEL_SIZE / 2;
+  const dist = Math.hypot(dx, dy);
+  if (dist > WHEEL_RADIUS) return null;
+  return {
+    h: dist === 0 ? 0 : (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360,
+    s: Math.min(1, dist / WHEEL_FULL),
+  };
+}
+
+// The block a hue and saturation fall in -- where the marker goes, even
+// for a colour that came from the hex field rather than from a block.
+function wheelBlockOf(h, sat) {
+  const rad = (h * Math.PI) / 180;
+  const dist = sat * WHEEL_FULL;
+  const x = WHEEL_SIZE / 2 + Math.cos(rad) * dist;
+  const y = WHEEL_SIZE / 2 + Math.sin(rad) * dist;
+  const clamp = (v) => Math.max(0, Math.min(WHEEL_BLOCKS - 1, Math.floor(v / WHEEL_BLOCK)));
+  return { bx: clamp(x), by: clamp(y) };
+}
+
 function drawWheel() {
   sizeWheelCanvas();
   if (!wheelBitmap) {
     const size = wheelDevicePixelSize();
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = effectiveDpr();
     wheelBitmap = document.createElement('canvas');
     wheelBitmap.width = size;
     wheelBitmap.height = size;
     const wctx = wheelBitmap.getContext('2d');
-    const image = wctx.createImageData(size, size);
-    const cx = size / 2;
-    const cy = size / 2;
-    const radius = WHEEL_RADIUS * dpr;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const dx = x + 0.5 - cx;
-        const dy = y + 0.5 - cy;
-        const dist = Math.hypot(dx, dy);
-        const o = (y * size + x) * 4;
-        if (dist > radius) continue; // left transparent: a round wheel on a square canvas
-        const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
-        const sat = Math.min(1, dist / radius);
-        const { r, g, b } = hsvToRgb(hue, sat, 1);
-        image.data[o] = r;
-        image.data[o + 1] = g;
-        image.data[o + 2] = b;
-        image.data[o + 3] = 255;
+    // Each block is a filled rectangle between whole device pixels, so
+    // neighbouring blocks meet exactly with no seam and no blend.
+    const edge = (i) => Math.round(i * WHEEL_BLOCK * dpr);
+    for (let by = 0; by < WHEEL_BLOCKS; by++) {
+      for (let bx = 0; bx < WHEEL_BLOCKS; bx++) {
+        const colour = wheelBlockColour(bx, by);
+        if (!colour) continue; // left transparent: a stepped round wheel on a square canvas
+        const { r, g, b } = hsvToRgb(colour.h, colour.s, 1);
+        wctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        wctx.fillRect(edge(bx), edge(by), edge(bx + 1) - edge(bx), edge(by + 1) - edge(by));
       }
     }
-    wctx.putImageData(image, 0, 0);
   }
   paintWheel();
 }
@@ -2110,39 +2203,36 @@ function drawWheel() {
 function paintWheel() {
   const canvas = els.pcreateWheelCanvas;
   const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  // Everything below this line works in the wheel's ordinary 200-unit
-  // logical space, same as before -- this transform is what maps that
-  // space onto the now device-resolution backing store, exactly the
-  // pattern the main canvas's own render() already uses.
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, WHEEL_SIZE, WHEEL_SIZE);
-  // wheelBitmap holds exactly WHEEL_SIZE*dpr physical pixels, and drawing
-  // it into a WHEEL_SIZE logical box under this dpr transform lands
-  // every one of them on exactly one physical pixel of the canvas -- a
-  // 1:1 draw with nothing for the browser to interpolate, which is what
-  // actually makes this crisp rather than merely higher-resolution.
-  ctx.drawImage(wheelBitmap, 0, 0, WHEEL_SIZE, WHEEL_SIZE);
+  const dpr = effectiveDpr();
+  // The bitmap was built at exactly this canvas's device resolution, so it
+  // is copied 1:1 -- nothing for the browser to interpolate.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(wheelBitmap, 0, 0);
   if (!session) return;
 
-  const { h, s } = session.hsv;
-  const cx = WHEEL_SIZE / 2;
-  const cy = WHEEL_SIZE / 2;
-  const rad = (h * Math.PI) / 180;
-  const dist = s * WHEEL_RADIUS;
-  const mx = cx + Math.cos(rad) * dist;
-  const my = cy + Math.sin(rad) * dist;
-
-  ctx.beginPath();
-  ctx.arc(mx, my, 6, 0, Math.PI * 2);
-  ctx.strokeStyle = '#FFFFFF';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(mx, my, 6, 0, Math.PI * 2);
-  ctx.strokeStyle = '#000000';
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  // The marker: a hard two-colour frame round the picked block.
+  const { bx, by } = wheelBlockOf(session.hsv.h, session.hsv.s);
+  const edge = (i) => Math.round(i * WHEEL_BLOCK * dpr);
+  const x0 = edge(bx);
+  const y0 = edge(by);
+  const x1 = edge(bx + 1);
+  const y1 = edge(by + 1);
+  const px = Math.max(1, Math.round(2 * dpr)); // one art pixel
+  const frame = (grow, colour) => {
+    ctx.fillStyle = colour;
+    const l = x0 - grow;
+    const t = y0 - grow;
+    const w = x1 - x0 + grow * 2;
+    const h = y1 - y0 + grow * 2;
+    ctx.fillRect(l, t, w, px);
+    ctx.fillRect(l, t + h - px, w, px);
+    ctx.fillRect(l, t, px, h);
+    ctx.fillRect(l + w - px, t, px, h);
+  };
+  frame(px * 2, '#000000');
+  frame(px, '#FFFFFF');
 }
 
 function wheelPoint(event) {
@@ -2154,19 +2244,25 @@ function wheelPoint(event) {
   };
 }
 
-// A tap outside the wheel's own circle is clamped to its edge rather than
-// ignored, so dragging slightly past the rim still reads as "fully
-// saturated at this hue" instead of doing nothing.
+// A tap picks the block under it -- exactly the colour that block shows.
+// A tap outside the wheel's round edge is pulled in to the outermost block
+// in that direction, so dragging slightly past the rim still reads as
+// "fully saturated at this hue" instead of doing nothing.
 function pickFromWheel(point) {
-  const cx = WHEEL_SIZE / 2;
-  const cy = WHEEL_SIZE / 2;
-  const dx = point.x - cx;
-  const dy = point.y - cy;
-  const dist = Math.hypot(dx, dy);
-  const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
-  const sat = Math.min(1, dist / WHEEL_RADIUS);
-  session.hsv.h = hue;
-  session.hsv.s = sat;
+  const clamp = (v) => Math.max(0, Math.min(WHEEL_BLOCKS - 1, Math.floor(v / WHEEL_BLOCK)));
+  let colour = wheelBlockColour(clamp(point.x), clamp(point.y));
+  if (!colour) {
+    const dx = point.x - WHEEL_SIZE / 2;
+    const dy = point.y - WHEEL_SIZE / 2;
+    const hue = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    for (let sat = 1; !colour && sat > 0; sat -= 0.02) {
+      const { bx, by } = wheelBlockOf(hue, sat);
+      colour = wheelBlockColour(bx, by);
+    }
+    if (!colour) colour = { h: hue, s: 1 };
+  }
+  session.hsv.h = colour.h;
+  session.hsv.s = colour.s;
   renderColorControls();
 }
 
@@ -2403,7 +2499,7 @@ function renderLayerList() {
     const kebab = document.createElement('button');
     kebab.type = 'button';
     kebab.className = 'row-btn';
-    kebab.textContent = isOpen ? '✕' : '⋮';
+    setIcon(kebab, isOpen ? 'close' : 'kebab');
     kebab.setAttribute('aria-label', isOpen ? `Close menu for ${layer.name}` : `More actions for ${layer.name}`);
     kebab.setAttribute('aria-pressed', String(isOpen));
     kebab.addEventListener('click', () => {
@@ -2424,11 +2520,17 @@ function layerRowAside(layer, indexFromTop, total) {
   const aside = document.createElement('div');
   aside.className = 'row-aside';
 
-  const action = (label, onClick, disabled = false) => {
+  const action = (label, onClick, disabled = false, icon = null) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'row-aside__btn';
-    button.textContent = label;
+    if (icon) {
+      const glyph = createIcon(icon);
+      glyph.classList.add('px-icon--lead');
+      button.append(glyph, document.createTextNode(label));
+    } else {
+      button.textContent = label;
+    }
     button.disabled = disabled;
     button.addEventListener('click', onClick);
     aside.appendChild(button);
@@ -2439,8 +2541,8 @@ function layerRowAside(layer, indexFromTop, total) {
     session.renamingLayerId = layer.id;
     renderLayerList();
   });
-  action('▲ Move up', () => moveLayer(layer.id, 1), indexFromTop === 0);
-  action('▼ Move down', () => moveLayer(layer.id, -1), indexFromTop === total - 1);
+  action('Move up', () => moveLayer(layer.id, 1), indexFromTop === 0, 'triangle-up');
+  action('Move down', () => moveLayer(layer.id, -1), indexFromTop === total - 1, 'triangle-down');
   action('Duplicate', () => duplicateLayer(layer.id), session.layers.length >= LAYER_LIMIT);
   action('Delete', () => askDeleteLayer(layer.id), session.layers.length <= 1);
 
@@ -2860,14 +2962,14 @@ function renderPaletteList() {
     });
     row.appendChild(open);
 
-    row.appendChild(smallIconButton('icon-pencil', `Rename ${palette.name}`, () => {
+    row.appendChild(smallIconButton('pencil', `Rename ${palette.name}`, () => {
       renamingPaletteName = palette.name;
       nameModalMode = 'rename-palette';
       els.pcreateNameTitle.textContent = 'Rename palette';
       els.pcreateNameInput.value = palette.name;
       els.pcreateNameModal.hidden = false;
     }));
-    row.appendChild(smallIconButton('icon-trash', `Delete ${palette.name}`, () => {
+    row.appendChild(smallIconButton('trash', `Delete ${palette.name}`, () => {
       pendingPaletteDeleteName = palette.name;
       els.pcreateDeleteMessage.textContent =
         `"${palette.name}" and its ${palette.colors.length} colour${palette.colors.length === 1 ? '' : 's'} ` +
@@ -2880,21 +2982,13 @@ function renderPaletteList() {
   }
 }
 
-// A tiny local stand-in for ui.js's iconButton(): PCreate is its own
-// module and does not reach into ui.js's private helpers, but the two
-// icons it needs (rename, delete) are already shipped pixel-art assets --
-// reusing the files keeps this visually identical without duplicating
-// ui.js's whole emoji-to-icon table for two entries.
+// A small icon button for the palette rows, drawn from the shared pixel
+// icon set (pixelIcons.js) like every other icon in the app.
 function smallIconButton(iconName, label, onClick) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'row-btn';
-  const img = document.createElement('img');
-  img.className = 'pixel-icon';
-  img.src = `icons/${iconName}.png`;
-  img.alt = '';
-  img.setAttribute('aria-hidden', 'true');
-  button.appendChild(img);
+  button.appendChild(createIcon(iconName));
   button.setAttribute('aria-label', label);
   button.title = label;
   button.addEventListener('click', (event) => {
