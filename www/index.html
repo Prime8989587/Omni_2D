@@ -272,7 +272,7 @@
 
         <button id="pxpinOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Px Pin — pin single pixels…</button>
         <button id="meshTrimOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">Mesh Trim — edit vertices &amp; trim the boundary…</button>
-        <button id="plinkOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">PLink — join separate layers at a hinge…</button>
+        <button id="pxlinkOpenBtn" class="btn btn--sm toggle-chip--wide px-pin-launch" type="button">PxLink — join separate layers at a hinge…</button>
 
         <div class="field-label-row">
           <div class="field-label">Weight tool</div>
@@ -457,7 +457,7 @@
             <button id="pierceSpreadSeamBtn" class="segmented__btn" type="button" aria-pressed="false">Seam</button>
             <button id="pierceSpreadPairBtn" class="segmented__btn" type="button" aria-pressed="false">Two layers</button>
           </div>
-          <label id="pierceSpreadPartnerRow" class="plink__anchor" hidden>
+          <label id="pierceSpreadPartnerRow" class="pxlink__anchor" hidden>
             <span>Other half</span>
             <select id="pierceSpreadPartnerSelect" class="select-input"></select>
           </label>
@@ -1099,54 +1099,54 @@
     </footer>
   </section>
 
-  <!-- ==================== PLink ====================
+  <!-- ==================== PxLink ====================
        Joins separate layers at a drawn hinge point. The same full-bleed shell
        as Mesh Trim and Px Pin. The canvas shows the scene exactly as it is
        drawn, with the chosen layers lit and everything else dimmed, so the
        joint is drawn where the layers really meet. -->
 
-  <section id="plinkScreen" class="px-pin plink" hidden>
+  <section id="pxlinkScreen" class="px-pin pxlink" hidden>
     <header class="px-pin__bar">
-      <span class="px-pin__title">PLink</span>
-      <span id="plinkStatus" class="px-pin__status"></span>
-      <button id="plinkDoneBtn" class="btn btn--sm" type="button">Done</button>
+      <span class="px-pin__title">PxLink</span>
+      <span id="pxlinkStatus" class="px-pin__status"></span>
+      <button id="pxlinkDoneBtn" class="btn btn--sm" type="button">Done</button>
     </header>
 
-    <canvas id="plinkCanvas" class="px-pin__canvas"></canvas>
+    <canvas id="pxlinkCanvas" class="px-pin__canvas"></canvas>
 
-    <footer class="px-pin__controls plink__controls">
+    <footer class="px-pin__controls pxlink__controls">
       <div class="px-pin__row-label">
         <span>Layers to join</span>
-        <button class="info-btn" type="button" data-info="plink" aria-haspopup="true" aria-expanded="false" aria-label="What does PLink do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
+        <button class="info-btn" type="button" data-info="pxlink" aria-haspopup="true" aria-expanded="false" aria-label="What does PxLink do?"><img src="icons/icon-info.png" alt="ⓘ" aria-hidden="true"></button>
       </div>
-      <div id="plinkLayerChips" class="plink__chips" role="group" aria-label="Layers to join"></div>
+      <div id="pxlinkLayerChips" class="pxlink__chips" role="group" aria-label="Layers to join"></div>
 
-      <label class="plink__anchor">
+      <label class="pxlink__anchor">
         <span>Holds still</span>
-        <select id="plinkAnchorSelect" class="select-input"></select>
+        <select id="pxlinkAnchorSelect" class="select-input"></select>
       </label>
 
-      <div class="control-row plink__actions">
-        <button id="plinkClearBtn" class="btn btn--sm btn--cancel" type="button">Clear</button>
-        <button id="plinkCreateBtn" class="btn btn--sm btn--flourish" type="button">Link</button>
+      <div class="control-row pxlink__actions">
+        <button id="pxlinkClearBtn" class="btn btn--sm btn--cancel" type="button">Clear</button>
+        <button id="pxlinkCreateBtn" class="btn btn--sm btn--flourish" type="button">Link</button>
       </div>
-      <p id="plinkHint" class="px-pin__hint"></p>
+      <p id="pxlinkHint" class="px-pin__hint"></p>
 
-      <div class="px-pin__row-label plink__list-label">
-        <span>Links in this project <b id="plinkCount">0</b></span>
+      <div class="px-pin__row-label pxlink__list-label">
+        <span>Links in this project <b id="pxlinkCount">0</b></span>
       </div>
-      <ul id="plinkList" class="scene-parts plink__list"></ul>
-      <p id="plinkListEmpty" class="list-tools__empty">No links yet — pick two or more layers, tap where they meet, then Link.</p>
+      <ul id="pxlinkList" class="scene-parts pxlink__list"></ul>
+      <p id="pxlinkListEmpty" class="list-tools__empty">No links yet — pick two or more layers, tap where they meet, then Link.</p>
     </footer>
   </section>
 
-  <div id="plinkDeleteModal" class="modal-backdrop" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="plinkDeleteTitle">
-      <h2 id="plinkDeleteTitle" class="modal__title">Delete this link?</h2>
-      <p id="plinkDeleteMessage" class="modal__text"></p>
+  <div id="pxlinkDeleteModal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pxlinkDeleteTitle">
+      <h2 id="pxlinkDeleteTitle" class="modal__title">Delete this link?</h2>
+      <p id="pxlinkDeleteMessage" class="modal__text"></p>
       <div class="modal__actions">
-        <button id="plinkDeleteConfirmBtn" class="btn btn--danger" type="button">Delete</button>
-        <button id="plinkDeleteCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
+        <button id="pxlinkDeleteConfirmBtn" class="btn btn--danger" type="button">Delete</button>
+        <button id="pxlinkDeleteCancelBtn" class="btn btn--cancel" type="button">Cancel</button>
       </div>
     </div>
   </div>

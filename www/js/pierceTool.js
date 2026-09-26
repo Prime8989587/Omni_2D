@@ -32,7 +32,6 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
-import { linkShift } from './plink.js';
 import { pierceSpreadIssue } from './pierce.js';
 import { spreadTargetOf, spreadGeometry, fullSwing } from './spread.js';
 import { SpreadMode } from './parts.js';
@@ -109,9 +108,9 @@ function layerCanvas(part) {
 function layerPlacement(part) {
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
   const offset = pinCarriageOffset(part, transforms);
-  // A PLinked layer is then brought to its link point, and is drawn there.
-  const linked = linkShift(part, transforms);
-  return { x: part.x + offset.x + linked.x, y: part.y + offset.y + linked.y };
+  // (A PxLink only welds the neighbourhood of its link point; it never moves
+  // a layer as a whole, so it adds nothing to where the layer sits.)
+  return { x: part.x + offset.x, y: part.y + offset.y };
 }
 
 // Opens on whichever layer the user came from, with the other side of the

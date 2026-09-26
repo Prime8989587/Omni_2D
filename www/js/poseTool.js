@@ -49,7 +49,6 @@ import { view } from './view.js';
 import { getSetting } from './settings.js';
 import { history } from './history.js';
 import { appState, AppState } from './state.js';
-import { isLinked, carryPoint, linkPositions, currentTransforms } from './plink.js';
 
 // A swing needs a lever. Closer to the joint than this and the angle a
 // drag describes is dominated by grid snapping rather than by the user's
@@ -246,26 +245,6 @@ function snapToCell(point) {
   return { x: Math.floor(point.x) + 0.5, y: Math.floor(point.y) + 0.5 };
 }
 
-// Where a bone's layer is SEEN to turn about, and where its tail is SEEN.
-//
-// A PLinked layer is moved after its bones have placed it -- brought to its
-// link point -- so the bone's own joint is not where the layer is drawn. A
-// layer that gives way at a link is held AT that point, and turning its bone
-// turns it about the link, not about the bone's head. Aiming the swing from
-// anywhere else would put the drawn tail somewhere other than under the
-// finger. An unlinked layer is exactly the bone's own joint and tail.
-function visibleSwing(bone) {
-  const joint = bonesStore.restWorldHead(bone);
-  const tail = bonesStore.restWorldTail(bone);
-  const part = targetPartId === null ? null : partsStore.parts.find((p) => p.id === targetPartId);
-  if (!part || !isLinked(part)) return { joint, tail };
-  const transforms = currentTransforms();
-  const held = linkPositions(transforms)
-    .find((link) => link.anchorId !== part.id && link.members.some((m) => m.partId === part.id));
-  const pivot = held ? held.members.find((m) => m.partId === part.id) : carryPoint(part, joint, transforms);
-  return { joint: { x: pivot.x, y: pivot.y }, tail: carryPoint(part, tail, transforms) };
-}
-
 export function beginPoseDrag(bone, scenePoint) {
   if (drag) return;
   const piercing = poseTarget === PoseTarget.PIERCER;
@@ -291,7 +270,7 @@ export function beginPoseDrag(bone, scenePoint) {
   // what the user is reaching for when they drag a limb.
   const grabTail = !piercing && anchorBone && anchorBone.parentId !== null;
   const anchor = anchorBone
-    ? (grabTail ? visibleSwing(anchorBone).tail : bonesStore.restWorldHead(anchorBone))
+    ? (grabTail ? bonesStore.restWorldTail(anchorBone) : bonesStore.restWorldHead(anchorBone))
     : snapToCell(scenePoint);
   drag = {
     offsetX: anchor.x - scenePoint.x,
@@ -355,7 +334,8 @@ export function updatePoseDrag(scenePoint) {
       // bone still moves only itself and its children, and the parent chain
       // still does not move -- the rule is untouched, the limb just bends
       // from the joint the way an arm does rather than sliding off it.
-      const { joint, tail } = visibleSwing(target);
+      const joint = bonesStore.restWorldHead(target);
+      const tail = bonesStore.restWorldTail(target);
       const reachX = drag.lastX - joint.x;
       const reachY = drag.lastY - joint.y;
       // Right on top of the joint there is no direction to point in, so a

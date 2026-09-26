@@ -32,9 +32,9 @@ const FALLOFF_EXPONENT = 2;
 // solver publishes through pierceState.js, so this file never imports the
 // solver, which imports THIS file).
 import { applySpread } from './spread.js';
-// And the PLink solver's correction, through a leaf for the same reason:
-// plink.js deforms linked layers through this file.
-import { plinkCorrection } from './plinkState.js';
+// And the PxLink solver's correction, through a leaf for the same reason:
+// pxlink.js deforms linked layers through this file.
+import { pxlinkCorrection } from './pxlinkState.js';
 import { localToWorld } from './layerSpace.js';
 
 export const DEFAULT_MAX_INFLUENCES = 3;
@@ -788,13 +788,13 @@ export function snapToGrid(positions) {
 // stepping has nothing to protect there. And at rest an unsnapped vertex maps
 // the texture by the identity, so the art is still drawn exactly as authored.
 //
-// A PLink point is the same situation across two layers that share no mesh
+// A PxLink point is the same situation across two layers that share no mesh
 // at all: the solver lands each layer's link point on exactly the same
 // continuous position, and rounding each layer's vertices on its own would
 // pull them apart again by up to a pixel. So the vertices around a link point
-// stay unsnapped too (plink.js marks them).
+// stay unsnapped too (pxlink.js marks them).
 export function deformVerticesSnapped(mesh, part, boneTransforms, half = null) {
-  const link = plinkCorrection(part, boneTransforms);
+  const link = pxlinkCorrection(part, boneTransforms);
   const positions = deformVertices(mesh, part, boneTransforms, half);
   const onSeam = seamVertices(mesh, part);
   const nearLink = link && link.mesh === mesh ? link.nearLink : null;
@@ -984,42 +984,42 @@ export function pinInfluence(mesh, part, radius = 0) {
 }
 
 // The deformation every consumer sees: the layer's own deformation (below),
-// then its PLink correction, if it is linked to other layers.
+// then its PxLink correction, if it is linked to other layers.
 //
-// PLink is applied HERE, and only here, so that nothing can see a linked
+// PxLink is applied HERE, and only here, so that nothing can see a linked
 // layer anywhere but where it is drawn: the renderer, Pierce's contact,
 // weight painting and every other caller of this function get the same
-// corrected geometry without knowing links exist. The solver (plink.js)
+// corrected geometry without knowing links exist. The solver (pxlink.js)
 // deforms each linked layer uncorrected, solves the joint constraint across
 // all of them, and hands back each layer's correction -- along with the
 // uncorrected positions it already computed, so they are not worked out
 // twice in one frame.
 export function deformVertices(mesh, part, boneTransforms, half = null) {
-  const link = plinkCorrection(part, boneTransforms);
+  const link = pxlinkCorrection(part, boneTransforms);
   if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms, half);
   // The solve's own uncorrected positions are the single-copy answer; one
   // half of a seam-split layer is worked out for itself.
   const base = link.mesh === mesh && link.uncorrected && half === null
     ? link.uncorrected
     : deformVerticesUncorrected(mesh, part, boneTransforms, half);
-  return applyLinkCorrection(mesh, base, link);
+  return applyLinkWelds(mesh, base, link);
 }
 
-// A PLink correction applied to a layer's deformed vertices: the rigid part
-// (translate, and rotate when the layer has more than one link) to every
-// vertex, then each weld -- a local closure that lands the layer's link point
-// EXACTLY on the shared position, fading to nothing a couple of cells away.
-function applyLinkCorrection(mesh, positions, link) {
-  const welds = link.mesh === mesh ? link.welds : [];
+// A PxLink correction applied to a layer's deformed vertices: each weld -- a
+// smooth local displacement that lands the layer's link point EXACTLY on the
+// link's meeting point, fading to nothing a few cells away. Nothing else
+// moves: vertices outside every weld are returned exactly as the layer's own
+// bones, springs, pins and V put them. (pxlink.js applies the same function
+// when it reads a link point back.)
+export function applyLinkWelds(mesh, positions, link) {
+  const welds = link && link.mesh === mesh ? link.welds : [];
+  if (welds.length === 0) return positions;
   return positions.map((p, i) => {
-    const dx = p.x - link.from.x;
-    const dy = p.y - link.from.y;
-    let x = link.to.x + dx * link.cos - dy * link.sin;
-    let y = link.to.y + dx * link.sin + dy * link.cos;
+    let { x, y } = p;
+    const vertex = mesh.vertices[i];
     for (const weld of welds) {
-      const vertex = mesh.vertices[i];
       const d = Math.hypot(vertex.u - weld.u, vertex.v - weld.v);
-      const k = smoothstep01(1 - d / weld.radius) * weld.scale;
+      const k = smoothstep01(1 - d / weld.radius);
       if (k <= 0) continue;
       x += weld.dx * k;
       y += weld.dy * k;
@@ -1028,7 +1028,7 @@ function applyLinkCorrection(mesh, positions, link) {
   });
 }
 
-// The layer's own deformation, before any PLink: bone skinning, then pins
+// The layer's own deformation, before any PxLink: bone skinning, then pins
 // pulling their neighbourhood back toward rest, then -- for a pierced layer
 // being spread -- its V. One mesh, no seams.
 export function deformVerticesUncorrected(mesh, part, boneTransforms, half = null) {

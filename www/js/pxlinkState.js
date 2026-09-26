@@ -1,30 +1,32 @@
-// The PLink solver's hook into deformation.
+// The PxLink solver's hook into deformation.
 //
 // A leaf module, like pierceState.js, and for the same reason: mesh.js has
 // to ask "how is this layer corrected by its links this frame?" from inside
-// deformVertices, and the solver that answers it (plink.js) itself imports
+// deformVertices, and the solver that answers it (pxlink.js) itself imports
 // mesh.js to deform the linked layers. Routing the question through a leaf
-// that knows neither keeps the import graph acyclic. Until plink.js
+// that knows neither keeps the import graph acyclic. Until pxlink.js
 // registers itself there is no solver, and every layer is uncorrected.
 
 let solver = null;
 
-export function registerPLinkSolver(fn) {
+export function registerPxLinkSolver(fn) {
   solver = fn;
 }
 
-// The correction PLink applies to one layer under these bone transforms, or
-// null when the layer is in no link. Shape (see plink.js):
+// The correction PxLink applies to one layer under these bone transforms, or
+// null when the layer is in no link. Shape (see pxlink.js):
 //
-//   { cos, sin, from, to }   the rigid part: p -> R(p - from) + to
-//   welds                    exact local closures at each link point
+//   welds                    exact local closures at each link point -- the
+//                            ONLY thing a link moves
+//   nearLink                 which vertices a weld reaches (left unsnapped)
 //   uncorrected, mesh        the geometry the solve already computed
-export function plinkCorrection(part, transforms) {
+export function pxlinkCorrection(part, transforms) {
   return solver && part ? solver(part, transforms) : null;
 }
 
-// A point carried by a layer's rigid PLink correction -- the whole-layer
-// motion, without the local welds. Identity for a null correction.
+// A point turned rigidly: p -> R(p - from) + to, with R the rotation by
+// (cos, sin). Identity for a null turn. The V's halves turn about their
+// hinges with it.
 export function carryByCorrection(correction, point) {
   if (!correction) return { x: point.x, y: point.y };
   const dx = point.x - correction.from.x;

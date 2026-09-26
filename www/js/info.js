@@ -42,21 +42,25 @@ const TOPICS = {
       'motion -- the tip going in and the halves parting are one number, so ' +
       'whatever deepens the contact opens the V with it.',
   },
-  plink: {
-    title: 'PLink',
+  pxlink: {
+    title: 'PxLink',
     body: 'Joins separate layers at one point, like a hinge.\n\n' +
       'Two layers imported on their own -- a hand and an arm -- have nothing ' +
       'connecting them, so when either moves a gap can open between them. A ' +
-      'PLink says where they meet. From then on they never come apart at ' +
+      'PxLink says where they meet. From then on they never come apart at ' +
       'that point, however either one moves.\n\n' +
-      'It is a HINGE, not glue: each layer still turns, bends and jiggles on ' +
-      'its own bones. They swing around the shared point, the way an elbow ' +
-      'lets the arm bend without the forearm coming off.\n\n' +
+      'It joins them AT THAT POINT and nowhere else. Each layer still ' +
+      'moves, turns, bends, jiggles and is dragged on its own bones exactly ' +
+      'as it would unlinked; only the artwork right around the point bends ' +
+      'a little to keep the two meeting. To have one layer carry another, ' +
+      'put its bone under the other\'s -- the skeleton carries, the link ' +
+      'joins.\n\n' +
       '• Pick two or more layers, tap where they meet (drag the marker to ' +
       'adjust), then Link. Three or more layers can share one point.\n' +
-      '• Holds still: which layer stays put while the others are brought to ' +
-      'it -- normally the one nearest the body. Shared: they all give way ' +
-      'equally and meet in the middle.\n' +
+      '• Holds still: whose point stays exactly where its own layer puts ' +
+      'it while the others\' points come to meet it -- normally the one ' +
+      'nearest the body. Shared: they all give way equally and meet in the ' +
+      'middle.\n' +
       '• You can have as many links as you like. Delete one and nothing ' +
       'else changes.',
   },
@@ -135,7 +139,7 @@ const TOPICS = {
       '• Two layers -- this layer is one half and another pierced layer is ' +
       'the other (an index and a middle finger imported separately).\n\n' +
       'Each half turns about its hinge (Paint regions…, then Hinges) -- the ' +
-      'same kind of fixed point a PLink is: it never moves or comes apart.\n\n' +
+      'same kind of fixed point a PxLink is: it never moves or comes apart.\n\n' +
       'Full opening is how wide the V is at its mouth when the piercer is ' +
       'at its End point. It is shut at the Dent Trigger Distance and opens ' +
       'smoothly in between, by exactly as much as the piercer has gone in -- ' +

@@ -25,7 +25,9 @@ import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPE
 import { MeshVertex, PartMesh, sanitizeWeights } from './mesh.js';
 import { sceneStore } from './scene.js';
 import { resetPierceContainment } from './pierce.js';
-import { plinkStore, serializePLinks, deserializePLinks } from './plink.js';
+import {
+  pxlinkStore, serializePxLinks, deserializePxLinks, LEGACY_PROJECT_KEY,
+} from './pxlink.js';
 
 export const PROJECT_FORMAT_VERSION = 1;
 
@@ -279,10 +281,10 @@ export function serializeProject({ copyPixels = false } = {}) {
     canvas: { width: sceneStore.width, height: sceneStore.height },
     parts: partsStore.parts.map((part) => serializePart(part, copyPixels)),
     bones: bonesStore.bones.map(serializeBone),
-    // PLink connections. Through this one function they reach every place a
+    // PxLink connections. Through this one function they reach every place a
     // project goes: Save, Load, autosave recovery, PSaver files, undo, redo
     // and restore points -- none of which had to learn what a link is.
-    plinks: serializePLinks(),
+    pxlinks: serializePxLinks(),
     selectedPartId: partsStore.selectedId,
     selectedBoneId: bonesStore.selectedId,
   };
@@ -311,8 +313,10 @@ export function applyProject(data) {
   }
   bonesStore.replaceAll((data.bones || []).map(deserializeBone), data.selectedBoneId ?? null);
   // After the layers, because a link is only kept if every layer it joins
-  // came back. A project saved before PLink existed simply has none.
-  plinkStore.replaceAll(deserializePLinks(data.plinks, partsStore.parts.map((part) => part.id)));
+  // came back. A project saved before links existed simply has none; one
+  // saved before the rename has them under the old key.
+  const links = data.pxlinks ?? data[LEGACY_PROJECT_KEY];
+  pxlinkStore.replaceAll(deserializePxLinks(links, partsStore.parts.map((part) => part.id)));
   // Loading (or undoing) teleports the skeleton; that jump is not motion
   // anyone applied, so the springs must not feel it as one.
   bonesStore.resumePhysics();

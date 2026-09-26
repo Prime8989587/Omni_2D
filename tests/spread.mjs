@@ -30,7 +30,7 @@ import {
 import {
   spreadTargetOf, spreadGeometry, fullSwing, spreadMasks, pierceTargets,
 } from '../www/js/spread.js';
-import { locateTexel, landTexel } from '../www/js/plinkState.js';
+import { locateTexel, landTexel } from '../www/js/pxlinkState.js';
 import { serializeProject, applyProject } from '../www/js/project.js';
 
 let passed = 0;
@@ -255,7 +255,7 @@ async function sweep(label, scene, halvesOf) {
   say(worstCouple < 1e-12, `${label}: the V is exactly the depth -- opening and both swings are one number`,
     `worst mismatch ${worstCouple.toExponential(1)}; at ${samples.map((r) => `${(r.open * 100).toFixed(0)}% ${r.swings.map((s) => deg(s).toFixed(1)).join('/')} deg`).join(', ')}`);
   say(worstSym < 1e-9, `${label}: symmetric -- the halves turn by equal and opposite angles`, `worst ${worstSym.toExponential(1)} rad`);
-  say(worstHinge < 1e-9, `${label}: every hinge stays exactly where it is, like a PLink point`, `worst drift ${worstHinge.toExponential(1)} px`);
+  say(worstHinge < 1e-9, `${label}: every hinge stays exactly where it is, like a PxLink point`, `worst drift ${worstHinge.toExponential(1)} px`);
   if (worstRigid > 0 || halvesOf().some((h) => h.rigid)) {
     say(worstRigid < 1e-9, `${label}: each half turns rigidly about its hinge`, `worst deviation ${worstRigid.toExponential(1)} px`);
   }

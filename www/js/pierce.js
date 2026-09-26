@@ -69,8 +69,7 @@ import {
   localToWorld, pinCarriageOffset, generateMesh, defaultDensity,
 } from './mesh.js';
 import { publishSpreadOpen } from './pierceState.js';
-import { carryByCorrection } from './plinkState.js';
-import { correctionOf } from './plink.js';
+import { carryByCorrection } from './pxlinkState.js';
 import {
   pierceTargets, spreadTargetOf, spreadGeometry, swingAt, swingAtTexel, fullSwing,
 } from './spread.js';
@@ -115,12 +114,10 @@ function regionPoints(part, transforms, which = 'pierce') {
   const region = REGIONS[which].set(part);
   if (!region || region.size === 0) return [];
   const carriage = pinCarriageOffset(part, transforms);
-  // A PLinked layer is drawn where its link puts it, so that is where its
-  // regions are touched -- the same rigid correction its mesh receives.
-  const link = correctionOf(part, transforms || undefined);
+  // (A PxLink never moves a layer as a whole -- it only welds the
+  // neighbourhood of its link point -- so it adds nothing here.)
   const key = `${part.x},${part.y},${part.rotation},${part.scale},` +
-    `${REGIONS[which].version(part)},${region.size},${carriage.x},${carriage.y}` +
-    (link ? `,${link.cos},${link.sin},${link.from.x},${link.from.y},${link.to.x},${link.to.y}` : '');
+    `${REGIONS[which].version(part)},${region.size},${carriage.x},${carriage.y}`;
   const cacheKey = `${part.id}:${which}`;
   const cached = pointsCache.get(cacheKey);
   if (cached && cached.key === key) return cached.points;
@@ -133,7 +130,7 @@ function regionPoints(part, transforms, which = 'pierce') {
     const v = Math.floor(index / part.naturalWidth);
     const world = localToWorld(part, { x: u + 0.5 - halfW, y: v + 0.5 - halfH });
     const carried = { x: world.x + carriage.x, y: world.y + carriage.y };
-    points.push(link ? carryByCorrection(link, carried) : carried);
+    points.push(carried);
   }
   pointsCache.set(cacheKey, { key, points });
   return points;
@@ -286,9 +283,7 @@ function centroidOf(points) {
 function layerCentre(part, transforms) {
   const carriage = pinCarriageOffset(part, transforms);
   const middle = localToWorld(part, { x: 0, y: 0 });
-  const carried = { x: middle.x + carriage.x, y: middle.y + carriage.y };
-  const link = correctionOf(part, transforms || undefined);
-  return link ? carryByCorrection(link, carried) : carried;
+  return { x: middle.x + carriage.x, y: middle.y + carriage.y };
 }
 
 function centroid(points) {
@@ -437,9 +432,7 @@ function dentSpan(piercer, enter, end) {
 function restPoint(part, transforms, u, v) {
   const carriage = pinCarriageOffset(part, transforms);
   const world = localToWorld(part, { x: u - part.naturalWidth / 2, y: v - part.naturalHeight / 2 });
-  const carried = { x: world.x + carriage.x, y: world.y + carriage.y };
-  const link = correctionOf(part, transforms || undefined);
-  return link ? carryByCorrection(link, carried) : carried;
+  return { x: world.x + carriage.x, y: world.y + carriage.y };
 }
 
 // A BARRIER IN A V IS TWO WALLS THAT OPEN WITH IT

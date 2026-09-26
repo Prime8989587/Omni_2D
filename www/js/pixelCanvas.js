@@ -1,7 +1,7 @@
 // Keeping a window's pixel-art canvas crisp and its touches honest.
 //
 // Every full-screen tool window that shows artwork at its own zoom -- Px Pin,
-// the Pierce painter, Mesh Trim, PLink, CLayer, PCreate -- owns a <canvas>
+// the Pierce painter, Mesh Trim, PxLink, CLayer, PCreate -- owns a <canvas>
 // and a private {zoom, panX, panY}. Each one used to carry its own copy of
 // the same few lines for both, copied from the Px Pin window, and the copy
 // was missing two things the main canvas has always had (canvas.js and
@@ -16,7 +16,7 @@
 // window resized, so the backing store kept its old size while the CSS box
 // shrank, and the browser stretched the stale bitmap to fit: every texel
 // drawn as a rectangle, measured up to 23% taller than wide in Mesh Trim
-// after picking Trim Boundary, and 7% in PLink from the moment it opened.
+// after picking Trim Boundary, and 7% in PxLink from the moment it opened.
 // Touches read a fresh bounding rect against a camera sized for the old one,
 // so they landed off the texel under the finger by the same proportion.
 // Watching the element itself catches every cause, not just the one that

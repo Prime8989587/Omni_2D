@@ -1,4 +1,4 @@
-// The PLink window: pick layers, draw where they meet, link them.
+// The PxLink window: pick layers, draw where they meet, link them.
 //
 // The same full-screen tool-window pattern as Mesh Trim and Px Pin: a private
 // camera (one finger places, two fingers pan and pinch), nothing in here
@@ -18,8 +18,8 @@ import { rasterizeTriangle } from './raster.js';
 import { sceneStore } from './scene.js';
 import { layerDrawGeometry } from './canvas.js';
 import {
-  plinkStore, sceneToTexel, defaultAnchor, distanceToArtwork, linkPositions, currentTransforms,
-} from './plink.js';
+  pxlinkStore, sceneToTexel, defaultAnchor, distanceToArtwork, linkPositions, currentTransforms,
+} from './pxlink.js';
 import { playEnter } from './transitions.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
 
@@ -47,10 +47,10 @@ function showToast(message) {
 
 function cacheElements() {
   for (const id of [
-    'plinkScreen', 'plinkCanvas', 'plinkStatus', 'plinkDoneBtn', 'plinkLayerChips',
-    'plinkAnchorSelect', 'plinkClearBtn', 'plinkCreateBtn', 'plinkHint', 'plinkList',
-    'plinkListEmpty', 'plinkCount', 'plinkOpenBtn', 'plinkDeleteModal', 'plinkDeleteMessage',
-    'plinkDeleteConfirmBtn', 'plinkDeleteCancelBtn',
+    'pxlinkScreen', 'pxlinkCanvas', 'pxlinkStatus', 'pxlinkDoneBtn', 'pxlinkLayerChips',
+    'pxlinkAnchorSelect', 'pxlinkClearBtn', 'pxlinkCreateBtn', 'pxlinkHint', 'pxlinkList',
+    'pxlinkListEmpty', 'pxlinkCount', 'pxlinkOpenBtn', 'pxlinkDeleteModal', 'pxlinkDeleteMessage',
+    'pxlinkDeleteConfirmBtn', 'pxlinkDeleteCancelBtn',
   ]) els[id] = document.getElementById(id);
 }
 
@@ -99,7 +99,7 @@ function redrawScene() {
 }
 
 function focusedMembers() {
-  const link = session && session.focusId ? plinkStore.byId(session.focusId) : null;
+  const link = session && session.focusId ? pxlinkStore.byId(session.focusId) : null;
   return link ? link.members.map((m) => m.partId) : [];
 }
 
@@ -111,7 +111,7 @@ function focusedMembers() {
 // window opens, and the layer chips, anchor row and link list rendered
 // straight afterwards take their height out of it.
 function sizeCanvas() {
-  const box = fitBackingStore(els.plinkCanvas);
+  const box = fitBackingStore(els.pxlinkCanvas);
   if (!box) return;
   session.dpr = box.dpr;
   session.viewWidth = box.width;
@@ -135,7 +135,7 @@ const toScreen = (x, y) => ({ x: session.cam.panX + x * session.cam.zoom, y: ses
 const toScene = (p) => ({ x: (p.x - session.cam.panX) / session.cam.zoom, y: (p.y - session.cam.panY) / session.cam.zoom });
 
 function canvasPoint(event) {
-  const rect = els.plinkCanvas.getBoundingClientRect();
+  const rect = els.pxlinkCanvas.getBoundingClientRect();
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
@@ -144,7 +144,7 @@ function canvasPoint(event) {
 
 function render() {
   if (!session) return;
-  const ctx = els.plinkCanvas.getContext('2d');
+  const ctx = els.pxlinkCanvas.getContext('2d');
   ctx.setTransform(session.dpr, 0, 0, session.dpr, 0, 0);
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#101014';
@@ -176,7 +176,7 @@ function render() {
     ctx.stroke();
   }
 
-  // The point being placed: the Pierce window's grip, in PLink's teal.
+  // The point being placed: the Pierce window's grip, in PxLink's teal.
   if (session.point) {
     const p = toScreen(session.point.x, session.point.y);
     ctx.beginPath();
@@ -206,14 +206,14 @@ function render() {
 }
 
 function renderChrome() {
-  const count = plinkStore.links.length;
-  els.plinkStatus.textContent = `${count} link${count === 1 ? '' : 's'} · ${Math.round(session.cam.zoom * 100)}%`;
-  els.plinkCount.textContent = String(count);
+  const count = pxlinkStore.links.length;
+  els.pxlinkStatus.textContent = `${count} link${count === 1 ? '' : 's'} · ${Math.round(session.cam.zoom * 100)}%`;
+  els.pxlinkCount.textContent = String(count);
 
   const ready = session.selected.length >= 2 && session.point;
-  els.plinkCreateBtn.disabled = !ready;
-  els.plinkClearBtn.disabled = session.selected.length === 0 && !session.point;
-  els.plinkHint.textContent = session.selected.length < 2
+  els.pxlinkCreateBtn.disabled = !ready;
+  els.pxlinkClearBtn.disabled = session.selected.length === 0 && !session.point;
+  els.pxlinkHint.textContent = session.selected.length < 2
     ? 'Pick two or more layers to join.'
     : !session.point
       ? 'Tap where they meet. Two fingers pan, pinch to zoom.'
@@ -221,7 +221,7 @@ function renderChrome() {
 }
 
 function renderChips() {
-  els.plinkLayerChips.replaceChildren();
+  els.pxlinkLayerChips.replaceChildren();
   for (const part of partsStore.partsTopFirst) {
     const chip = document.createElement('button');
     chip.type = 'button';
@@ -230,12 +230,12 @@ function renderChips() {
     chip.dataset.partId = part.id;
     chip.setAttribute('aria-pressed', String(session.selected.includes(part.id)));
     chip.addEventListener('click', () => toggleLayer(part.id));
-    els.plinkLayerChips.appendChild(chip);
+    els.pxlinkLayerChips.appendChild(chip);
   }
 }
 
 function renderAnchorSelect() {
-  const select = els.plinkAnchorSelect;
+  const select = els.pxlinkAnchorSelect;
   select.replaceChildren();
   const auto = defaultAnchor(session.selected);
   const add = (value, label) => {
@@ -256,12 +256,12 @@ function renderAnchorSelect() {
 
 // The links already in the project: name, who holds still, delete.
 function renderList() {
-  els.plinkList.replaceChildren();
-  const links = plinkStore.links;
-  els.plinkListEmpty.hidden = links.length > 0;
+  els.pxlinkList.replaceChildren();
+  const links = pxlinkStore.links;
+  els.pxlinkListEmpty.hidden = links.length > 0;
   for (const link of links) {
     const li = document.createElement('li');
-    li.className = 'plink__row';
+    li.className = 'pxlink__row';
     li.dataset.linkId = link.id;
 
     const row = document.createElement('div');
@@ -300,11 +300,11 @@ function renderList() {
     anchor.appendChild(shared);
     anchor.value = link.anchorId || '';
     anchor.addEventListener('change', () => {
-      history.run('Change PLink anchor', () => plinkStore.setAnchor(link.id, anchor.value || null));
+      history.run('Change PxLink anchor', () => pxlinkStore.setAnchor(link.id, anchor.value || null));
     });
 
     li.append(row, anchor);
-    els.plinkList.appendChild(li);
+    els.pxlinkList.appendChild(li);
   }
 }
 
@@ -362,7 +362,7 @@ function createLink() {
     : session.anchor === 'auto' ? defaultAnchor(members.map((m) => m.partId))
       : session.anchor;
   let link = null;
-  history.run('Add PLink', () => { link = plinkStore.add({ members, anchorId }); });
+  history.run('Add PxLink', () => { link = pxlinkStore.add({ members, anchorId }); });
   if (!link) { showToast('Those layers could not be linked.'); return; }
   const where = `(${session.point.x}, ${session.point.y})`;
   session.focusId = link.id;
@@ -376,21 +376,21 @@ function createLink() {
 }
 
 function askDelete(id) {
-  const link = plinkStore.byId(id);
+  const link = pxlinkStore.byId(id);
   if (!link) return;
   pendingDeleteId = id;
-  els.plinkDeleteMessage.textContent =
+  els.pxlinkDeleteMessage.textContent =
     `"${linkName(link)}" will no longer be held together at this point. ` +
     'The layers keep all their own artwork, bones and weights, and every other link stays as it is.';
-  els.plinkDeleteModal.hidden = false;
+  els.pxlinkDeleteModal.hidden = false;
 }
 
 function confirmDelete() {
   const id = pendingDeleteId;
   pendingDeleteId = null;
-  els.plinkDeleteModal.hidden = true;
+  els.pxlinkDeleteModal.hidden = true;
   if (!id) return;
-  history.run('Delete PLink', () => plinkStore.remove(id));
+  history.run('Delete PxLink', () => pxlinkStore.remove(id));
   if (session && session.focusId === id) session.focusId = null;
   renderAll();
   showToast('Link deleted.');
@@ -398,7 +398,7 @@ function confirmDelete() {
 
 function cancelDelete() {
   pendingDeleteId = null;
-  els.plinkDeleteModal.hidden = true;
+  els.pxlinkDeleteModal.hidden = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ function placeAt(point) {
 function onPointerDown(event) {
   if (!session) return;
   event.preventDefault();
-  try { els.plinkCanvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
+  try { els.pxlinkCanvas.setPointerCapture(event.pointerId); } catch { /* synthetic events */ }
   const point = canvasPoint(event);
   session.pointers.set(event.pointerId, point);
   if (session.pointers.size === 2) {
@@ -491,10 +491,10 @@ function onPointerUp(event) {
 
 // ---------------------------------------------------------------------------
 
-export function openPLink() {
+export function openPxLink() {
   cacheElements();
   if (partsStore.parts.length < 2) {
-    showToast('PLink joins two or more layers — import another layer first.');
+    showToast('PxLink joins two or more layers — import another layer first.');
     return;
   }
   session = {
@@ -512,43 +512,43 @@ export function openPLink() {
     grabOffset: { x: 0, y: 0 },
     links: [],
   };
-  els.plinkScreen.hidden = false;
-  playEnter(els.plinkScreen);
+  els.pxlinkScreen.hidden = false;
+  playEnter(els.pxlinkScreen);
   sizeCanvas();
   fitCamera();
   renderAll();
 }
 
-export function closePLink() {
+export function closePxLink() {
   if (!session) return;
   session = null;
-  els.plinkScreen.hidden = true;
+  els.pxlinkScreen.hidden = true;
 }
 
-export function isPLinkOpen() {
+export function isPxLinkOpen() {
   return session !== null;
 }
 
-export function initPLinkTool() {
+export function initPxLinkTool() {
   cacheElements();
-  if (!els.plinkScreen) return;
-  els.plinkCanvas.addEventListener('pointerdown', onPointerDown);
-  els.plinkCanvas.addEventListener('pointermove', onPointerMove);
-  els.plinkCanvas.addEventListener('pointerup', onPointerUp);
-  els.plinkCanvas.addEventListener('pointercancel', onPointerUp);
-  els.plinkDoneBtn.addEventListener('click', closePLink);
-  els.plinkClearBtn.addEventListener('click', clearDraft);
-  els.plinkCreateBtn.addEventListener('click', createLink);
-  els.plinkAnchorSelect.addEventListener('change', () => {
-    if (session) session.anchor = els.plinkAnchorSelect.value;
+  if (!els.pxlinkScreen) return;
+  els.pxlinkCanvas.addEventListener('pointerdown', onPointerDown);
+  els.pxlinkCanvas.addEventListener('pointermove', onPointerMove);
+  els.pxlinkCanvas.addEventListener('pointerup', onPointerUp);
+  els.pxlinkCanvas.addEventListener('pointercancel', onPointerUp);
+  els.pxlinkDoneBtn.addEventListener('click', closePxLink);
+  els.pxlinkClearBtn.addEventListener('click', clearDraft);
+  els.pxlinkCreateBtn.addEventListener('click', createLink);
+  els.pxlinkAnchorSelect.addEventListener('change', () => {
+    if (session) session.anchor = els.pxlinkAnchorSelect.value;
   });
-  els.plinkDeleteConfirmBtn.addEventListener('click', confirmDelete);
-  els.plinkDeleteCancelBtn.addEventListener('click', cancelDelete);
-  if (els.plinkOpenBtn) els.plinkOpenBtn.addEventListener('click', openPLink);
+  els.pxlinkDeleteConfirmBtn.addEventListener('click', confirmDelete);
+  els.pxlinkDeleteCancelBtn.addEventListener('click', cancelDelete);
+  if (els.pxlinkOpenBtn) els.pxlinkOpenBtn.addEventListener('click', openPxLink);
   // Undo, redo, a load, or a layer deleted elsewhere can change what the
   // window lists -- it follows the stores rather than its own copy.
-  plinkStore.subscribe(() => { if (session) renderAll(); });
-  watchCanvasBox(els.plinkCanvas, () => {
+  pxlinkStore.subscribe(() => { if (session) renderAll(); });
+  watchCanvasBox(els.pxlinkCanvas, () => {
     if (!session) return;
     const unmeasured = !session.viewWidth;
     sizeCanvas();
@@ -558,7 +558,7 @@ export function initPLinkTool() {
 }
 
 // Test window onto the session, and where a scene point is in the window.
-export function plinkToolDebug() {
+export function pxlinkToolDebug() {
   if (!session) return null;
   return {
     selected: [...session.selected],
@@ -566,13 +566,13 @@ export function plinkToolDebug() {
     anchor: session.anchor,
     focusId: session.focusId,
     zoom: session.cam.zoom,
-    links: plinkStore.links.length,
+    links: pxlinkStore.links.length,
   };
 }
 
-export function plinkWindowPoint(x, y) {
+export function pxlinkWindowPoint(x, y) {
   if (!session) return null;
-  const rect = els.plinkCanvas.getBoundingClientRect();
+  const rect = els.pxlinkCanvas.getBoundingClientRect();
   const p = toScreen(x, y);
   return { x: rect.left + p.x, y: rect.top + p.y };
 }

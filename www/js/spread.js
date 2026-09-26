@@ -17,13 +17,12 @@
 // Either two separate layers the artist paired (PAIR), or the two sides of
 // ONE layer split by a seam the artist drew on it (SEAM). Each half has a
 // HINGE -- a point in its own texel space, found on the deformed layer every
-// frame with the same lookup PLink uses for its link points -- and turns
-// about it. The turn is a PLink-style rigid correction {cos, sin, from, to}
-// with from = to = the hinge (carryByCorrection, the function PLink moves
-// layers with), so the hinge is a fixed point by construction: it never
-// moves and never separates, exactly like a PLink connection. And because
-// the turn is applied BEFORE PLink's own solve, a half that is PLinked to a
-// palm at its hinge stays joined to it.
+// frame with the same lookup PxLink uses for its link points -- and turns
+// about it. The turn is a rigid rotation {cos, sin, from, to} with
+// from = to = the hinge (carryByCorrection), so the hinge is a fixed point by
+// construction: it never moves and never separates, exactly like a PxLink
+// connection. And because the turn is applied BEFORE PxLink's own solve, a
+// half that is PxLinked to a palm at its hinge stays joined to it.
 //
 // WHICH WAY, AND HOW FAR
 //
@@ -47,7 +46,7 @@
 import { partsStore, SpreadMode } from './parts.js';
 import { localToWorld } from './layerSpace.js';
 import { spreadOpen } from './pierceState.js';
-import { carryByCorrection, locateTexel, landTexel } from './plinkState.js';
+import { carryByCorrection, locateTexel, landTexel } from './pxlinkState.js';
 
 // No half may swing past this. A V wider than the halves are long would
 // need an angle past a right angle, which is two fingers folding back on

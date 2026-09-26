@@ -1,69 +1,74 @@
-// PLink: drawn hinge connections between independent layers.
+// PxLink: drawn hinge connections between independent layers.
 //
 // WHAT A LINK IS
 //
 // Two layers imported separately -- a hand and an arm -- share no mesh, no
 // weights and no vertices. Nothing relates them, so when either moves on its
 // own bone a gap opens between them. That is not a bug in either layer; it is
-// the correct result of two objects with no defined relationship. A PLink is
+// the correct result of two objects with no defined relationship. A PxLink is
 // that relationship: a point, drawn on the artwork, where two or more layers
 // are to be considered JOINED.
 //
-// It is a HINGE, not a rigid attachment. The layers never part at the link
-// point, but each still turns, bends and jiggles on its own bones -- they
-// swing relative to one another AROUND the shared point, the way an elbow
-// lets forearm and upper arm swing while staying joined.
+// It holds the two pieces of artwork together AT THAT POINT, and nowhere
+// else. Each layer still turns, bends, jiggles and is dragged on its own
+// bones exactly as it would be unlinked; the link only makes sure that,
+// whatever those bones did this frame, the two link points are on the same
+// spot.
 //
-// HOW IT IS HELD -- A CONSTRAINT, SOLVED EVERY FRAME
-//
-// Not T_child = T_parent * T_offset. That would glue the child rigidly to the
-// parent's frame and turn it with the parent -- no hinge at all. Instead:
+// HOW IT IS HELD -- LIVE, EVERY FRAME, AND ONLY AT THE LINK POINT
 //
 //   1. every linked layer is deformed exactly as it would be alone -- its own
-//      bones, springs, pins, pierce -- and the link point is found on it;
-//   2. each layer is then CORRECTED, as a rigid body, so that its link points
-//      land on the shared positions: translated for one link, translated and
-//      rotated (a least-squares rigid fit) when it has several;
-//   3. repeated until every link agrees, because correcting one layer moves
-//      the target for the next -- a chain of links settles in a few passes;
-//   4. whatever a rigid correction cannot absorb -- two links pulling one
-//      layer in incompatible directions -- is closed by a WELD: a local
-//      displacement at that link point, fading out within a couple of mesh
-//      cells, so the points coincide EXACTLY whatever the constraints ask.
+//      bones, springs, pivots, pins, pierce, and whatever the drag just did
+//      -- and each link point is found on it, where it is RIGHT NOW;
+//   2. each link's meeting point is worked out from those current points
+//      alone: the anchor's own point if the link has one, else the middle
+//      of all of them;
+//   3. every member that gives way gets a WELD: a smooth local displacement
+//      centred on its link point that lands that point exactly on the
+//      meeting point and fades to nothing with distance. Everything outside
+//      it is untouched -- drawn precisely where the layer's own systems put
+//      it.
 //
-// Rigid first, so a layer keeps its own shape wherever it can; the weld only
-// ever takes up what is geometrically impossible to do rigidly.
+// There is no memory: nothing about where the layers were when the link was
+// made, or last frame, enters the solve. And there is no whole-layer
+// correction. The first version moved each follower rigidly so its link
+// point sat on the anchor's, which overrode whatever the follower's own bone
+// did to its position: a dragged follower was snapped back onto the link and
+// could only pivot about it, and a follower's spring could only show as a
+// turn about the link. That is replaced by the weld alone.
+//
+// A weld is sized to the gap it closes -- a couple of mesh cells at the
+// least, and at least two and a half times the distance its point has to
+// travel -- so closing a big gap bends the neighbourhood of the link point
+// gently instead of shearing a sliver of it, and can never fold the mesh
+// over itself (a smoothstep bump steeper than that could).
 //
 // WHO GIVES WAY
 //
-// Each link names an ANCHOR: the member that holds still while the others are
-// brought to it -- by default the layer closest to the skeleton's root, so a
-// hand is brought to its arm and not the arm to the hand. Or none: SHARED, and
-// every member gives way equally, meeting in the middle, as two free bodies at
-// a hinge do. The choice is fixed per link rather than decided by whatever is
-// being dragged, because a rule that changed with the finger would change the
-// answer the moment the finger lifted, and the follower would jump.
-//
-// A follower's own rotation is untouched -- only its position is brought to
-// the link. So whatever its bone does, it now does ABOUT the link point: a
-// hand rotated on its own bone pivots at the wrist, and a hand carried by a
-// swinging arm keeps its own angle. That is the hinge.
+// Each link names an ANCHOR: the member whose link point stays exactly where
+// its own layer puts it, the others' points coming to meet it -- by default
+// the layer closest to the skeleton's root, so a hand's wrist meets its arm's
+// and not the arm's the hand's. Or none: SHARED, and every member's point
+// moves halfway, meeting in the middle. Either way, only the neighbourhood of
+// each point moves; to make one layer CARRY another, put the second's bone
+// under the first's -- the skeleton is what carries, the link is what joins.
 //
 // WHERE THE CORRECTION IS APPLIED
 //
-// Inside mesh.js's deformVertices, through plinkState.js -- the one function
+// Inside mesh.js's deformVertices, through pxlinkState.js -- the one function
 // every consumer of a layer's geometry already calls. So the renderer, Pierce,
 // weight painting, the Free-Move drag and anything else see a linked layer
-// exactly where it is drawn, and none of them had to learn what a link is.
+// exactly where it is drawn, and none of them had to learn what a link is. A
+// linked layer that was never bound is given a mesh (identity skinning, so it
+// is drawn exactly as before) so that it, too, can be welded locally.
 
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
-import { deformVerticesUncorrected, localToWorld, pinCarriageOffset } from './mesh.js';
-import { spreadActive } from './spread.js';
-import { registerPLinkSolver, carryByCorrection, locateTexel, landTexel } from './plinkState.js';
+import {
+  deformVerticesUncorrected, applyLinkWelds, generateMesh, defaultDensity,
+} from './mesh.js';
+import { registerPxLinkSolver, locateTexel, landTexel } from './pxlinkState.js';
 
-const MAX_ITERATIONS = 32;
-const CONVERGED = 1e-9; // scene px -- far below anything the grid can show
 // A weld fades out over this many mesh cells from its link point. Two cells
 // keeps every corner of the triangle holding the link point well inside the
 // weld (at least half strength), so landing the point exactly never needs
@@ -71,6 +76,10 @@ const CONVERGED = 1e-9; // scene px -- far below anything the grid can show
 const WELD_CELLS = 2;
 // Vertices this many texels (at least) from a link point are left unsnapped.
 const UNSNAP_MIN_TEXELS = 3;
+// A weld's reach, in multiples of the distance its point has to travel. A
+// smoothstep bump folds the mesh once its reach is under 1.5 times its
+// height; two and a half keeps a clear margin and bends gently.
+const WELD_SPREAD = 2.5;
 
 // ---------------------------------------------------------------------------
 // The store
@@ -79,11 +88,11 @@ let nextLinkNumber = 1;
 
 function freshId() {
   let id;
-  do { id = `plink_${nextLinkNumber++}`; } while (plinkStore.byId(id));
+  do { id = `pxlink_${nextLinkNumber++}`; } while (pxlinkStore.byId(id));
   return id;
 }
 
-class PLinkStore {
+class PxLinkStore {
   constructor() {
     this._links = [];
     this._listeners = new Set();
@@ -197,31 +206,38 @@ class PLinkStore {
       members: link.members.map((m) => ({ partId: m.partId, u: m.u, v: m.v })),
     }));
     for (const link of this._links) {
-      const n = Number(String(link.id).replace(/^plink_/, ''));
+      const n = Number(String(link.id).replace(/^pxlink_/, ''));
       if (Number.isFinite(n) && n >= nextLinkNumber) nextLinkNumber = n + 1;
     }
     this._emit();
   }
 }
 
-export const plinkStore = new PLinkStore();
+export const pxlinkStore = new PxLinkStore();
 
 // ---------------------------------------------------------------------------
 // Persistence -- part of the project, so save, load, autosave, PSaver files
 // and undo all carry links without any of them knowing.
 
-export function serializePLinks() {
-  return plinkStore.links.map((link) => ({
+export function serializePxLinks() {
+  return pxlinkStore.links.map((link) => ({
     id: link.id,
     anchorId: link.anchorId,
     members: link.members.map((m) => ({ partId: m.partId, u: m.u, v: m.v })),
   }));
 }
 
+// Projects saved before the tool was named PxLink carry their links under its
+// old name -- the project key and each link's id prefix. They are read the
+// same way, so renaming the tool loses nobody's work; they are written back
+// under the new name on the next save.
+export const LEGACY_PROJECT_KEY = 'plinks';
+const LEGACY_ID = /^plink_/;
+
 // A link from a file is outside data: every field is checked, and a link that
 // fails is dropped rather than trusted. Links to layers the project does not
 // have are pruned the same way a deleted layer's would be.
-export function deserializePLinks(data, partIds) {
+export function deserializePxLinks(data, partIds) {
   const live = new Set(partIds);
   const links = [];
   for (const raw of Array.isArray(data) ? data : []) {
@@ -231,7 +247,7 @@ export function deserializePLinks(data, partIds) {
     const unique = [...new Map(members.map((m) => [m.partId, m])).values()];
     if (unique.length < 2) continue;
     const anchorId = unique.some((m) => m.partId === raw.anchorId) ? raw.anchorId : null;
-    links.push({ id: raw.id, anchorId, members: unique });
+    links.push({ id: raw.id.replace(LEGACY_ID, 'pxlink_'), anchorId, members: unique });
   }
   return links;
 }
@@ -239,33 +255,36 @@ export function deserializePLinks(data, partIds) {
 // ---------------------------------------------------------------------------
 // Geometry: where a layer's point is, and back
 
-// A layer's geometry as the renderer draws it, before PLink: vertex
-// positions, and the texel coordinates they carry. The same decision the
-// renderer makes -- a bound layer, or a pierced one whose V is open, through
-// its mesh, anything else as its plain quad -- so the solve works on what is
-// actually drawn.
+// A linked layer is always drawn through a mesh, because a weld is a local
+// bend and a plain quad has nothing between its corners to bend. A layer that
+// was never bound gets the same unbound mesh Pierce gives a pierced layer:
+// no bind pose, no weights, so skinning is the identity and it is drawn
+// exactly as its quad was. Binding it later replaces the mesh as usual.
+export function ensureLinkMesh(part) {
+  if (!part.mesh) part.mesh = generateMesh(part, defaultDensity(part));
+  return part.mesh;
+}
+
+// A layer's geometry as the renderer draws it, before PxLink: vertex
+// positions -- its own bones, springs, pins and V, nothing else -- and the
+// texel coordinates they carry.
 function layerGeometry(part, transforms) {
-  const mesh = part.mesh;
-  if (mesh && (mesh.isBound || spreadActive(part))) {
-    return {
-      mesh,
-      positions: deformVerticesUncorrected(mesh, part, transforms),
-      uvs: mesh.vertices,
-      triangles: mesh.triangles,
-    };
-  }
-  const w = part.naturalWidth;
-  const h = part.naturalHeight;
-  const uvs = [{ u: 0, v: 0 }, { u: w, v: 0 }, { u: w, v: h }, { u: 0, v: h }];
+  const mesh = ensureLinkMesh(part);
   return {
-    mesh: null,
-    positions: uvs.map((t) => localToWorld(part, { x: t.u - w / 2, y: t.v - h / 2 })),
-    uvs,
-    triangles: [0, 1, 3, 1, 2, 3],
+    mesh,
+    positions: deformVerticesUncorrected(mesh, part, transforms),
+    uvs: mesh.vertices,
+    triangles: mesh.triangles,
   };
 }
 
-// The triangle a texel point sits in, and where it lands -- plinkState.js's
+// A layer's positions with its welds applied -- what is drawn (mesh.js's
+// own function, so the two can never disagree).
+function welded(geometry, correction) {
+  return applyLinkWelds(geometry.mesh, geometry.positions, correction);
+}
+
+// The triangle a texel point sits in, and where it lands -- pxlinkState.js's
 // locateTexel/landTexel, the same two functions a pierced half uses to find
 // its hinge.
 function locate(geometry, u, v) {
@@ -281,10 +300,7 @@ function landing(geometry, located) {
 // on each layer's artwork. Nearest triangle, extended, as above.
 export function sceneToTexel(part, point, transforms = currentTransforms()) {
   const geometry = layerGeometry(part, transforms);
-  const correction = solveFor(transforms).get(part.id) || null;
-  const positions = correction
-    ? geometry.positions.map((p) => carryByCorrection(correction, p))
-    : geometry.positions;
+  const positions = welded(geometry, solveFor(transforms).get(part.id) || null);
   const { uvs, triangles } = geometry;
   let best = null;
   let bestOutside = Infinity;
@@ -328,30 +344,6 @@ export function distanceToArtwork(part, u, v) {
 
 // ---------------------------------------------------------------------------
 // The solve
-
-const IDENTITY = Object.freeze({ cos: 1, sin: 0, from: { x: 0, y: 0 }, to: { x: 0, y: 0 } });
-
-// Least-squares rigid fit of source points onto target points (2D Kabsch):
-// the rotation and translation that best carry one set onto the other. One
-// pair is a pure translation -- a single link leaves the layer's rotation to
-// its own bones, which is exactly what makes it a hinge.
-function rigidFit(pairs) {
-  if (pairs.length === 0) return IDENTITY;
-  let ax = 0, ay = 0, bx = 0, by = 0;
-  for (const { from, to } of pairs) { ax += from.x; ay += from.y; bx += to.x; by += to.y; }
-  ax /= pairs.length; ay /= pairs.length; bx /= pairs.length; by /= pairs.length;
-  if (pairs.length === 1) return { cos: 1, sin: 0, from: { x: ax, y: ay }, to: { x: bx, y: by } };
-  let dot = 0;
-  let cross = 0;
-  for (const { from, to } of pairs) {
-    const fx = from.x - ax, fy = from.y - ay;
-    const tx = to.x - bx, ty = to.y - by;
-    dot += fx * tx + fy * ty;
-    cross += fx * ty - fy * tx;
-  }
-  const angle = Math.hypot(dot, cross) < 1e-12 ? 0 : Math.atan2(cross, dot);
-  return { cos: Math.cos(angle), sin: Math.sin(angle), from: { x: ax, y: ay }, to: { x: bx, y: by } };
-}
 
 // The welds for one layer: a smooth bump of displacement at each link point,
 // sized so that every link point lands EXACTLY where its link wants it.
@@ -405,7 +397,7 @@ function solveWelds(mesh, sites) {
     const dx = rows[r][n];
     const dy = rows[r][n + 1];
     if (Math.hypot(dx, dy) < 1e-12) return;
-    welds.push({ u: site.member.u, v: site.member.v, dx, dy, radius: site.radius, scale: 1 });
+    welds.push({ u: site.member.u, v: site.member.v, dx, dy, radius: site.radius });
   });
   return welds;
 }
@@ -437,7 +429,7 @@ let cacheStamp = '';
 let partsVersion = 0;
 
 function stamp() {
-  return `${plinkStore.version}|${partsVersion}`;
+  return `${pxlinkStore.version}|${partsVersion}`;
 }
 
 export function currentTransforms() {
@@ -445,7 +437,7 @@ export function currentTransforms() {
 }
 
 // Every linked layer's correction under these transforms: Map partId ->
-// { cos, sin, from, to, welds, nearLink, uncorrected, mesh }.
+// { welds, nearLink, uncorrected, mesh }.
 function solveFor(transforms) {
   const key = transforms || NO_BONES;
   // A scene with no bones hands every frame the same shared empty set, so
@@ -465,12 +457,13 @@ function solveFor(transforms) {
 export function solve(transforms) {
   const result = new Map();
   const partsById = new Map(partsStore.parts.map((part) => [part.id, part]));
-  const links = plinkStore.links
+  const links = pxlinkStore.links
     .map((link) => ({ ...link, members: link.members.filter((m) => partsById.has(m.partId)) }))
     .filter((link) => link.members.length >= 2);
   if (links.length === 0) return result;
 
-  // 1. Each linked layer deformed on its own, and its link points found.
+  // 1. Each linked layer exactly as its own systems put it this frame, and
+  //    its link points found on it.
   const geometry = new Map();
   for (const link of links) {
     for (const member of link.members) {
@@ -485,91 +478,62 @@ export function solve(transforms) {
     return located ? { located, at: landing(g, located) } : null;
   }));
 
-  // 2-3. Rigid corrections, iterated until every link agrees.
-  const corrections = new Map([...geometry.keys()].map((id) => [id, IDENTITY]));
-  const carry = (id, p) => carryByCorrection(corrections.get(id), p);
-  const targetOf = (link, k) => {
+  // 2. Each link's meeting point, from those current points alone: the
+  //    anchor's own point, or the middle of all of them. No iteration is
+  //    needed -- every weld below lands its point EXACTLY, anchored points
+  //    included (held at zero), so one pass is already the answer.
+  const targets = links.map((link, k) => {
     const pts = points[k];
     const anchorIndex = link.members.findIndex((m) => m.partId === link.anchorId);
-    if (anchorIndex >= 0 && pts[anchorIndex]) return carry(link.anchorId, pts[anchorIndex].at);
+    if (anchorIndex >= 0 && pts[anchorIndex]) return pts[anchorIndex].at;
     let x = 0, y = 0, n = 0;
-    link.members.forEach((m, i) => {
-      if (!pts[i]) return;
-      const p = carry(m.partId, pts[i].at);
-      x += p.x; y += p.y; n++;
-    });
+    for (const p of pts) { if (!p) continue; x += p.at.x; y += p.at.y; n++; }
     return n ? { x: x / n, y: y / n } : null;
-  };
+  });
 
-  let targets = [];
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    targets = links.map((link, k) => targetOf(link, k));
-    // Each layer fitted to the links it GIVES WAY in -- not the ones it
-    // anchors, where by definition it holds still.
-    for (const id of geometry.keys()) {
-      const pairs = [];
-      links.forEach((link, k) => {
-        if (link.anchorId === id || !targets[k]) return;
-        const i = link.members.findIndex((m) => m.partId === id);
-        if (i < 0 || !points[k][i]) return;
-        pairs.push({ from: points[k][i].at, to: targets[k] });
-      });
-      corrections.set(id, rigidFit(pairs));
-    }
-    let worst = 0;
-    links.forEach((link, k) => {
-      const target = targetOf(link, k);
-      if (!target) return;
-      link.members.forEach((m, i) => {
-        if (!points[k][i]) return;
-        const p = carry(m.partId, points[k][i].at);
-        worst = Math.max(worst, Math.hypot(p.x - target.x, p.y - target.y));
-      });
-    });
-    if (worst < CONVERGED) break;
-  }
-  targets = links.map((link, k) => targetOf(link, k));
-
-  // 4. Whatever the rigid fit could not do, a weld does exactly.
+  // 3. A weld at every link point that has to move, sized to how far.
   for (const [id, g] of geometry) {
     const part = partsById.get(id);
-    const cellU = g.mesh ? part.naturalWidth / Math.max(1, g.mesh.cols) : part.naturalWidth;
-    const cellV = g.mesh ? part.naturalHeight / Math.max(1, g.mesh.rows) : part.naturalHeight;
+    const cellU = part.naturalWidth / Math.max(1, g.mesh.cols || 1);
+    const cellV = part.naturalHeight / Math.max(1, g.mesh.rows || 1);
     const radius = Math.max(UNSNAP_MIN_TEXELS, WELD_CELLS * Math.hypot(cellU, cellV));
-    // Every link point on this layer, with how far it still is from where
-    // its link wants it -- zero where the layer anchors, or where the rigid
-    // fit already put it. Zeros are kept: a weld must not drag a point that
-    // is already right, so those points are held by the same solve.
+    const scale = Math.max(1e-6, part.scale || 1);
+    // Every link point on this layer, with how far it is from its link's
+    // meeting point -- zero where the layer anchors. Zeros are kept: a weld
+    // must not drag a point that is already right, so those points are held
+    // by the same solve.
     const sites = [];
     links.forEach((link, k) => {
       const i = link.members.findIndex((m) => m.partId === id);
       if (i < 0 || !points[k][i]) return;
-      const at = carry(id, points[k][i].at);
+      const { at, located } = points[k][i];
       const target = targets[k] || at;
       const member = link.members[i];
-      const located = points[k][i].located;
+      const dx = target.x - at.x;
+      const dy = target.y - at.y;
       // A point drawn just past the layer's edge is carried by the nearest
       // triangle extended, whose corners can sit further off than a couple
-      // of cells. The zone around the point always takes in that whole
-      // triangle, so the weld reaches it and none of it is snapped.
-      let reach = radius;
-      if (g.mesh) {
-        for (const vi of located.ids) {
-          const t = g.mesh.vertices[vi];
-          reach = Math.max(reach, 1.5 * Math.hypot(t.u - member.u, t.v - member.v));
-        }
+      // of cells: the weld always takes in that whole triangle.
+      let hold = radius;
+      for (const vi of located.ids) {
+        const t = g.mesh.vertices[vi];
+        hold = Math.max(hold, 1.5 * Math.hypot(t.u - member.u, t.v - member.v));
       }
-      sites.push({ member, located, radius: reach, dx: target.x - at.x, dy: target.y - at.y });
+      // And it reaches further the further the point has to go -- WELD_SPREAD
+      // times the distance, in this layer's texels -- so it bends, never
+      // folds.
+      const reach = Math.max(hold, WELD_SPREAD * Math.hypot(dx, dy) / scale);
+      sites.push({ member, located, radius: reach, hold, dx, dy });
     });
-    const welds = g.mesh ? solveWelds(g.mesh, sites) : [];
-    const nearLink = g.mesh
-      ? g.mesh.vertices.map((t) => sites.some(({ member: a, radius: r }) => Math.hypot(t.u - a.u, t.v - a.v) <= r))
-      : null;
-    const c = corrections.get(id);
-    result.set(id, {
-      cos: c.cos, sin: c.sin, from: c.from, to: c.to,
-      welds, nearLink, uncorrected: g.mesh ? g.positions : null, mesh: g.mesh,
-    });
+    const welds = solveWelds(g.mesh, sites);
+    // The vertices left unsnapped, so the members' link points land on the
+    // very same spot rather than each rounded its own way: the fixed
+    // neighbourhood of each point, NOT the whole reach. The wider bend steps
+    // in whole pixels like the rest of the layer -- and a zone that grew and
+    // shrank with the gap would flip vertices between rounded and unrounded
+    // mid-drag, a half-pixel shimmer at its edge.
+    const nearLink = g.mesh.vertices.map((t) => sites.some(({ member: a, hold }) => Math.hypot(t.u - a.u, t.v - a.v) <= hold));
+    result.set(id, { welds, nearLink, uncorrected: g.positions, mesh: g.mesh });
   }
   return result;
 }
@@ -579,47 +543,12 @@ export function solve(transforms) {
 
 // The registered hook: mesh.js calls this from deformVertices.
 function correctionFor(part, transforms) {
-  if (plinkStore.links.length === 0 || !part) return null;
+  if (pxlinkStore.links.length === 0 || !part) return null;
   return solveFor(transforms).get(part.id) || null;
 }
 
 export function isLinked(part) {
-  return Boolean(part) && plinkStore.links.some((link) => link.members.some((m) => m.partId === part.id));
-}
-
-// A scene point carried by a layer's current PLink correction -- for code
-// that places a layer's own points without going through its mesh: Pierce's
-// painted regions, the Free-Move drag's pivot, the Px Pin window.
-export function carryPoint(part, point, transforms = currentTransforms()) {
-  if (!isLinked(part)) return { x: point.x, y: point.y };
-  return carryByCorrection(solveFor(transforms).get(part.id) || null, point);
-}
-
-// A layer's rigid PLink correction under these transforms, or null when it
-// has no links -- for code that caches scene points and needs to know when
-// the correction has changed underneath it.
-export function correctionOf(part, transforms = currentTransforms()) {
-  if (!isLinked(part)) return null;
-  return solveFor(transforms).get(part.id) || null;
-}
-
-// How far PLink has shifted a layer, taken at its centre: for the full-screen
-// windows (Px Pin, Pierce) that draw each layer as a flat, unrotated bitmap
-// at its bones' carriage. Zero for a layer with no links.
-export function linkShift(part, transforms = currentTransforms()) {
-  if (!isLinked(part)) return { x: 0, y: 0 };
-  const carriage = pinCarriageOffset(part, transforms);
-  const centre = localToWorld(part, { x: 0, y: 0 });
-  const at = { x: centre.x + carriage.x, y: centre.y + carriage.y };
-  const moved = carryPoint(part, at, transforms);
-  return { x: moved.x - at.x, y: moved.y - at.y };
-}
-
-// The quad an UNBOUND linked layer is drawn as, corrected: the renderer's quad
-// path has no mesh for deformVertices to correct, so it asks here.
-export function correctQuad(part, corners, transforms) {
-  const correction = correctionFor(part, transforms);
-  return correction ? corners.map((p) => carryByCorrection(correction, p)) : corners;
+  return Boolean(part) && pxlinkStore.links.some((link) => link.members.some((m) => m.partId === part.id));
 }
 
 // Where every link point is right now, per member, after the solve -- for the
@@ -628,7 +557,7 @@ export function linkPositions(transforms = currentTransforms()) {
   const out = [];
   const partsById = new Map(partsStore.parts.map((part) => [part.id, part]));
   const solved = solveFor(transforms);
-  for (const link of plinkStore.links) {
+  for (const link of pxlinkStore.links) {
     const members = [];
     for (const member of link.members) {
       const part = partsById.get(member.partId);
@@ -636,30 +565,8 @@ export function linkPositions(transforms = currentTransforms()) {
       const g = layerGeometry(part, transforms);
       const located = locate(g, member.u, member.v);
       if (!located) continue;
-      const c = solved.get(part.id);
-      let p = landing(g, located);
-      if (c) {
-        // The corrected landing: the rigid part, plus the welds evaluated at
-        // the three corners of the triangle the point sits in.
-        const corrected = located.ids.map((vi) => {
-          let q = carryByCorrection(c, g.positions[vi]);
-          if (g.mesh) {
-            for (const weld of c.welds) {
-              const t = g.mesh.vertices[vi];
-              const d = Math.hypot(t.u - weld.u, t.v - weld.v);
-              const x = Math.max(0, Math.min(1, 1 - d / weld.radius));
-              const k = x * x * (3 - 2 * x) * weld.scale;
-              q = { x: q.x + weld.dx * k, y: q.y + weld.dy * k };
-            }
-          }
-          return q;
-        });
-        const [l0, l1, l2] = located.bary;
-        p = {
-          x: l0 * corrected[0].x + l1 * corrected[1].x + l2 * corrected[2].x,
-          y: l0 * corrected[0].y + l1 * corrected[1].y + l2 * corrected[2].y,
-        };
-      }
+      // Where the point is drawn: its triangle's corners with the welds on.
+      const p = landing({ positions: welded(g, solved.get(part.id) || null) }, located);
       members.push({ partId: part.id, x: p.x, y: p.y });
     }
     out.push({ id: link.id, anchorId: link.anchorId, members });
@@ -667,13 +574,13 @@ export function linkPositions(transforms = currentTransforms()) {
   return out;
 }
 
-export function initPLink() {
-  registerPLinkSolver(correctionFor);
+export function initPxLink() {
+  registerPxLinkSolver(correctionFor);
   // Any change to any layer -- moved, re-bound, re-meshed, pins, pierce
   // regions -- can move a link point, so the solve cache is keyed on it.
   partsStore.subscribe(() => {
     partsVersion++;
     // A deleted layer takes its links with it, and only its links.
-    plinkStore.prune(partsStore.parts.map((part) => part.id));
+    pxlinkStore.prune(partsStore.parts.map((part) => part.id));
   });
 }
