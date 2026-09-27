@@ -65,6 +65,19 @@ export function watchCanvasBox(canvas, onChange) {
   window.addEventListener('resize', changed);
 }
 
+// A tool window's canvas changes size under its camera whenever the rows
+// below it do -- a tool with a brush row picked, a hint appearing -- and
+// the camera, fitted once when the window opened, used to stay put: the
+// artwork slid off-centre and could end up half out of view (Mesh Trim's
+// layer lost its bottom third the moment Trim Boundary was chosen). This
+// keeps whatever was at the centre of the canvas at its centre, on whole
+// device pixels, so a resize never moves the work out from under the user.
+export function keepCentred(cam, before, after, dpr = 1) {
+  if (!before.width || !before.height) return;
+  cam.panX = Math.round((cam.panX + (after.width - before.width) / 2) * dpr) / dpr;
+  cam.panY = Math.round((cam.panY + (after.height - before.height) / 2) * dpr) / dpr;
+}
+
 // Settles a camera onto the device-pixel grid, holding the screen point
 // (anchorX, anchorY) still: zoom becomes a whole number of device pixels per
 // scene pixel (when a scene pixel is at least one device pixel -- below that

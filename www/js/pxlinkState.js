@@ -24,26 +24,13 @@ export function pxlinkCorrection(part, transforms) {
   return solver && part ? solver(part, transforms) : null;
 }
 
-// A point turned rigidly: p -> R(p - from) + to, with R the rotation by
-// (cos, sin). Identity for a null turn. The V's halves turn about their
-// hinges with it.
-export function carryByCorrection(correction, point) {
-  if (!correction) return { x: point.x, y: point.y };
-  const dx = point.x - correction.from.x;
-  const dy = point.y - correction.from.y;
-  return {
-    x: correction.to.x + dx * correction.cos - dy * correction.sin,
-    y: correction.to.y + dx * correction.sin + dy * correction.cos,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Where a texel point is on a deformed layer
 //
-// A link point, and a pierced half's hinge, are both stored in a layer's own
-// texel space and have to be found on the layer however its bones, pins and
-// springs have bent it this frame. Both use these two functions -- one rule
-// for "where is this point of the artwork right now", in one place.
+// A link point is stored in a layer's own texel space and has to be found on
+// the layer however its bones, pins and springs have bent it this frame.
+// These two functions are the one rule for "where is this point of the
+// artwork right now", in one place.
 
 function barycentric(a, b, c, u, v) {
   const den = (b.v - c.v) * (a.u - c.u) + (c.u - b.u) * (a.v - c.v);

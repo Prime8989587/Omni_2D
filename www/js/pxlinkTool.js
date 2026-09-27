@@ -22,9 +22,10 @@ import {
   pxlinkStore, sceneToTexel, defaultAnchor, distanceToArtwork, linkPositions, currentTransforms,
 } from './pxlink.js';
 import { playEnter } from './transitions.js';
-import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
 import { setIcon } from './pixelIcons.js';
 import { noteToolUsed } from './recentTools.js';
+import { showToast } from './toast.js';
 
 const TEAL = '#2EE6C8';
 const HANDLE_RADIUS = 9;
@@ -36,17 +37,8 @@ const FAR_FROM_ART_TEXELS = 2;
 
 const els = {};
 let session = null;
-let toastTimer = null;
 let pendingDeleteId = null;
 
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  if (!toast) return;
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 4000);
-}
 
 function cacheElements() {
   for (const id of [
@@ -213,7 +205,7 @@ function renderChrome() {
   els.pxlinkHint.textContent = session.selected.length < 2
     ? 'Pick two or more layers to join.'
     : !session.point
-      ? 'Tap where they meet. Two fingers pan, pinch to zoom.'
+      ? 'Tap where they meet, on the artwork. Two fingers pan, pinch to zoom.'
       : 'Drag the marker onto the joint, then Link.';
 }
 
@@ -406,9 +398,30 @@ function cancelDelete() {
 const snapHalf = (value) => Math.round(value * 2) / 2;
 const tidy = (value) => Math.round(value * 1e6) / 1e6;
 
+// A joint only lands on artwork: on (or at the edge of) an opaque pixel of
+// one of the layers being joined, or of any visible layer before any are
+// chosen. A tap on empty space places nothing, and a drag carried off the
+// artwork leaves the marker at the last spot that was on it -- the same
+// rule every drawing tool follows (artwork.js).
+function onArtwork(scene) {
+  const transforms = currentTransforms();
+  const ids = session.selected.length
+    ? session.selected
+    : partsStore.parts.filter((part) => part.visible).map((part) => part.id);
+  for (const id of ids) {
+    const part = partById(id);
+    if (!part) continue;
+    const texel = sceneToTexel(part, scene, transforms);
+    if (texel && part.touchesArtwork(texel.u, texel.v)) return true;
+  }
+  return false;
+}
+
 function placeAt(point) {
   const scene = toScene(point);
-  session.point = { x: snapHalf(scene.x), y: snapHalf(scene.y) };
+  const snapped = { x: snapHalf(scene.x), y: snapHalf(scene.y) };
+  if (!onArtwork(snapped)) return;
+  session.point = snapped;
   render();
 }
 
@@ -549,8 +562,10 @@ export function initPxLinkTool() {
   watchCanvasBox(els.pxlinkCanvas, () => {
     if (!session) return;
     const unmeasured = !session.viewWidth;
+    const before = { width: session.viewWidth, height: session.viewHeight };
     sizeCanvas();
     if (unmeasured) fitCamera();
+    else keepCentred(session.cam, before, { width: session.viewWidth, height: session.viewHeight }, session.dpr);
     render();
   });
 }

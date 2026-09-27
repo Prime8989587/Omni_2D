@@ -31,8 +31,9 @@ import { pinCarriageOffset } from './mesh.js';
 import { getSetting } from './settings.js';
 import { haptic } from './haptics.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
-import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
 import { noteToolUsed } from './recentTools.js';
+import { showToast } from './toast.js';
 
 const ACCENT = '#FF2E93';
 const MAX_ZOOM = 64; // css px per scene px -- far past single-pixel work
@@ -41,7 +42,6 @@ const GRID_MIN_CELL_PX = 12; // draw the texel grid once cells are this big
 
 const els = {};
 let session = null;
-let toastTimer = null;
 
 function cacheElements() {
   for (const id of [
@@ -55,14 +55,6 @@ function cacheElements() {
   }
 }
 
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  if (!toast) return;
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 4000);
-}
 
 // ---------------------------------------------------------------------------
 // Picker
@@ -339,7 +331,11 @@ function texelAt(point) {
   return { u, v };
 }
 
-// The brush's square of texel indices, centred on (u, v).
+// The brush's square of texel indices, centred on (u, v) -- only the ones
+// that are artwork. A brush overhanging the edge of the layer pins the
+// part of it that is on the layer and nothing past it (artwork.js), so a
+// stroke run off the silhouette, or begun outside it, registers nothing
+// there.
 function brushIndices(u, v) {
   const size = session.brush;
   const origin = Math.floor((size - 1) / 2);
@@ -347,7 +343,7 @@ function brushIndices(u, v) {
   for (let dv = 0; dv < size; dv++) {
     for (let du = 0; du < size; du++) {
       const index = session.above.texelIndex(u - origin + du, v - origin + dv);
-      if (index >= 0) indices.push(index);
+      if (index >= 0 && session.above.isOpaqueIndex(index)) indices.push(index);
     }
   }
   return indices;
@@ -563,8 +559,10 @@ export function initPxPin() {
   watchCanvasBox(els.pxpinCanvas, () => {
     if (!session) return;
     const unmeasured = !session.cssWidth;
+    const before = { width: session.cssWidth, height: session.cssHeight };
     sizeCanvas();
     if (unmeasured) fitCamera();
+    else keepCentred(session.cam, before, { width: session.cssWidth, height: session.cssHeight }, session.dpr);
     render();
   });
 }

@@ -35,11 +35,13 @@ import { contentBounds, cropPixels } from './importer.js';
 import { getSetting, setSetting } from './settings.js';
 import { playEnter } from './transitions.js';
 import { pxlinkStore } from './pxlink.js';
-import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
 import { noteToolUsed } from './recentTools.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { PixelPen } from './pixelDraw.js';
 import { debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
+import { showToast } from './toast.js';
+import { opaqueIndex, pointOnArtwork } from './artwork.js';
 
 const WIRE_COLOR = 'rgba(255, 46, 147, 0.75)';
 const VERTEX_COLOR = '#FF2E93';
@@ -50,17 +52,8 @@ const MAX_BRUSH = 10; // the biggest square one touch-point of the boundary brus
 
 const els = {};
 let session = null;
-let toastTimer = null;
 let exitCallback = () => {};
 
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  if (!toast) return;
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 4000);
-}
 
 function cacheElements() {
   for (const id of [
@@ -204,10 +197,12 @@ function renderChrome() {
     : 'Trim onto a copy';
 
   els.meshTrimHint.textContent = {
-    add: 'Tap inside the mesh to insert a vertex there. Two fingers pan, pinch to zoom.',
-    move: 'Drag a vertex to move it. It snaps to whole pixels.',
+    add: 'Tap on the artwork to insert a vertex there. Two fingers pan, pinch to zoom.',
+    move: 'Drag a vertex to move it, over the artwork. It snaps to whole pixels.',
     remove: 'Tap a vertex to select it, then Remove. The hole is re-triangulated.',
-    boundary: 'Draw a closed loop around what you want to KEEP, then Trim.',
+    boundary: session.picking
+      ? 'Tap the piece to KEEP. Your line and the artwork’s own edge close it off.'
+      : 'Draw on the artwork around what you want to KEEP — or right across it, edge to edge — then Trim.',
   }[session.tool];
 }
 
@@ -274,6 +269,7 @@ function onPointerDown(event) {
   session.pinch = null;
 
   const texel = texelAt(point);
+  if (session.picking) { pickPiece(texel); return; }
   if (session.tool === 'boundary') { beginBoundaryStroke(texel); return; }
 
   const hit = vertexAt(session.part.mesh, texel.u, texel.v, hitRadius(session.part.mesh, session.part));
@@ -289,6 +285,10 @@ function onPointerDown(event) {
     return;
   }
   if (session.tool === 'add') {
+    // On the artwork only, like every other tool that marks a layer
+    // (artwork.js): a vertex out on the transparent margin has nothing to
+    // carry.
+    if (!onArtwork(texel)) { showToast('that point is not on the artwork'); return; }
     const result = addVertex(session.part.mesh, session.part, texel.u, texel.v);
     if (!result.ok) { showToast(result.reason); return; }
     session.selected = result.index;
@@ -322,6 +322,9 @@ function onPointerMove(event) {
   const texel = texelAt(point);
   if (session.tool === 'boundary') { extendBoundaryStroke(texel); return; }
   if (session.tool === 'move' && session.dragging !== null) {
+    // Dragged off the artwork, the vertex waits at the last spot that was
+    // on it and follows again once the finger comes back.
+    if (!onArtwork(texel)) return;
     moveVertex(session.part.mesh, session.part, session.dragging, texel.u, texel.v);
     session.dirty = true;
     partsStore.notifyTransformed();
@@ -369,6 +372,9 @@ function stampAt(u, v) {
       if (x < 0 || y < 0 || x >= session.width || y >= session.height) continue;
       const index = y * session.width + x;
       if (session.boundary.has(index)) continue;
+      // The line goes only on the artwork; see runTrim for how it still
+      // closes.
+      if (!opaqueIndex(session.pixels, session.width, session.height, index)) continue;
       if (!session.stroke.touched.has(index)) session.stroke.touched.set(index, false);
       session.boundary.add(index);
     }
@@ -405,7 +411,13 @@ function abandonStroke() {
 
 function clearBoundary() {
   session.boundary.clear();
+  session.picking = false;
   render();
+}
+
+// Whether a point in texel space is on the layer's artwork, edges included.
+function onArtwork(texel) {
+  return pointOnArtwork(session.pixels, session.width, session.height, texel.u, texel.v);
 }
 
 // ---------------------------------------------------------------------------
@@ -418,9 +430,11 @@ function clearBoundary() {
 function runTrim() {
   if (!session || session.boundary.size === 0) return;
 
-  // Seed from the first texel inside the loop that is not itself boundary.
-  // Scanning for it rather than asking the user to tap one keeps Trim a
-  // single action, and a loop with no interior is caught below anyway.
+  // A loop drawn all the way round ON the artwork encloses its inside by
+  // itself, and Trim keeps it without being told where it is -- seeded from
+  // the first texel inside the loop that is not itself boundary, exactly as
+  // before. Scanning for it rather than asking the user to tap one keeps
+  // Trim a single action whenever the line alone says what to keep.
   let filled = null;
   for (let v = 0; v < session.height && !filled; v++) {
     for (let u = 0; u < session.width; u++) {
@@ -429,21 +443,91 @@ function runTrim() {
       if (result.ok) { filled = result.filled; break; }
     }
   }
-  if (!filled) {
-    showToast('That loop is not closed — the fill leaks out to the edge.');
+  if (filled) { trimTo(filled); return; }
+
+  // Otherwise the line is a CUT, and the artwork's own edge closes it off.
+  // The line can only be drawn on the artwork (artwork.js), so a loop that
+  // used to run out through the transparent margin now stops at the
+  // silhouette on either side -- which divides the layer just as surely,
+  // but into pieces none of which is "inside". Which one stays is the
+  // user's to say: the next tap picks it.
+  session.picking = true;
+  showToast('Tap the piece to keep.');
+  render();
+}
+
+// The tap that answers runTrim's question: the piece under it, bounded by
+// the line and by the artwork's transparent edge. Nothing but the choice is
+// asked of the tap, so the piece may run right up to the layer's own edge.
+function pickPiece(texel) {
+  const u = Math.floor(texel.u);
+  const v = Math.floor(texel.v);
+  if (u < 0 || v < 0 || u >= session.width || v >= session.height) {
+    showToast('Tap on the artwork, inside the piece to keep.');
     return;
   }
+  const piece = floodFillFrom(session.width, session.height, session.boundary, u, v,
+    { pixels: session.pixels, leak: false });
+  if (!piece.ok) {
+    showToast(piece.onBoundary
+      ? 'That is the line itself — tap inside the piece to keep.'
+      : 'Tap on the artwork, inside the piece to keep.');
+    return;
+  }
+  session.picking = false;
+  trimTo(piece.filled);
+}
 
-  // The boundary line itself is kept: the user drew it ON the artwork they
-  // meant to keep, and discarding it would eat a one-pixel rim off the
-  // shape they just drew.
-  for (const index of session.boundary) filled.add(index);
+// The line a kept area was cut along goes with it: the user drew it ON
+// the artwork they meant to keep, and discarding it would eat a one-pixel
+// rim off the shape they just drew. Only line that actually borders the
+// kept area, though -- a stray stroke somewhere else on the layer is not
+// part of what was kept, and keeping it would leave it floating.
+function withAdjoiningLine(filled) {
+  const { width, height, boundary } = session;
+  const kept = new Set(filled);
+  const neighbours = (index) => {
+    const u = index % width;
+    const v = (index - u) / width;
+    const out = [];
+    for (let dv = -1; dv <= 1; dv++) {
+      for (let du = -1; du <= 1; du++) {
+        if (!du && !dv) continue;
+        const x = u + du;
+        const y = v + dv;
+        if (x >= 0 && y >= 0 && x < width && y < height) out.push(y * width + x);
+      }
+    }
+    return out;
+  };
+  const stack = [];
+  for (const index of boundary) {
+    if (neighbours(index).some((n) => filled.has(n))) { kept.add(index); stack.push(index); }
+  }
+  while (stack.length) {
+    for (const n of neighbours(stack.pop())) {
+      if (boundary.has(n) && !kept.has(n)) { kept.add(n); stack.push(n); }
+    }
+  }
+  return kept;
+}
+
+function trimTo(area) {
+  const filled = withAdjoiningLine(area);
 
   const trimmed = buildExtractedPixels(session.pixels, session.width, session.height, filled);
   let opaque = 0;
   for (let i = 3; i < trimmed.length; i += 4) if (trimmed[i] !== 0) opaque++;
   if (opaque === 0) {
     showToast('That would leave nothing behind.');
+    render();
+    return;
+  }
+  let before = 0;
+  for (let i = 3; i < session.pixels.length; i += 4) if (session.pixels[i] !== 0) before++;
+  if (opaque === before) {
+    showToast('That keeps the whole layer — draw the line right across the artwork to cut it.');
+    render();
     return;
   }
 
@@ -547,6 +631,7 @@ function removeSelected() {
 
 function setTool(tool) {
   session.tool = tool;
+  session.picking = false;
   session.selected = null;
   session.dragging = null;
   abandonStroke();
@@ -584,6 +669,8 @@ export function openMeshTrim(part) {
     brush: 1,
     brushMenuOpen: false,
     stroke: null,
+    // Waiting for a tap on the piece to keep -- see runTrim.
+    picking: false,
     dirty: false,
   };
 
@@ -652,8 +739,10 @@ export function initMeshTrim({ onExit } = {}) {
   watchCanvasBox(els.meshTrimCanvas, () => {
     if (!session) return;
     const unmeasured = !session.viewWidth;
+    const before = { width: session.viewWidth, height: session.viewHeight };
     sizeCanvas();
     if (unmeasured) fitCamera();
+    else keepCentred(session.cam, before, { width: session.viewWidth, height: session.viewHeight }, session.dpr);
     render();
   });
 }

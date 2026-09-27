@@ -84,7 +84,10 @@ function render() {
     if (recent.length === 0) continue;
     const label = document.createElement('span');
     label.className = 'recent-tools__label';
-    label.append(createIcon('clock'), document.createTextNode('Recent'));
+    const labelText = document.createElement('span');
+    labelText.className = 'recent-tools__label-text';
+    labelText.textContent = 'Recent tools';
+    label.append(createIcon('clock'), labelText);
     bar.appendChild(label);
     recent.forEach((entry, index) => {
       const tool = TOOLS[entry.id];
@@ -93,7 +96,10 @@ function render() {
       chip.className = `recent-tools__chip${index === 0 ? ' recent-tools__chip--latest' : ''}`;
       chip.dataset.recentTool = entry.id;
       chip.setAttribute('aria-label', `Open ${tool.label} again`);
-      chip.append(createIcon(tool.icon), document.createTextNode(tool.label));
+      const name = document.createElement('span');
+      name.className = 'recent-tools__chip-text';
+      name.textContent = tool.label;
+      chip.append(createIcon(tool.icon), name);
       chip.addEventListener('click', () => launchRecentTool(entry.id));
       bar.appendChild(chip);
     });

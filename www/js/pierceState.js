@@ -1,32 +1,50 @@
-// What the pierce solver publishes for the deformation to read.
+// The pierce solver's per-vertex offsets, and nothing else.
 //
 // This module exists to keep the import graph acyclic. The solver
 // (pierce.js) needs mesh.js's geometry helpers, and mesh.js needs to read
-// the solver's current answer while it deforms -- which would be a cycle if
-// they imported each other directly. Both import THIS instead, which imports
-// nothing at all.
+// the solver's current displacement while it deforms -- which would be a
+// cycle if they imported each other directly. Both import THIS instead,
+// which imports nothing at all.
 //
-// The answer is one number per V: how open it is, 0 shut to 1 fully open,
-// straight from the piercer's depth (see pierce.js). It is simulation state,
-// not authored data, so it lives here rather than on a Part: reloading a
-// project rebuilds every Part, and the halves should come back shut rather
-// than restoring some half-spread instant, for the same reason a spring
-// bone's simulated angle is not saved either.
+// The numbers are simulation state, not authored data, so they live here
+// rather than on the Part: reloading a project rebuilds every Part, and
+// flesh should come back at rest rather than restoring some half-pushed
+// instant, for the same reason a spring bone's simulated angle is not
+// saved either.
 
-let open = new Map();
+const state = new Map();
 
-// The solver's whole answer for this frame, replacing the last one: a V
-// with no entry is shut.
-export function publishSpreadOpen(entries) {
-  open = new Map(entries);
+// The per-vertex arrays for one layer, created on first use and rebuilt
+// whenever the mesh's vertex count changes (a re-bind at a new density).
+export function pierceStateFor(partId, vertexCount) {
+  let entry = state.get(partId);
+  if (!entry || entry.count !== vertexCount) {
+    entry = {
+      count: vertexCount,
+      offsetX: new Float64Array(vertexCount),
+      offsetY: new Float64Array(vertexCount),
+    };
+    state.set(partId, entry);
+  }
+  return entry;
 }
 
-// How open one V is right now. READ-ONLY by contract -- the solver owns
-// these numbers and writes them once per frame.
-export function spreadOpen(key) {
-  return open.get(key) || 0;
+// What the renderer adds on: this layer's current displacement, or null
+// when it has none. READ-ONLY by contract -- the solver owns these numbers
+// and advances them once per frame in the physics loop. If drawing
+// advanced them too, the simulation would run once per redraw rather than
+// once per frame, and would speed up on a busy screen.
+export function pierceOffsets(part) {
+  if (!part || !part.isPierced || !part.mesh) return null;
+  const entry = state.get(part.id);
+  if (!entry || entry.count !== part.mesh.vertices.length) return null;
+  return entry;
+}
+
+export function peekPierceState(partId) {
+  return state.get(partId) || null;
 }
 
 export function resetPierceState() {
-  open = new Map();
+  state.clear();
 }

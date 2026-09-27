@@ -16,7 +16,7 @@
 import { Part, partsStore } from '../www/js/parts.js';
 import { bonesStore } from '../www/js/bones.js';
 import {
-  bindPart, deformVertices, deformVerticesSnapped, pinInfluence, pinCarriageOffset, localToWorld,
+  bindPart, deformVertices, deformVerticesSnapped, pinInfluence, pinCarriageOffset, localToWorld, meshGrid, meshCellSize,
 } from '../www/js/mesh.js';
 import { addVertex } from '../www/js/meshedit.js';
 
@@ -156,14 +156,16 @@ console.log('Under no pull, the pin is exactly what it was');
 {
   const { hair } = buildHair('band');
   const base = pinInfluence(hair.mesh, hair);
-  const cellW = hair.naturalWidth / hair.mesh.cols;
-  const cellH = hair.naturalHeight / hair.mesh.rows;
+  // The mesh's own cell grid (fitted to the artwork, whole-texel edges).
+  const { vs } = meshGrid(hair.mesh, hair);
+  const { w: cellW, h: cellH } = meshCellSize(hair.mesh, hair);
   const cell = Math.max(cellW, cellH);
   // Pinned rows 0..6 collapse to the whole cells they sit in -- here just
   // the first row of cells -- and every column is pinned, so the distance to
   // the held region is purely vertical.
-  const heldRows = new Set([...hair.pins].map((i) => Math.min(hair.mesh.rows - 1, Math.floor(Math.floor(i / hair.naturalWidth) / cellH))));
-  const heldBottom = (Math.max(...heldRows) + 1) * cellH;
+  const rowOf = (y) => { let r = 0; while (r < vs.length - 2 && vs[r + 1] <= y + 0.5) r++; return r; };
+  const heldRows = new Set([...hair.pins].map((i) => rowOf(Math.floor(i / hair.naturalWidth))));
+  const heldBottom = vs[Math.max(...heldRows) + 1];
   const expected = hair.mesh.vertices.map((v) => {
     const vv = v.restLocal.y + hair.naturalHeight / 2;
     const d = Math.max(0, vv - heldBottom);

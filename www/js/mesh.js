@@ -27,11 +27,10 @@ const WEIGHT_EPSILON = 0.001;
 const DISTANCE_EPSILON = 0.5; // guards against dividing by a zero distance
 const FALLOFF_EXPONENT = 2;
 
-// A pierced layer's V -- its two halves swung apart about their hinges by
-// as much as the piercer's depth says (spread.js reads the depth the pierce
-// solver publishes through pierceState.js, so this file never imports the
-// solver, which imports THIS file).
-import { applySpread } from './spread.js';
+// The pierce solver's current displacement, read while deforming. Its own
+// state module rather than pierce.js, which imports THIS file -- routing
+// through a leaf keeps the import graph acyclic.
+import { pierceOffsets } from './pierceState.js';
 // And the PxLink solver's correction, through a leaf for the same reason:
 // pxlink.js deforms linked layers through this file.
 import { pxlinkCorrection } from './pxlinkState.js';
@@ -42,14 +41,42 @@ export const MIN_DENSITY = 3;
 export const MAX_DENSITY = 16;
 
 // Pixel art is chunky, so the grid stays coarse: cells along the longest
-// side, scaled by the source's pixel dimensions and clamped to 6..10.
+// side of the ARTWORK, scaled by its pixel dimensions and clamped to 6..10.
 export function defaultDensity(part) {
-  const longest = Math.max(part.naturalWidth, part.naturalHeight);
+  const box = artworkBounds(part);
+  const longest = box ? Math.max(box.width, box.height) : Math.max(part.naturalWidth, part.naturalHeight);
   return Math.min(10, Math.max(6, Math.round(longest / 12)));
 }
 
-// Local image space to scene pixels -- see layerSpace.js, where it lives so
-// spread.js can use it without importing this file.
+// The rectangle, in texels, that the layer's non-transparent pixels occupy
+// -- the artwork itself, as opposed to the image file it came in. A layer
+// imported at a size other than the canvas keeps whatever transparent
+// margin its PNG had, so the two can be very different. Null for a fully
+// transparent layer.
+export function artworkBounds(part) {
+  const { naturalWidth: width, naturalHeight: height, pixels } = part;
+  if (!pixels || !width || !height) return null;
+  let x0 = width;
+  let y0 = height;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    for (let x = 0; x < width; x++) {
+      if (pixels[(row + x) * 4 + 3] === 0) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return null;
+  return { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+}
+
+// Local image space to scene pixels -- see layerSpace.js, a leaf module so
+// the code that places texels in the scene can use it without importing this
+// file.
 export { localToWorld };
 
 export class MeshVertex {
@@ -77,39 +104,132 @@ export class PartMesh {
   }
 }
 
-// Standard regular grid split into two triangles per cell. Nothing exotic
-// -- a uniform grid is the right shape for a rectangular sprite.
+// THE MESH SITS EXACTLY ON THE ARTWORK
+//
+// A regular grid split into two triangles per cell -- but laid over the
+// layer's ARTWORK, not over its image file. It used to span the whole image
+// rectangle, 0..naturalWidth by 0..naturalHeight, and a layer imported at a
+// size other than the canvas keeps its PNG's transparent margin: a 22x40
+// figure in a 72x96 file was covered by a 72x96 wireframe floating well off
+// the character, with most of its cells over nothing. Now:
+//
+//   * the grid spans the artwork's own pixel bounds (artworkBounds), so its
+//     outer edges ARE the artwork's edges;
+//   * every vertex sits on a whole texel, so at rest each vertex lands on a
+//     whole scene pixel and the whole-pixel snap moves nothing -- the
+//     artwork is mapped exactly, never nudged by a fraction of a cell;
+//   * a cell with no opaque pixel in it is left out, so the mesh follows the
+//     silhouette (an L-shaped layer gets an L-shaped mesh) instead of
+//     spanning the empty corners of its box. Every opaque pixel lies in
+//     exactly one kept cell, so the artwork is covered completely.
+//
+// The grid's own column and row edges are kept on the mesh (mesh.grid), for
+// the code that works in cells: pins, seams, hit radii, link welds.
 export function generateMesh(part, density) {
-  const longest = Math.max(part.naturalWidth, part.naturalHeight);
-  const cols = Math.max(MIN_CELLS, Math.round((part.naturalWidth / longest) * density));
-  const rows = Math.max(MIN_CELLS, Math.round((part.naturalHeight / longest) * density));
-
   const width = part.naturalWidth;
   const height = part.naturalHeight;
-  const vertices = [];
+  const box = artworkBounds(part) || { x: 0, y: 0, width, height };
+  const longest = Math.max(box.width, box.height);
+  // No cell narrower than one texel: a vertex on every texel is already
+  // the finest mesh pixel art can use.
+  const cols = Math.min(box.width, Math.max(MIN_CELLS, Math.round((box.width / longest) * density)));
+  const rows = Math.min(box.height, Math.max(MIN_CELLS, Math.round((box.height / longest) * density)));
+  const us = Array.from({ length: cols + 1 }, (_, i) => box.x + Math.round((i * box.width) / cols));
+  const vs = Array.from({ length: rows + 1 }, (_, j) => box.y + Math.round((j * box.height) / rows));
 
+  // Which cells hold any artwork at all.
+  const kept = new Uint8Array(cols * rows);
+  const pixels = part.pixels;
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      let any = !pixels; // no pixel data: keep everything
+      for (let y = vs[row]; !any && y < vs[row + 1]; y++) {
+        for (let x = us[col]; x < us[col + 1]; x++) {
+          if (pixels[(y * width + x) * 4 + 3] !== 0) { any = true; break; }
+        }
+      }
+      kept[row * cols + col] = any ? 1 : 0;
+    }
+  }
+  if (!kept.some((k) => k)) kept.fill(1); // a blank layer still gets a mesh
+
+  // Vertices only at the corners of kept cells, numbered row by row across
+  // the grid -- so with every cell kept the numbering is the plain
+  // row-major grid it always was.
+  const stride = cols + 1;
+  const usedCorner = new Uint8Array(stride * (rows + 1));
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      if (!kept[row * cols + col]) continue;
+      const topLeft = row * stride + col;
+      usedCorner[topLeft] = 1;
+      usedCorner[topLeft + 1] = 1;
+      usedCorner[topLeft + stride] = 1;
+      usedCorner[topLeft + stride + 1] = 1;
+    }
+  }
+  const indexOf = new Int32Array(usedCorner.length).fill(-1);
+  const vertices = [];
   for (let row = 0; row <= rows; row++) {
     for (let col = 0; col <= cols; col++) {
-      const u = (col / cols) * width;
-      const v = (row / rows) * height;
+      const key = row * stride + col;
+      if (!usedCorner[key]) continue;
+      const u = us[col];
+      const v = vs[row];
+      indexOf[key] = vertices.length;
       vertices.push(new MeshVertex(u, v, { x: u - width / 2, y: v - height / 2 }));
     }
   }
 
   const triangles = [];
-  const stride = cols + 1;
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      const topLeft = row * stride + col;
-      const topRight = topLeft + 1;
-      const bottomLeft = topLeft + stride;
-      const bottomRight = bottomLeft + 1;
+      if (!kept[row * cols + col]) continue;
+      const topLeft = indexOf[row * stride + col];
+      const topRight = indexOf[row * stride + col + 1];
+      const bottomLeft = indexOf[(row + 1) * stride + col];
+      const bottomRight = indexOf[(row + 1) * stride + col + 1];
       triangles.push(topLeft, topRight, bottomLeft);
       triangles.push(topRight, bottomRight, bottomLeft);
     }
   }
 
-  return new PartMesh({ cols, rows, density, vertices, triangles });
+  const mesh = new PartMesh({ cols, rows, density, vertices, triangles });
+  mesh.grid = { us, vs };
+  return mesh;
+}
+
+// The mesh's cell grid in texels. A mesh generated before grids were fitted
+// to the artwork has none stored, and was a uniform grid over the whole
+// image -- which is exactly what is reconstructed for it.
+export function meshGrid(mesh, part) {
+  if (mesh.grid && Array.isArray(mesh.grid.us) && mesh.grid.us.length > 1) return mesh.grid;
+  const cols = Math.max(1, mesh.cols || 1);
+  const rows = Math.max(1, mesh.rows || 1);
+  return {
+    us: Array.from({ length: cols + 1 }, (_, i) => (i * part.naturalWidth) / cols),
+    vs: Array.from({ length: rows + 1 }, (_, j) => (j * part.naturalHeight) / rows),
+  };
+}
+
+// One cell's typical size in texels.
+export function meshCellSize(mesh, part) {
+  const { us, vs } = meshGrid(mesh, part);
+  return {
+    w: (us[us.length - 1] - us[0]) / Math.max(1, us.length - 1),
+    h: (vs[vs.length - 1] - vs[0]) / Math.max(1, vs.length - 1),
+  };
+}
+
+// Which column (or row) of the grid a texel coordinate falls in.
+function edgeIndex(edges, t) {
+  let lo = 0;
+  let hi = edges.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (edges[mid] <= t) lo = mid; else hi = mid - 1;
+  }
+  return lo;
 }
 
 // Shortest distance from a point to a bone's head->tail segment.
@@ -467,8 +587,8 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
   // The joint seams this layer's artwork sits on (see withSeams). Kept on
   // the mesh, with the bind pose, so Mesh Trim, undo and a saved project all
   // weight by the same seams the layer was bound with.
-  const cell = Math.hypot(part.naturalWidth / Math.max(1, mesh.cols),
-    part.naturalHeight / Math.max(1, mesh.rows)) * (part.scale || 1);
+  const cellSize = meshCellSize(mesh, part);
+  const cell = Math.hypot(cellSize.w, cellSize.h) * (part.scale || 1);
   const joints = serialJoints(bonesStore, candidateIds);
   for (const joint of joints) joint.reach = seamReach(part, joint, segments, cell);
   mesh.joints = joints.filter((joint) => joint.reach > 0);
@@ -561,7 +681,8 @@ function carryBoneOffsetIntoOrigin(part, bonesStore) {
 export function seamDensity(part, bonesStore) {
   const { candidateIds, segments } = bindingSegments(part, bonesStore);
   if (segments.length === 0) return 0;
-  const longest = Math.max(part.naturalWidth, part.naturalHeight) * (part.scale || 1);
+  const box = artworkBounds(part) || { width: part.naturalWidth, height: part.naturalHeight };
+  const longest = Math.max(box.width, box.height) * (part.scale || 1);
   let needed = 0;
   for (const joint of serialJoints(bonesStore, candidateIds)) {
     if (seamReach(part, joint, segments, 0) <= 0) continue;
@@ -793,9 +914,9 @@ export function snapToGrid(positions) {
 // continuous position, and rounding each layer's vertices on its own would
 // pull them apart again by up to a pixel. So the vertices around a link point
 // stay unsnapped too (pxlink.js marks them).
-export function deformVerticesSnapped(mesh, part, boneTransforms, half = null) {
+export function deformVerticesSnapped(mesh, part, boneTransforms) {
   const link = pxlinkCorrection(part, boneTransforms);
-  const positions = deformVertices(mesh, part, boneTransforms, half);
+  const positions = deformVertices(mesh, part, boneTransforms);
   const onSeam = seamVertices(mesh, part);
   const nearLink = link && link.mesh === mesh ? link.nearLink : null;
   return positions.map((p, i) => (
@@ -918,8 +1039,9 @@ function pinDistances(mesh, part) {
 
   const width = part.naturalWidth;
   const height = part.naturalHeight;
-  const cellW = width / Math.max(1, mesh.cols);
-  const cellH = height / Math.max(1, mesh.rows);
+  const { us, vs } = meshGrid(mesh, part);
+  const cols = us.length - 1;
+  const { w: cellW, h: cellH } = meshCellSize(mesh, part);
 
   // Pinned texels collapse to the CELLS they sit in. A mesh can only hold
   // what its vertices can express, and the vertices are cell corners -- so
@@ -929,14 +1051,14 @@ function pinDistances(mesh, part) {
   // cols x rows however many thousands of pixels a wide brush painted.
   const cells = new Set();
   for (const index of part.pins) {
-    const cu = Math.min(mesh.cols - 1, Math.floor((index % width) / cellW));
-    const cv = Math.min(mesh.rows - 1, Math.floor(Math.floor(index / width) / cellH));
-    cells.add(cv * mesh.cols + cu);
+    const cu = edgeIndex(us, (index % width) + 0.5);
+    const cv = edgeIndex(vs, Math.floor(index / width) + 0.5);
+    cells.add(cv * cols + cu);
   }
   const held = [...cells].map((c) => {
-    const cu = c % mesh.cols;
-    const cv = Math.floor(c / mesh.cols);
-    return [cu * cellW, cv * cellH, (cu + 1) * cellW, (cv + 1) * cellH];
+    const cu = c % cols;
+    const cv = Math.floor(c / cols);
+    return [us[cu], vs[cv], us[cu + 1], vs[cv + 1]];
   });
 
   const distances = mesh.vertices.map((vertex) => {
@@ -994,14 +1116,13 @@ export function pinInfluence(mesh, part, radius = 0) {
 // all of them, and hands back each layer's correction -- along with the
 // uncorrected positions it already computed, so they are not worked out
 // twice in one frame.
-export function deformVertices(mesh, part, boneTransforms, half = null) {
+export function deformVertices(mesh, part, boneTransforms) {
   const link = pxlinkCorrection(part, boneTransforms);
-  if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms, half);
-  // The solve's own uncorrected positions are the single-copy answer; one
-  // half of a seam-split layer is worked out for itself.
-  const base = link.mesh === mesh && link.uncorrected && half === null
+  if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms);
+  // The solve's own uncorrected positions, when it has them for this mesh.
+  const base = link.mesh === mesh && link.uncorrected
     ? link.uncorrected
-    : deformVerticesUncorrected(mesh, part, boneTransforms, half);
+    : deformVerticesUncorrected(mesh, part, boneTransforms);
   return applyLinkWelds(mesh, base, link);
 }
 
@@ -1009,7 +1130,7 @@ export function deformVertices(mesh, part, boneTransforms, half = null) {
 // smooth local displacement that lands the layer's link point EXACTLY on the
 // link's meeting point, fading to nothing a few cells away. Nothing else
 // moves: vertices outside every weld are returned exactly as the layer's own
-// bones, springs, pins and V put them. (pxlink.js applies the same function
+// bones, springs, pins and pierce dent put them. (pxlink.js applies the same function
 // when it reads a link point back.)
 export function applyLinkWelds(mesh, positions, link) {
   const welds = link && link.mesh === mesh ? link.welds : [];
@@ -1028,16 +1149,32 @@ export function applyLinkWelds(mesh, positions, link) {
   });
 }
 
-// The layer's own deformation, before any PxLink: bone skinning, then pins
-// pulling their neighbourhood back toward rest, then -- for a pierced layer
-// being spread -- its V. One mesh, no seams.
-export function deformVerticesUncorrected(mesh, part, boneTransforms, half = null) {
-  const out = pinned(mesh, part, boneTransforms, deformRaw(mesh, part, boneTransforms));
-  // A pierced layer's V, LAST: each half turns about its hinge as a whole,
-  // pinned pixels and all, so the pins and the V compose instead of arguing
-  // -- a pinned patch on a finger swings with the finger. `half` picks which
-  // of a seam-split layer's two copies this is (see spread.js).
-  return applySpread(mesh, part, out, half);
+// The layer's own deformation, before any PxLink: bone skinning, pierce
+// offsets, then pins pulling their neighbourhood back toward rest. One pass,
+// one mesh.
+export function deformVerticesUncorrected(mesh, part, boneTransforms) {
+  const out = deformRaw(mesh, part, boneTransforms);
+
+  // Pierce, BEFORE pins. A displaced vertex is the bone result plus this
+  // layer's current dent offset (the material bunching around the notch,
+  // dent.js writeBunch) -- read, never advanced: the solver owns those
+  // numbers and writes them once per frame in the physics loop, where a
+  // redraw cannot make the simulation run faster by happening twice.
+  //
+  // It goes before the pin step deliberately. Pins pull their neighbourhood
+  // back toward rest afterwards, so a pinned pixel that a pierce tried to
+  // move is returned to exactly where it was -- pinned pixels stay put
+  // during contact, and the two features compose instead of arguing. (The
+  // solver also masks by pin influence itself, so those vertices never
+  // accumulate an offset to be undone in the first place.)
+  const pierce = pierceOffsets(part);
+  if (pierce && pierce.offsetX.length === out.length) {
+    for (let i = 0; i < out.length; i++) {
+      out[i] = { x: out[i].x + pierce.offsetX[i], y: out[i].y + pierce.offsetY[i] };
+    }
+  }
+
+  return pinned(mesh, part, boneTransforms, out);
 }
 
 // Pins pulling their neighbourhood back toward rest.

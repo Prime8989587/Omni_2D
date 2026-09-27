@@ -17,6 +17,7 @@ import { bonesStore } from './bones.js';
 import { applyWeightDelta, deformVertices } from './mesh.js';
 import { view } from './view.js';
 import { history } from './history.js';
+import { texelUnder } from './artwork.js';
 
 export const MIN_BRUSH = 10;
 export const MAX_BRUSH = 120;
@@ -79,6 +80,13 @@ function paintAt(scenePoint) {
 
   const radiusCells = brushRadius / view.zoom;
   const deformed = deformVertices(part.mesh, part, bonesStore.snapshotTransforms());
+  // Only a dab ON the layer paints it. The brush reaches every vertex in
+  // its radius, so without this a finger resting just outside the artwork
+  // -- on empty canvas, or on the layer next door -- went on weighting this
+  // layer's edge. The point is looked up on the mesh as it is drawn right
+  // now, so a posed layer is painted where it is, not where it rests.
+  const texel = texelUnder(part.mesh.vertices, deformed, part.mesh.triangles, scenePoint);
+  if (!texel || !part.touchesArtwork(texel.u, texel.v)) return;
   // Erasing subtracts; applyWeightDelta clamps at zero and rescales the
   // OTHER bones on that vertex back up to fill the gap, so the weights
   // still sum to 1 and the vertex simply belongs more to whatever else was

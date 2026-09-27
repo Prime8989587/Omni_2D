@@ -53,7 +53,7 @@ import { cellEdge, gridStrips, frameOutside, PixelPen } from './pixelDraw.js';
 import { NearestRotator } from './pixelRotate.js';
 import { Part, partsStore } from './parts.js';
 import { playEnter } from './transitions.js';
-import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
 import { sceneStore, SCENE_PRESETS, MIN_SCENE_SIZE, MAX_SCENE_SIZE } from './scene.js';
 import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName } from './importer.js';
@@ -78,6 +78,7 @@ import { effectiveDpr } from './pixelScale.js';
 import { createIcon, setIcon } from './pixelIcons.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { noteToolUsed } from './recentTools.js';
+import { showToast } from './toast.js';
 
 const MAX_ZOOM = 64; // css px per canvas px -- far past single-pixel work
 const MAX_BRUSH = 10; // the biggest square a single touch-point covers
@@ -157,7 +158,6 @@ const WHEEL_BLOCKS = Math.floor(WHEEL_SIZE / WHEEL_BLOCK);
 const els = {};
 let session = null;
 let blankMirror = false;
-let toastTimer = null;
 // Called whenever PCreate hands control back to the rest of the app --
 // Back to Menu, Done, and Cancel on the entry dialog all funnel through
 // here. PCreate has nowhere else of its own to fall back to now that it is
@@ -191,7 +191,7 @@ function cacheElements() {
     'pcreateLoadedPaletteName', 'pcreateSaveColorBtn', 'pcreatePalettesBtn', 'pcreateSwatchStrip',
     'pcreateEditModeToggle', 'pcreateSaveLayerBtn',
     'pcreateToolStrip', 'pcreateBrushRow', 'pcreateBrushBtn', 'pcreateBrushMenu', 'pcreateBrushPresets',
-    'pcreateShapeRow', 'pcreateShapeFilledBtn', 'pcreateShapeOutlineBtn',
+    'pcreateShapeRow', 'pcreateShapeFilledBtn', 'pcreateShapeOutlineBtn', 'pcreateLockArtBtn',
     'pcreateFillHint', 'pcreatePickHint', 'pcreateBlendHint', 'pcreateSelectHint',
     'pcreateSelectionRow', 'pcreateSelectionStatus', 'pcreateSelCopyBtn',
     'pcreateSelDeleteBtn', 'pcreateSelDeselectBtn',
@@ -213,14 +213,6 @@ function cacheElements() {
   }
 }
 
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  if (!toast) return;
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 4500);
-}
 
 // ---------------------------------------------------------------------------
 // Entry: blank canvas, or import
@@ -1377,10 +1369,35 @@ function extendStroke(texel) {
   render();
 }
 
+// WHERE A STROKE MAY LAND
+//
+// Every PCreate layer is the size of its canvas, and that is the layer's
+// own area: squareIndices and the shape rasterizers already clip to it, so
+// nothing is ever written past the canvas edge. That is the right default
+// here, unlike the rigging tools, because a new layer is empty -- the whole
+// point is to put artwork where there is none.
+//
+// Lock to art is the stricter rule the rigging tools follow (artwork.js):
+// with it on, brush, eraser, shade, shapes and fill touch only pixels that
+// already have colour, so shading or recolouring a sprite can run over its
+// edge without a single pixel spilling onto the background.
+function lockedToArt() {
+  return Boolean(getSetting('lockToArt'));
+}
+
+function onArt(index) {
+  return session.pixels[index * 4 + 3] !== 0;
+}
+
 function applyStrokeAt(texels) {
   const { stroke } = session;
+  const locked = session.tool !== 'select' && lockedToArt();
   for (const { u, v } of texels) {
-    const indices = squareIndices(u, v, session.brush, session.width, session.height);
+    let indices = squareIndices(u, v, session.brush, session.width, session.height);
+    if (locked) indices = indices.filter(onArt);
+    // Wholly off the canvas (or off the art, locked): nothing to write, and
+    // nothing to put on the undo stack for it either.
+    if (indices.length === 0) continue;
     if (session.tool === 'select') {
       // The lasso writes to its own overlay set, never to the artwork.
       for (const index of indices) {
@@ -1459,9 +1476,10 @@ function commitShape() {
   const drag = session.shapeDrag;
   session.shapeDrag = null;
   if (!drag) return;
-  const indices = SHAPE_FUNCTIONS[session.tool](
+  let indices = SHAPE_FUNCTIONS[session.tool](
     drag.from, drag.to, session.width, session.height, session.shapeFilled
   );
+  if (lockedToArt()) indices = new Set([...indices].filter(onArt));
   if (indices.size === 0) { render(); return; }
   const label = session.tool.charAt(0).toUpperCase() + session.tool.slice(1);
   runAction(label, () => {
@@ -1846,6 +1864,12 @@ function toggleShadowVisible() {
 function fillAt(texel) {
   if (!inCanvas(texel)) return;
   const target = samplePixel(session.pixels, session.width, texel.u, texel.v);
+  // Locked, a fill starts only on artwork -- and the region it floods is
+  // one colour, so starting on colour keeps it on colour.
+  if (lockedToArt() && target[3] === 0) {
+    showToast('Lock to art is on — tap on the artwork to fill it.');
+    return;
+  }
   const colour = strokeColor();
   if (target[0] === colour[0] && target[1] === colour[1]
     && target[2] === colour[2] && target[3] === colour[3]) {
@@ -2080,6 +2104,11 @@ function renderTools() {
       format: SQUARE_FORMAT,
     });
   }
+
+  const lockable = BRUSH_TOOLS.has(session.tool) || SHAPE_TOOLS.has(session.tool) || session.tool === 'fill';
+  els.pcreateLockArtBtn.hidden = !lockable;
+  els.pcreateLockArtBtn.setAttribute('aria-pressed', String(lockedToArt()));
+  els.pcreateLockArtBtn.textContent = lockedToArt() ? 'Lock to art: On' : 'Lock to art: Off';
 
   els.pcreateShapeRow.hidden = !SHAPE_TOOLS.has(session.tool);
   els.pcreateShapeFilledBtn.setAttribute('aria-pressed', String(session.shapeFilled));
@@ -3483,6 +3512,10 @@ export function initPCreate({ onExit, onSettings } = {}) {
   els.pcreateShapeOutlineBtn.addEventListener('click', () => {
     if (session) { session.shapeFilled = false; renderTools(); }
   });
+  els.pcreateLockArtBtn.addEventListener('click', () => {
+    setSetting('lockToArt', !lockedToArt());
+    if (session) renderTools();
+  });
 
   els.pcreateSelCopyBtn.addEventListener('click', copySelection);
   els.pcreateSelDeleteBtn.addEventListener('click', deleteSelection);
@@ -3546,8 +3579,10 @@ export function initPCreate({ onExit, onSettings } = {}) {
   watchCanvasBox(els.pcreateCanvas, () => {
     if (!session) return;
     const unmeasured = !session.cssWidth;
+    const before = { width: session.cssWidth, height: session.cssHeight };
     sizeCanvas();
     if (unmeasured) fitCamera();
+    else keepCentred(session.cam, before, { width: session.cssWidth, height: session.cssHeight }, session.dpr);
     render();
     // A no-op unless the device pixel ratio actually changed (moving the
     // window to a different-density display, folding/unfolding a phone) --

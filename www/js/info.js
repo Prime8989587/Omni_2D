@@ -19,8 +19,7 @@ const TOPICS = {
       'a finger. Paint its tip, and set how close it has to get before the ' +
       'other layer starts to give way.\n' +
       '• Pierced is the layer that gets poked. Paint the area a piercer ' +
-      'comes in at, and give it a V spread -- two halves that part to let ' +
-      'the piercer between them. Its own bones and physics keep running as ' +
+      'is allowed to push into; its own bones and physics keep running as ' +
       'normal alongside the contact.\n\n' +
       'A layer is one, the other, or neither -- never both at once, and a ' +
       'pierce always needs one of each.',
@@ -37,10 +36,7 @@ const TOPICS = {
       '• Pierced -- the reverse: only the pierced layer’s own movement ' +
       'counts. Driving the piercer further in has no further effect.\n' +
       '• Both -- either one deepens it, and the two add together rather ' +
-      'than competing.\n\n' +
-      'Against a V this decides whose movement drives the whole coupled ' +
-      'motion -- the tip going in and the halves parting are one number, so ' +
-      'whatever deepens the contact opens the V with it.',
+      'than competing.',
   },
   pxlink: {
     title: 'PxLink',
@@ -57,6 +53,9 @@ const TOPICS = {
       'joins.\n\n' +
       '• Pick two or more layers, tap where they meet (drag the marker to ' +
       'adjust), then Link. Three or more layers can share one point.\n' +
+      '• The point goes on the artwork: a tap on empty space places ' +
+      'nothing, and a marker dragged off the art waits at the last spot ' +
+      'that was on it.\n' +
       '• Holds still: whose point stays exactly where its own layer puts ' +
       'it while the others\' points come to meet it -- normally the one ' +
       'nearest the body. Shared: they all give way equally and meet in the ' +
@@ -71,10 +70,14 @@ const TOPICS = {
       '• Move, Add and Remove edit the MESH -- the invisible grid the ' +
       'deformation runs on. Nothing about the picture changes; you are ' +
       'changing how it bends. Every vertex snaps to whole pixels, and ' +
-      'removing one re-fills the hole so the artwork never opens up.\n\n' +
-      '• Trim Boundary edits the PICTURE. Draw a closed loop around what ' +
-      'you want to keep and press Trim: everything outside it is discarded ' +
-      'and the layer is reshaped to what you drew. The mesh is rebuilt ' +
+      'removing one re-fills the hole so the artwork never opens up. ' +
+      'Vertices go on the artwork, not in the empty space round it.\n\n' +
+      '• Trim Boundary edits the PICTURE. Draw a loop on the artwork ' +
+      'around what you want to keep and press Trim: everything outside it ' +
+      'is discarded and the layer is reshaped to what you drew. The line ' +
+      'only goes on the artwork, and the artwork\u2019s own edge counts as ' +
+      'part of it -- so a single line right across it, edge to edge, is a ' +
+      'cut too; Trim then asks you to tap the piece to keep. The mesh is rebuilt ' +
       'against the new shape afterwards, carrying your weight painting ' +
       'across wherever the artwork survived.\n\n' +
       'Trim defaults to working on a COPY, leaving the original untouched. ' +
@@ -85,74 +88,84 @@ const TOPICS = {
     title: 'Enter, Dent & End points',
     body: 'All three are measured in scene pixels, from the piercer’s ' +
       'painted tip to the nearest pierceable pixel.\n\n' +
-      '• Enter is the gap where contact starts -- containment by Barrier ' +
-      'walls and the press on the pierced side’s bones begin here.\n' +
-      '• Dent Trigger is the gap where the V STARTS TO OPEN. Its own ' +
-      'setting, so touching and parting need not happen at the same moment.\n' +
-      '• End is how much deeper both keep growing before they stop. The V ' +
-      'is fully open here, and past End the halves and the piercer itself ' +
-      'hold at their deepest.\n\n' +
+      '• Enter is the gap where contact starts -- get this close and the ' +
+      'tip sinks under the surface and starts pressing on its bones.\n' +
+      '• Dent Trigger is the gap where the NOTCH starts to appear. Its own ' +
+      'setting, so touching and denting need not happen at the same moment.\n' +
+      '• End is how much deeper both keep growing before they stop ' +
+      'advancing. Past End the notch and the piercer itself hold at their ' +
+      'deepest.\n\n' +
       'Set them by typing the numbers, or by dragging the three handles ' +
       'drawn on the piercer’s own artwork -- both write the same values, ' +
       'so neither one is more "real" than the other.',
   },
   'pierce-dent-start': {
     title: 'Dent Trigger Distance',
-    body: 'The gap at which the two halves begin to PART -- separate from the ' +
+    body: 'The gap at which the notch begins to appear -- separate from the ' +
       'Enter point, and measured the same way, in scene pixels from the ' +
       'painted tip to the nearest pierceable pixel.\n\n' +
-      'Enter is when the two sides are IN CONTACT: walls hold the tip and ' +
-      'it starts pressing on the pierced side’s bones. This is when the V ' +
-      'starts to OPEN.\n\n' +
-      '• Closer than Enter -- the tip arrives first, and the halves only ' +
-      'start to part once it is further in.\n' +
-      '• Equal to Enter -- the V starts opening on contact (the default).\n' +
-      '• Further out than Enter -- the halves start parting a little before ' +
-      'the tip arrives.\n\n' +
-      'Whichever you choose, the V is fully open at the End point, and in ' +
-      'between it opens in a straight line with the depth -- the V and the ' +
-      'tip’s position are always the same number.',
+      'Enter and this answer two different questions. Enter is when the two ' +
+      'layers are IN CONTACT: the tip draws beneath the surface and starts ' +
+      'pressing back on the pierced layer’s bones. This is when the surface ' +
+      'starts to GIVE WAY.\n\n' +
+      '• Closer than Enter -- the tip touches, sinks in, and only then does ' +
+      'the notch start to open. A needle resting on skin before it breaks it.\n' +
+      '• Equal to Enter -- the dent starts on contact, which is how every ' +
+      'project behaved before this setting existed.\n' +
+      '• Further out than Enter -- the surface flinches before anything ' +
+      'touches it.\n\n' +
+      'Whichever you choose, the notch is complete at the End point: that is ' +
+      'the one place both the dent and the depth finish.',
   },
   'pierce-targets': {
     title: 'Paint targets',
     body: 'Tip (on the piercer) is what counts as "in".\n\n' +
-      'On the pierced layer:\n' +
-      '• Pierceable -- where contact is detected: paint it around the mouth ' +
-      'of the seam, where the piercer comes in.\n' +
-      '• Seam -- the line that splits ONE layer into two halves, drawn with ' +
-      'the brush from the gap between them inward (only used when this ' +
-      'layer’s V is set to Seam).\n' +
-      '• Barrier -- solid pixels that stop the piercer sideways. Paint them ' +
-      'down each half’s inner edge and they swing with the halves, so the ' +
-      'channel the tip may move in widens as the V opens.\n' +
-      '• Hinges -- not a mask. Where each half turns: drag the dots. They ' +
-      'start at the far end of the seam, the point of the V.',
+      'On the pierced layer, three masks and one placement:\n' +
+      '• Pierceable -- where contact is detected at all, and the only ' +
+      'place the notch is allowed to cut.\n' +
+      '• Deformable -- which pixels BUNCH UP around that notch, pushing ' +
+      'outward as it grows, the way material does when something is ' +
+      'pressed into it. They only ever move AWAY from the notch, and they ' +
+      'never cut anything themselves. Empty means none of them react: the ' +
+      'notch still cuts, the edges around it just stay put.\n' +
+      '• Barrier -- solid pixels that stop the piercer sideways while ' +
+      'in contact. Never blocks it going deeper -- that’s Enter/End.\n' +
+      'All four paint only on the layer\u2019s own artwork, never on the ' +
+      'transparent space round it.\n' +
+      '• Dent -- not a mask. The wedge itself, dragged onto the spot where ' +
+      'the notch should happen. This is the only thing that cuts.',
   },
-  'pierce-spread': {
-    title: 'V spread',
-    body: 'How this layer makes room for a piercer: by PARTING, like two ' +
-      'fingers opening as a thumb is pressed between them. Nothing is cut ' +
-      'away -- the two halves swing apart about their hinges into a V, and ' +
-      'the piercer goes in between them, visible the whole way.\n\n' +
-      '• Seam -- this one layer is split into two halves along a line you ' +
-      'draw (Paint regions…, then Seam).\n' +
-      '• Two layers -- this layer is one half and another pierced layer is ' +
-      'the other (an index and a middle finger imported separately).\n\n' +
-      'Each half turns about its hinge (Paint regions…, then Hinges) -- the ' +
-      'same kind of fixed point a PxLink is: it never moves or comes apart.\n\n' +
-      'Full opening is how wide the V is at its mouth when the piercer is ' +
-      'at its End point. It is shut at the Dent Trigger Distance and opens ' +
-      'smoothly in between, by exactly as much as the piercer has gone in -- ' +
-      'and closes the same way as it comes back out.',
+  'pierce-dent': {
+    title: 'Dent shape',
+    body: 'The notch a pierce cuts into this layer, in its own pixels. ' +
+      'Measured at the End point -- it grows from nothing at the Dent ' +
+      'Trigger Distance, and shrinks back to nothing as the piercer comes ' +
+      'out.\n\n' +
+      '• Depth -- how far the point drives in.\n' +
+      '• Width -- how wide the opening is across the surface.\n\n' +
+      'Set either to 0 for no notch at all.\n\n' +
+      'Both are easier to set by hand: Paint regions…, then the Dent ' +
+      'target, and drag the wedge on the artwork. Its base handle places ' +
+      'it, its apex handle sets depth and direction, its width handle sets ' +
+      'the opening. These sliders and those handles are the same two ' +
+      'numbers.\n\n' +
+      'WHERE the dent happens is fixed once you place it. The piercer ' +
+      'decides how much of it appears, never where.\n\n' +
+      'Paint Deformable on the same layer to make the material around the ' +
+      'notch bunch up as it opens.',
   },
   'clayer-tools': {
     title: 'Boundary and Fill',
     body: '• Boundary -- draws a line on the imported picture marking the ' +
-      'outline of the piece you want to pull out. It has to form ONE ' +
-      'unbroken loop, fully closed, before Fill will work.\n' +
-      '• Fill -- tap anywhere inside a closed loop to select everything it ' +
-      'encloses, shown in green. Tap the line itself, tap outside every ' +
-      'loop, or tap inside a loop with a gap in it, and you get a message ' +
+      'outline of the piece you want to pull out. It only goes on the ' +
+      'artwork -- transparent pixels take no line -- and the artwork\u2019s ' +
+      'own edge closes it: a line right across an arm, from one side to the ' +
+      'other, cuts off the hand. It has to leave the piece fully closed off ' +
+      'before Fill will work.\n' +
+      '• Fill -- tap a piece to select it, shown in green. Tap more pieces ' +
+      'to add them to the same extraction (separate strands of hair, say), ' +
+      'or a green piece to take it back out. Tap the line itself, empty ' +
+      'space, or a piece whose line has a gap in it, and you get a message ' +
       'explaining why instead of a wrong or silent fill.\n\n' +
       'The CLayer button only lights up once a fill has succeeded, and it ' +
       'extracts exactly those pixels from the original picture -- nothing ' +
@@ -216,6 +229,12 @@ const TOPICS = {
       'Empty background counts as a colour, so you can fill it too.\n' +
       '• Blend -- writes one new midpoint pixel between two differently ' +
       'coloured neighbours.\n\n' +
+      'Every stroke stays on the canvas: nothing is drawn past its edge, ' +
+      'and a stroke wholly off it is not an undo step. Lock to art (shown ' +
+      'with the brushes, shapes and fill) goes further: only pixels that ' +
+      'already have colour are touched, so you can shade or recolour ' +
+      'right up to a sprite\u2019s edge without spilling onto the ' +
+      'background.\n\n' +
       'Undo and Redo step back and forward through everything you draw. ' +
       'Save work keeps the canvas itself, mid-edit, so closing the app ' +
       'does not lose it — that is separate from Save as Layer, which hands ' +
@@ -311,6 +330,9 @@ const TOPICS = {
       '\u2022 Erase lowers it toward zero. The other bones already ' +
       'influencing those vertices take up the slack, so the total always ' +
       'stays at 1 and the artwork never loses its skinning.\n\n' +
+      'Only a dab ON the selected layer\u2019s artwork paints -- one just off ' +
+      'its edge, or on another layer, does nothing, however much of the ' +
+      'brush overlaps.\n\n' +
       'Neither touches the artwork itself -- only which bone moves it. ' +
       'Erasing the last influence on a vertex leaves it sitting at rest.',
   },
@@ -334,7 +356,9 @@ const TOPICS = {
       '• Pin paints new pins.\n' +
       '• Eraser Pin removes them, without touching the artwork itself.\n\n' +
       'Painting always happens on the Above layer; Below is shown only as ' +
-      'a reference to line pins up against, and is never itself pinned.',
+      'a reference to line pins up against, and is never itself pinned. ' +
+      'Pins land only on the Above layer\u2019s artwork: a brush that ' +
+      'overhangs its edge pins what it covers and nothing beyond.',
   },
 };
 

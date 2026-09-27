@@ -22,7 +22,7 @@
 // tests/meshedit.mjs checks all of that after every operation rather than
 // trusting any of the algorithms below to be obviously right.
 
-import { MeshVertex, localToWorld, autoWeightOneVertex } from './mesh.js';
+import { MeshVertex, localToWorld, autoWeightOneVertex, meshCellSize } from './mesh.js';
 
 // A vertex nearer than this to a tap is the one being tapped, rather than a
 // place to insert a new vertex. In source texels, so it scales with the
@@ -38,9 +38,8 @@ export const VERTEX_HIT_TEXELS = 3;
 
 export function hitRadius(mesh, part) {
   if (!mesh || !part) return VERTEX_HIT_TEXELS;
-  const cols = Math.max(1, mesh.cols || 1);
-  const rows = Math.max(1, mesh.rows || 1);
-  const cell = Math.min(part.naturalWidth / cols, part.naturalHeight / rows);
+  const size = meshCellSize(mesh, part);
+  const cell = Math.min(size.w, size.h);
   return Math.max(0.75, Math.min(VERTEX_HIT_TEXELS, cell * 0.35));
 }
 // Closer than this to an edge and an inserted vertex is treated as ON that

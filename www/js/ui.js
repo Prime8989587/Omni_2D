@@ -8,7 +8,7 @@ import { createIcon, setIcon } from './pixelIcons.js';
 import { initCheckpoints, openCheckpoints } from './checkpoints.js';
 import { initRecentTools, registerToolLauncher } from './recentTools.js';
 import {
-  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics, SpreadMode,
+  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics,
 } from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
@@ -52,15 +52,15 @@ import { haptic } from './haptics.js';
 import { renderBrushPresets, PIXEL_FORMAT } from './brushpresets.js';
 import { initHome, startPetals, stopPetals } from './home.js';
 import { playEnter, transitionScreens } from './transitions.js';
-import { setPierceOverlay, pierceSpreadIssue, markPierceStale } from './pierce.js';
+import { setPierceOverlay, pierceDentIssue, markPierceStale } from './pierce.js';
 import * as psaver from './psaver.js';
 import { initInfoButtons } from './info.js';
 import { encodeGif, describeGif } from './gif.js';
 import { saveBinaryFile, toSafeFilename } from './filesave.js';
 import { initSettings, getSetting, subscribeSettings } from './settings.js';
 import { initSettingsUI, openSettings } from './settingsUI.js';
+import { showToast } from './toast.js';
 
-const TOAST_DURATION_MS = 4000;
 const NUDGE_STEP_PX = 1; // one grid cell
 const NUDGE_STEP_RADIANS = (2 * Math.PI) / 180;
 
@@ -75,7 +75,6 @@ const els = {};
 let currentState = AppState.HOME;
 let scenePanelOpen = true;
 let skeletonPanelOpen = true;
-let toastTimer = null;
 let pendingLeaveHome = false;
 let pendingDeleteBoneId = null;
 let bindListTab = 'parts'; // which list the Bind panel is showing
@@ -159,7 +158,6 @@ function cacheElements() {
   els.toBackBtn = document.getElementById('toBackBtn');
   els.duplicatePartBtn = document.getElementById('duplicatePartBtn');
   els.deletePartBtn = document.getElementById('deletePartBtn');
-  els.toast = document.getElementById('toast');
 
   els.undoBtn = document.getElementById('undoBtn');
   els.redoBtn = document.getElementById('redoBtn');
@@ -174,9 +172,8 @@ function cacheElements() {
     'pierceRolePiercedBtn', 'pierceRoleHint', 'pierceDepthSummary',
     'piercePhysicsRow', 'piercePhysicsPiercerBtn', 'piercePhysicsPiercedBtn',
     'piercePhysicsBothBtn', 'piercePhysicsHint',
-    'pierceSpreadRow', 'pierceSpreadOffBtn', 'pierceSpreadSeamBtn', 'pierceSpreadPairBtn',
-    'pierceSpreadPartnerRow', 'pierceSpreadPartnerSelect', 'pierceSpreadWidthRow',
-    'pierceSpreadSlider', 'pierceSpreadValue', 'pierceSpreadHint',
+    'pierceDentRow', 'pierceDentDepthSlider', 'pierceDentDepthValue',
+    'pierceDentWidthSlider', 'pierceDentWidthValue',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDentStartInput', 'pierceDepthDentMark',
@@ -325,14 +322,6 @@ function cacheElements() {
   els.cancelExportBtn = document.getElementById('cancelExportBtn');
 }
 
-function showToast(message) {
-  els.toast.textContent = message;
-  els.toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    els.toast.hidden = true;
-  }, TOAST_DURATION_MS);
-}
 
 // ---------------------------------------------------------------------------
 // Export
@@ -1547,7 +1536,6 @@ function piercePart() {
 
 function openPierceModal(partId) {
   pierceModalPartId = partId;
-  spreadPairPending = null;
   renderPierceModal();
   els.pierceModal.hidden = false;
 }
@@ -1561,9 +1549,9 @@ const PIERCE_ROLE_HINTS = {
   [PierceRole.NONE]: 'Not part of a pierce. This layer behaves exactly as normal.',
   [PierceRole.PIERCER]: 'This layer does the piercing. Paint its tip, and set how ' +
     'close it has to get before the other layer starts to move.',
-  [PierceRole.PIERCED]: 'This layer gets pierced. Paint where a piercer comes in, and ' +
-    'give it a V below -- two halves that part to let it between them. Its own bones ' +
-    'and physics keep running as normal.',
+  [PierceRole.PIERCED]: 'This layer gets pierced. Paint the area a piercer is ' +
+    'allowed to push into, and place the notch it cuts (Paint regions…, then Dent). ' +
+    'Its own bones and physics keep running as normal.',
 };
 
 function renderPierceModal() {
@@ -1587,130 +1575,55 @@ function renderPierceModal() {
     els.piercePhysicsBothBtn.setAttribute('aria-pressed', String(physics === PiercePhysics.BOTH));
     els.piercePhysicsHint.textContent = PIERCE_PHYSICS_HINTS[physics];
   }
-  // The V belongs to the PIERCED side: it describes how this layer gives
-  // way, which is a property of the material rather than of whatever goes
-  // into it.
-  els.pierceSpreadRow.hidden = !part.isPierced;
-  if (part.isPierced) renderPierceSpread(part);
+  // The dent's two numbers belong to the PIERCED side: they describe the
+  // notch cut into this layer, which is a property of the material rather
+  // than of whatever goes into it.
+  els.pierceDentRow.hidden = !part.isPierced;
+  if (part.isPierced) {
+    els.pierceDentDepthSlider.value = String(part.pierceDentDepth);
+    els.pierceDentWidthSlider.value = String(part.pierceDentWidth);
+    els.pierceDentDepthValue.textContent = `${part.pierceDentDepth} px`;
+    els.pierceDentWidthValue.textContent = `${part.pierceDentWidth} px`;
+  }
 
   if (part.isPiercer) {
-    const opening = part.pierceDentStart === part.pierceEnter
-      ? 'the V starts opening with it'
-      : `the V holds shut until ${part.pierceDentStart} px`;
+    const denting = part.pierceDentStart === part.pierceEnter
+      ? 'the dent starts with it'
+      : `the dent holds off until ${part.pierceDentStart} px`;
     els.pierceDepthReadout.textContent =
       `Enter ${part.pierceEnter} px · Dent ${part.pierceDentStart} px · ` +
       `End ${part.pierceEnd} px — contact starts ${part.pierceEnter} px out and ` +
-      `${opening}; it is fully open ${part.pierceEnd} px deeper.`;
+      `${denting}; both stop growing ${part.pierceEnd} px deeper.`;
   }
 
   const painted = part.pierceRegion.size;
   els.piercePaintBtn.hidden = !part.hasPierceRole;
   const walls = part.pierceBarrierRegion.size;
-  const seam = part.pierceSeam.size;
-  const extra = part.isPierced
-    ? `${seam ? ` · seam ${seam} px` : ''}${walls ? ` · ${walls} wall` : ''}`
+  // The bunching count is stated whether or not it exists. A pierced layer
+  // with roles set, depths set and its area painted is completely
+  // configured for a NOTCH -- the dent cuts with or without it -- but the
+  // material around it will sit dead still, and nothing else on screen
+  // would say why. Not a warning, because nothing is broken; just the
+  // sentence that turns "the edges aren't reacting" into "ah, I haven't
+  // painted which ones should".
+  const bunch = part.pierceDeformRegion.size;
+  const soft = part.isPierced
+    ? ` · ${bunch || 'no'} bunching${walls ? ` · ${walls} wall` : ''}`
     : '';
-  const issue = pierceSpreadIssue(part);
+  const issue = pierceDentIssue(part);
+  const noBunch = part.isPierced && painted > 0 && bunch === 0;
   if (issue) {
     els.piercePaintBtn.replaceChildren(
-      document.createTextNode('Paint regions… '), createIcon('warning'), document.createTextNode(` ${issue}`),
+      document.createTextNode('Paint regions… '), createIcon('warning'), document.createTextNode(` no dent — ${issue}`),
     );
   } else {
-    els.piercePaintBtn.textContent = painted ? `Paint regions… (${painted} px marked${extra})` : 'Paint regions…';
+    els.piercePaintBtn.textContent = painted
+      ? `Paint regions… (${painted} px marked${soft})${noBunch
+        ? ' — nothing painted Deformable, so the notch cuts but the edges stay put'
+        : ''}`
+      : 'Paint regions…';
   }
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;
-}
-
-// ---- The V
-
-const SPREAD_HINTS = {
-  [SpreadMode.OFF]: 'This layer registers contact but does not part: a piercer ' +
-    'reaching it is drawn going beneath it.',
-  [SpreadMode.SEAM]: 'This one layer parts along a seam you draw on it — ' +
-    'Paint regions…, then Seam. Each side swings away about its own hinge.',
-  [SpreadMode.PAIR]: 'This layer is one half and the layer below is the other. ' +
-    'They swing apart about their hinges as the piercer goes in between them.',
-};
-
-// "Two layers" chosen but the other half not picked yet: shown as the mode,
-// but nothing is written until a partner is chosen.
-let spreadPairPending = null;
-
-function renderPierceSpread(part) {
-  const mode = spreadPairPending === part.id ? SpreadMode.PAIR : (part.pierceSpreadMode || SpreadMode.OFF);
-  els.pierceSpreadOffBtn.setAttribute('aria-pressed', String(mode === SpreadMode.OFF));
-  els.pierceSpreadSeamBtn.setAttribute('aria-pressed', String(mode === SpreadMode.SEAM));
-  els.pierceSpreadPairBtn.setAttribute('aria-pressed', String(mode === SpreadMode.PAIR));
-  els.pierceSpreadWidthRow.hidden = mode === SpreadMode.OFF;
-  els.pierceSpreadSlider.value = String(part.pierceSpread);
-  els.pierceSpreadValue.textContent = `${part.pierceSpread} px`;
-
-  // Every other layer can be the other half. One that is not pierced yet
-  // is listed too, and says so: choosing it makes it Pierced, which is the
-  // user's explicit choice rather than anything inferred.
-  const pairing = mode === SpreadMode.PAIR;
-  els.pierceSpreadPartnerRow.hidden = !pairing;
-  if (pairing) {
-    const partner = partsStore.partnerOf(part);
-    const select = els.pierceSpreadPartnerSelect;
-    select.replaceChildren();
-    const none = document.createElement('option');
-    none.value = '';
-    none.textContent = 'Choose the other half…';
-    select.appendChild(none);
-    for (const other of partsStore.parts) {
-      if (other.id === part.id || other.isPiercer) continue;
-      const option = document.createElement('option');
-      option.value = other.id;
-      option.textContent = other.isPierced ? other.name : `${other.name} (will become Pierced)`;
-      select.appendChild(option);
-    }
-    select.value = partner ? partner.id : '';
-  }
-  const partner = pairing ? partsStore.partnerOf(part) : null;
-  els.pierceSpreadHint.textContent = pairing
-    ? (partner
-      ? `${part.name} and ${partner.name} are the two halves. They swing apart about ` +
-        'their hinges as the piercer goes in between them — drag the hinges in ' +
-        'Paint regions…, then Hinges.'
-      : 'Choose the layer that is the other half.')
-    : SPREAD_HINTS[mode];
-}
-
-function chooseSpreadMode(mode) {
-  const part = piercePart();
-  if (!part) return;
-  if (mode === SpreadMode.PAIR) {
-    // Shown, not yet set: a pair needs its other half chosen first, and
-    // until then this layer keeps whatever V it had.
-    if (part.pierceSpreadMode !== SpreadMode.PAIR) spreadPairPending = part.id;
-    renderPierceSpread(part);
-    return;
-  }
-  spreadPairPending = null;
-  history.run(mode === SpreadMode.SEAM ? 'Split layer along a seam' : 'Turn the V off',
-    () => partsStore.setPierceSpreadMode(part.id, mode));
-  markPierceStale();
-  renderPierceModal();
-  canvasEngine.requestRender();
-  if (mode === SpreadMode.SEAM && part.pierceSeam.size < 2) {
-    showToast(`Now draw the seam on "${part.name}" — Paint regions…, then Seam.`);
-  }
-}
-
-function chooseSpreadPartner(partnerId) {
-  const part = piercePart();
-  const other = partsStore.parts.find((candidate) => candidate.id === partnerId);
-  if (!part || !other) return;
-  spreadPairPending = null;
-  history.run('Pair the two halves of a V', () => {
-    if (!other.isPierced) partsStore.setPierceRole(other.id, PierceRole.PIERCED);
-    partsStore.setPiercePartner(part.id, other.id);
-  });
-  markPierceStale();
-  renderPierceModal();
-  canvasEngine.requestRender();
-  showToast(`"${part.name}" and "${other.name}" are now the two halves of one V.`);
 }
 
 // The pierce region tint is one of the Debug overlay's views now
@@ -1805,16 +1718,16 @@ function renderPierceDepthBar() {
   els.pierceDepthEndMark.style.left = '100%';
   els.pierceDepthContact.style.left = `${enterPct}%`;
   els.pierceDepthContact.style.right = '0';
-  const opening = dentStart === enter
-    ? 'The V starts opening on contact.'
+  const denting = dentStart === enter
+    ? 'The dent starts on contact.'
     : (dentStart < enter
-      ? `The V holds shut until ${dentStart} px away — ${enter - dentStart} px ` +
+      ? `The dent holds off until ${dentStart} px away — ${enter - dentStart} px ` +
         'further in than first contact.'
-      : `The V starts opening at ${dentStart} px away, before contact does.`);
+      : `The dent starts at ${dentStart} px away, before contact does.`);
   els.pierceDepthLegend.textContent =
     `Left edge: the tip still approaching, nothing moves. Enter at ${enter} px ` +
-    `away: contact begins. ${opening} Right edge: ${end} px deeper still, ` +
-    'the V fully open — going deeper than this changes nothing more.';
+    `away: contact begins. ${denting} Right edge: ${end} px deeper still, ` +
+    'maximum push and a full dent — going deeper than this changes nothing more.';
 }
 
 // ---- Placing Enter and End by hand, on the piercer itself
@@ -2880,10 +2793,67 @@ async function discardRecovery() {
 // reachable from Home, Rig, Bind and Free Move alike -- no mode gating.
 function renderStateChrome() {
   els.appMenu.hidden = !stateMenuOpen;
+  if (stateMenuOpen) fitAppMenu();
   els.appMenuBtn.setAttribute('aria-expanded', String(stateMenuOpen));
   els.stateReverseBtn.disabled = !restorePoint;
   els.stateReverseBtn.textContent = restorePoint ? 'Reverse' : 'Reverse (nothing saved yet)';
   els.stateDiscardBtn.disabled = partsStore.isEmpty && bonesStore.isEmpty;
+}
+
+// THE SCREEN, SHARED OUT
+//
+// The canvas takes half of whatever height is left once the rows above it
+// have theirs (style.css, .canvas-wrap), and the controls take the rest. Those
+// rows are the top bar -- which wraps to a second line on a narrow screen --
+// and the Recent row, which appears the first time a tool is used. Neither
+// height is known to CSS, so it is measured here into --chrome-h and kept
+// current whenever either one changes size.
+function fitWorkspace() {
+  const app = els.appRoot;
+  if (!app) return;
+  const topbar = app.querySelector('.topbar');
+  const recent = document.getElementById('recentToolsBar');
+  const measure = () => {
+    let h = topbar ? topbar.getBoundingClientRect().height : 0;
+    if (recent && !recent.hidden) {
+      const style = getComputedStyle(recent);
+      h += recent.getBoundingClientRect().height + parseFloat(style.marginTop || 0) + parseFloat(style.marginBottom || 0);
+    }
+    app.style.setProperty('--chrome-h', `${Math.ceil(h)}px`);
+  };
+  measure();
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(measure);
+    if (topbar) observer.observe(topbar);
+    if (recent) observer.observe(recent);
+  }
+  // The Recent row appearing is a change of `hidden`, which a
+  // ResizeObserver reports as a size change -- but only once it is laid out,
+  // so the window's own resize is watched too.
+  window.addEventListener('resize', measure);
+}
+
+// THE MENU IS ITS OWN SCROLL BOX, SIZED TO THE SCREEN
+//
+// It hangs off the top bar, over everything, and it is taller than a phone
+// screen: Navigation, Project, PSaver, CLayer and Saved state together run
+// well past the bottom edge. Positioned absolutely with nothing capping its
+// height, the part below the fold simply did not exist as far as touch was
+// concerned -- nothing contained it that could scroll, so Checkpoints, Save
+// state, Reverse and Discard could never be reached. The same shape of bug
+// the Free-Move layer menu had: a popover with no bounded scroll box.
+//
+// So the menu is capped at exactly the room between its own top edge and
+// the bottom of the visible screen, and scrolls within that. Measured each
+// time it opens rather than fixed in CSS, because the top bar wraps to a
+// second row on narrow screens and moves the menu's top edge with it.
+function fitAppMenu() {
+  const menu = els.appMenu;
+  menu.style.maxHeight = '';
+  const top = menu.getBoundingClientRect().top;
+  const screen = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  menu.style.maxHeight = `${Math.max(160, Math.floor(screen - top - 12))}px`;
+  menu.scrollTop = 0;
 }
 
 function toggleStateMenu() {
@@ -3208,21 +3178,24 @@ function bindEvents() {
   // a wedge that size reads on this particular artwork. One undo step per
   // drag rather than one per pixel of slider travel, the same treatment
   // every other continuous control here gets.
-  els.pierceSpreadOffBtn.addEventListener('click', () => chooseSpreadMode(SpreadMode.OFF));
-  els.pierceSpreadSeamBtn.addEventListener('click', () => chooseSpreadMode(SpreadMode.SEAM));
-  els.pierceSpreadPairBtn.addEventListener('click', () => chooseSpreadMode(SpreadMode.PAIR));
-  els.pierceSpreadPartnerSelect.addEventListener('change', () => {
-    if (els.pierceSpreadPartnerSelect.value) chooseSpreadPartner(els.pierceSpreadPartnerSelect.value);
-  });
-  attachContinuousHistory(els.pierceSpreadSlider, 'Change V opening');
-  els.pierceSpreadSlider.addEventListener('input', () => {
-    const part = piercePart();
-    if (!part) return;
-    els.pierceSpreadValue.textContent = `${els.pierceSpreadSlider.value} px`;
-    partsStore.setPierceSpread(part.id, Number(els.pierceSpreadSlider.value));
-    markPierceStale();
-    canvasEngine.requestRender();
-  });
+  for (const [slider, readout] of [
+    [els.pierceDentDepthSlider, els.pierceDentDepthValue],
+    [els.pierceDentWidthSlider, els.pierceDentWidthValue],
+  ]) {
+    attachContinuousHistory(slider, 'Change dent shape');
+    slider.addEventListener('input', () => {
+      const part = piercePart();
+      if (!part) return;
+      readout.textContent = `${slider.value} px`;
+      partsStore.setPierceDent(
+        part.id,
+        Number(els.pierceDentDepthSlider.value),
+        Number(els.pierceDentWidthSlider.value)
+      );
+      markPierceStale();
+      canvasEngine.requestRender();
+    });
+  }
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
   const onDepthTyped = () => {
     renderPierceDepthBar();
@@ -3331,6 +3304,10 @@ function bindEvents() {
   els.poseTargetPiercerBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.PIERCER); renderChrome(); });
 
   els.appMenuBtn.addEventListener('click', (event) => {
+  // Rotating the phone, or a keyboard opening, changes the room the menu has.
+  const refitMenu = () => { if (stateMenuOpen) fitAppMenu(); };
+  window.addEventListener('resize', refitMenu);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', refitMenu);
     event.stopPropagation(); // so the document listener below doesn't close it again
     toggleStateMenu();
   });
@@ -3513,6 +3490,7 @@ export function initUI() {
   });
   registerRecentToolLaunchers();
   initRecentTools();
+  fitWorkspace();
   initInfoButtons();
   initDebugOverlay({
     context: () => (isMeshTrimOpen() ? 'meshtrim' : currentState),

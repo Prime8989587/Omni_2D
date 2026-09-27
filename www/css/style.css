@@ -248,7 +248,15 @@ button, input, select, textarea {
      off-screen on another -- you cannot paint weights onto a mesh you
      cannot see. The controls scroll instead. */
   flex: 0 0 auto;
+  /* Half of what is left once the top bar and the Recent row have their
+     room -- measured live into --chrome-h by ui.js (fitWorkspace), because
+     the top bar wraps on narrow screens and the Recent row comes and goes.
+     A flat 48vh ignored both: once the Recent row arrived the canvas kept
+     its full share and the rows around it were squeezed instead. Still a
+     fixed share per screen, not "whatever is left", so artwork placed in
+     one mode is not off-screen in the next -- the controls scroll. */
   height: 48vh;
+  height: clamp(180px, calc((100dvh - var(--chrome-h, 150px)) * 0.5), 60dvh);
   position: relative;
   margin: 0 16px;
   min-height: 0;
@@ -888,6 +896,16 @@ button, input, select, textarea {
   flex: 1 1 40%;
 }
 
+/* Clear boundary and Trim share their row. Clear is a cancel-styled button,
+   and .btn--cancel is full width (it is written for a modal's Cancel), which
+   in this no-wrap row pushed Trim clean off a phone's screen -- x 386 to 442
+   on a 390 px one, so the button the whole boundary tool exists for could
+   not be reached. */
+.mesh-trim #meshTrimActionRow .btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* PxLink reuses the .px-pin shell like Mesh Trim. Its footer carries more --
    the layer chips, the anchor, and the list of links -- so it scrolls under
    a cap instead of squeezing the canvas the joint is drawn on. */
@@ -1007,8 +1025,8 @@ button, input, select, textarea {
    answerable at a glance -- the two are separate tools, never a hidden
    toggle. */
 .px-pin__controls .segmented__btn[aria-pressed="true"],
-/* The Pierce popup's choices -- role, physics direction, what the V's two
-   halves are -- read the same way: the one in effect is filled. */
+/* The Pierce popup's choices -- role, physics direction -- read the same
+   way: the one in effect is filled. */
 #pierceModal .segmented__btn[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-accent);
@@ -1401,10 +1419,10 @@ button, input, select, textarea {
   color: var(--color-text);
 }
 
-/* The Dent Trigger Distance -- where the V starts to open. Violet, the same
-   hue the seam is painted in over the artwork, so the mark on this bar and
-   the V in the Pierce window read as the same setting. Its label hangs BELOW
-   the bar because the Enter mark's sits above and the two can coincide. */
+/* The dent's own starting line. Violet, the same hue the wedge is drawn in
+   over the artwork, so the mark on this bar and the shape in the Pierce
+   window read as the same setting. Its label hangs BELOW the bar because
+   the Enter mark's sits above and the two can coincide. */
 .pierce-depth__mark--dent {
   background: #a078ff;
 }
@@ -1426,27 +1444,54 @@ button, input, select, textarea {
   right: 16px;
   top: calc(76px + env(safe-area-inset-top));
   z-index: 60;
-  /* A toast has no click handler anywhere in the app -- it is purely
-     informational, on screen for 4 full seconds. Without this, that is 4
-     seconds during which a full-width banner near the top of the screen
-     silently swallows any tap that lands on it, including a paint stroke
-     on the Pierce painter's canvas right underneath: found by accident
-     while reproducing a "painting does nothing" report, where turning the
-     debug overlay on (which shows a toast) immediately before painting
-     left a stroke landing on the toast instead of the canvas -- zero
-     texels painted, no error, nothing to see wrong in the data at all.
-     A toast should never be able to eat an input meant for what is under
-     it. */
-  pointer-events: none;
-  padding: 12px 16px;
+  /* A card you can put away (toast.js): an X at its end, or a sideways
+     drag. It takes touches for that reason -- see toast.js for why this no
+     longer brings back the old swallowed-stroke bug. Only horizontal drags
+     are its own, so vertical page scrolling is left to the browser. */
+  touch-action: pan-y;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip);
   background: var(--color-surface);
   color: var(--color-text);
   font-size: var(--text-body);
   line-height: 1.4;
-  text-align: center;
   filter: var(--pixel-shadow);
+  cursor: grab;
+  user-select: none;
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+.toast__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+/* The X: a proper thumb-sized target, even though the glyph is small. */
+.toast__close {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 2px solid rgba(255, 46, 147, 0.5);
+  clip-path: var(--pixel-clip);
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+}
+
+.toast__close:active {
+  background: rgba(255, 46, 147, 0.2);
 }
 
 /* ---------- Export modal ---------- */
@@ -2059,7 +2104,14 @@ button, input, select, textarea {
   border: 2px solid var(--color-accent);
   clip-path: var(--pixel-clip-lg);
   background: var(--color-surface);
-  overflow: hidden;
+  /* A bounded scroll box: ui.js (fitAppMenu) caps max-height at the room
+     below the top bar, and everything past that scrolls. The ends do not
+     hand the gesture on to the page underneath. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   filter: var(--pixel-shadow);
 }
 
@@ -2677,13 +2729,6 @@ button, input, select, textarea {
   }
 }
 
-/* The V's "other half" picker sits in the Pierce popup, where the select
-   should take the row rather than its natural width. */
-#pierceSpreadPartnerRow .select-input {
-  flex: 1;
-  min-width: 0;
-}
-
 /* ==========================================================================
    PIXEL CONTROLS
    Everything below replaces something the browser or the platform would
@@ -3083,41 +3128,78 @@ input[type="number"] {
 
 .recent-tools {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 16px 8px;
-  overflow-x: auto;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0 16px 10px;
+  /* Never squeezed. In the app's full-height column the canvas has a set
+     height and the top bar will not shrink, so anything that CAN shrink
+     absorbs the shortfall -- and a horizontal scroller's minimum height is
+     zero, which is how this row ended up 11 to 31 px tall around 36 px
+     chips, visibly crushed. */
+  flex: 0 0 auto;
+  min-height: 40px;
 }
 
 .recent-tools--home {
   justify-content: center;
-  margin: 12px 0 0;
+  margin: 16px 0 0;
 }
 
+/* The row's label is the clock alone (named for screen readers), so the
+   three chips have the width they need instead of a word competing for it. */
 .recent-tools__label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   flex: 0 0 auto;
+  width: 24px;
   color: rgba(255, 183, 197, 0.8);
-  font-size: var(--text-label);
-  text-transform: uppercase;
 }
 
+.recent-tools__label-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The chips share the row by what they hold -- a longer name gets the
+   room it needs -- so all three always fit and none is ever cut off at the
+   edge; only on a very narrow screen does a name ellipsize, inside its own
+   chip. */
 .recent-tools__chip {
   -webkit-tap-highlight-color: transparent;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  flex: 0 0 auto;
-  min-height: 36px;
-  padding: 0 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 8px;
   border: 2px solid rgba(255, 46, 147, 0.45);
   clip-path: var(--pixel-clip);
   background: var(--color-surface);
   color: var(--color-text);
   font-size: var(--text-label);
+  white-space: nowrap;
   cursor: pointer;
+}
+
+.recent-tools--home .recent-tools__chip {
+  flex: 0 1 auto;
+}
+
+.recent-tools__chip .px-icon {
+  flex: 0 0 auto;
+}
+
+.recent-tools__chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recent-tools__chip--latest {

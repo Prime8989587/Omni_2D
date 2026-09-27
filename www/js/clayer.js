@@ -41,9 +41,11 @@ import { sceneStore } from './scene.js';
 import { history } from './history.js';
 import { isPng, loadImage, readPixels, displayName, contentBounds, cropPixels } from './importer.js';
 import { playEnter } from './transitions.js';
-import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint } from './pixelCanvas.js';
+import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { noteToolUsed } from './recentTools.js';
+import { showToast } from './toast.js';
+import { opaqueIndex } from './artwork.js';
 
 const BOUNDARY_COLOR = 'rgba(255, 46, 147, 0.85)';
 const FILL_COLOR = 'rgba(58, 219, 126, 0.4)';
@@ -62,7 +64,6 @@ const CASCADE_WRAP = 6;
 
 const els = {};
 let session = null;
-let toastTimer = null;
 
 function cacheElements() {
   for (const id of [
@@ -77,14 +78,6 @@ function cacheElements() {
   }
 }
 
-function showToast(message) {
-  const toast = document.getElementById('toast');
-  if (!toast) return;
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 4500);
-}
 
 // ---------------------------------------------------------------------------
 // Entry: pick a source image
@@ -316,6 +309,10 @@ function texelIndex(u, v) {
   return v * session.width + u;
 }
 
+// The brush's square, clipped to the picture's artwork: a boundary drawn
+// over transparent pixels would be a line around nothing, and past the
+// picture's edge it would be a line outside it. See THE ARTWORK'S OWN EDGE
+// IS A WALL TOO below for why the loop still closes.
 function brushIndices(u, v) {
   const size = session.brush;
   const origin = Math.floor((size - 1) / 2);
@@ -323,7 +320,7 @@ function brushIndices(u, v) {
   for (let dv = 0; dv < size; dv++) {
     for (let du = 0; du < size; du++) {
       const index = texelIndex(u - origin + du, v - origin + dv);
-      if (index >= 0) indices.push(index);
+      if (index >= 0 && opaqueIndex(session.pixels, session.width, session.height, index)) indices.push(index);
     }
   }
   return indices;
@@ -431,9 +428,28 @@ function clearBoundary() {
 // 4-adjacent to each other, so a fill cannot pass between them without
 // first landing ON one of them. Allowing the FILL itself to move
 // diagonally would undo exactly that seal.
-export function floodFillFrom(width, height, boundary, startU, startV) {
+//
+// THE ARTWORK'S OWN EDGE IS A WALL TOO
+//
+// Given the picture's pixels, a fully transparent texel stops the fill the
+// same way a boundary texel does. The boundary brush only draws on the
+// artwork (artwork.js) -- a stroke carried out over the transparent margin
+// leaves nothing there -- so a loop can no longer be closed through empty
+// space, and it no longer needs to be: the silhouette closes it. One line
+// drawn across a wrist, from one side of the arm to the other, is a closed
+// cut, because the fill cannot get round either end of it. There is also
+// nothing in a transparent texel to extract or keep, so walling them off
+// changes what a fill reaches, never what it produces.
+//
+// `leak: false` drops the edge-of-image test, for a piece the user has
+// pointed at directly: there the question is only "which piece", and a
+// layer whose artwork runs right up to its own edge (every trimmed or
+// cropped one) would otherwise be refused for touching it.
+export function floodFillFrom(width, height, boundary, startU, startV, { pixels = null, leak = true } = {}) {
   const start = startV * width + startU;
   if (boundary.has(start)) return { ok: false, onBoundary: true, leaked: false };
+  const wall = pixels ? (index) => pixels[index * 4 + 3] === 0 : () => false;
+  if (wall(start)) return { ok: false, onBoundary: false, leaked: false, transparent: true };
 
   const visited = new Set([start]);
   const stack = [start];
@@ -441,14 +457,18 @@ export function floodFillFrom(width, height, boundary, startU, startV) {
     const index = stack.pop();
     const u = index % width;
     const v = (index - u) / width;
-    if (u === 0 || v === 0 || u === width - 1 || v === height - 1) {
+    const onEdge = u === 0 || v === 0 || u === width - 1 || v === height - 1;
+    if (onEdge && leak) {
       return { ok: false, onBoundary: false, leaked: true };
     }
-    // u and v are both strictly interior here (checked above), so all four
-    // neighbours below stay in bounds without a per-neighbour edge test.
-    const neighbours = [index - 1, index + 1, index - width, index + width];
+    // Strictly interior (the usual case, and every case with the leak test
+    // on) needs no per-neighbour bounds test; an edge texel of a piece
+    // pointed at directly does.
+    const neighbours = onEdge
+      ? [u > 0 ? index - 1 : -1, u < width - 1 ? index + 1 : -1, v > 0 ? index - width : -1, v < height - 1 ? index + width : -1]
+      : [index - 1, index + 1, index - width, index + width];
     for (const n of neighbours) {
-      if (visited.has(n) || boundary.has(n)) continue;
+      if (n < 0 || visited.has(n) || boundary.has(n) || wall(n)) continue;
       visited.add(n);
       stack.push(n);
     }
@@ -456,6 +476,12 @@ export function floodFillFrom(width, height, boundary, startU, startV) {
   return { ok: true, onBoundary: false, leaked: false, filled: visited };
 }
 
+// A tap fills the piece under it; a tap on a piece already filled takes
+// it back out again. Pieces add up, so several separate bits of one part
+// -- three strands of hair that do not touch -- go into one extraction.
+// Before the boundary was confined to the artwork that was one loop drawn
+// round all three through the empty space between them; that space no
+// longer takes a line, so the pieces are gathered by tapping instead.
 function attemptFill(point) {
   const { u, v } = texelAt(point);
   if (u < 0 || v < 0 || u >= session.width || v >= session.height) {
@@ -463,19 +489,38 @@ function attemptFill(point) {
     return;
   }
 
-  const result = floodFillFrom(session.width, session.height, session.boundary, u, v);
+  const index = v * session.width + u;
+  if (session.fillMask && session.fillMask.has(index)) {
+    // The filled piece the tap landed in, walked over the fill itself.
+    const piece = floodFillFrom(session.width, session.height, session.boundary, u, v,
+      { pixels: session.pixels, leak: false });
+    const next = new Set(session.fillMask);
+    if (piece.ok) for (const i of piece.filled) next.delete(i);
+    session.fillMask = next.size ? next : null;
+    render();
+    return;
+  }
+
+  const result = floodFillFrom(session.width, session.height, session.boundary, u, v, { pixels: session.pixels });
+  if (result.transparent) {
+    showToast('Nothing to fill there — tap on the artwork itself.');
+    return;
+  }
   if (result.onBoundary) {
     showToast('That point is on the boundary line itself — tap inside the shape you want to fill.');
     return;
   }
   if (result.leaked) {
     showToast(
-      'The boundary isn’t a closed loop yet — the fill escaped to the edge of the image. ' +
-      'Draw one unbroken line all the way around the area, then try Fill again.'
+      'The boundary isn’t closed yet — the fill ran out to the edge of the image. ' +
+      'Draw the line right across the artwork, edge to edge, or all the way round it, then try Fill again.'
     );
     return;
   }
 
+  if (session.fillMask) {
+    for (const i of session.fillMask) result.filled.add(i);
+  }
   session.fillMask = result.filled;
   render();
 }
@@ -777,8 +822,10 @@ export function initClayer() {
   watchCanvasBox(els.clayerCanvas, () => {
     if (!session) return;
     const unmeasured = !session.cssWidth;
+    const before = { width: session.cssWidth, height: session.cssHeight };
     sizeCanvas();
     if (unmeasured) fitCamera();
+    else keepCentred(session.cam, before, { width: session.cssWidth, height: session.cssHeight }, session.dpr);
     render();
   });
 }

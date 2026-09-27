@@ -117,6 +117,18 @@ export const SCHEMA = [
     default: true,
   },
   {
+    key: 'lockToArt',
+    section: 'pcreate',
+    kind: 'toggle',
+    // Off by default, and not out of caution. A PCreate layer is usually
+    // being DRAWN, and a new one has no artwork on it at all: locked from
+    // the start, nothing could ever be put on it. Its own area is its
+    // canvas, and every stroke is confined to that either way.
+    label: 'Lock strokes to artwork',
+    hint: 'Brush, eraser, shade, shapes and fill touch only pixels that already have colour.',
+    default: false,
+  },
+  {
     key: 'defaultBrush',
     section: 'pcreate',
     kind: 'choice',

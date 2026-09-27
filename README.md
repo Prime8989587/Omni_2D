@@ -1514,20 +1514,18 @@ settles.
 
 ## Pierce: pushing flesh aside without cutting a hole
 
-A thumb pressed between two fingers does not cut a hole between them. The
-fingers **part**. **Pierce** is that parting: a piercing layer goes in
-between the two halves of a pierced layer, and the halves swing apart about
-their hinges into a V exactly as far as it has gone in — and close again,
-the same way, as it withdraws.
+A needle pressed into a belly does not cut a hole in it. The belly dents.
+**Pierce** is that dent: a piercing layer reshapes a pierced layer's
+pixels out of its way, in proportion to how deep it has come, and they
+spring back when it withdraws.
 
 It never removes a pixel, never hides one, never makes one transparent and
-never punches a hole. Each half is its own artwork turned about its own
-hinge — the same lever bone skinning already pulls, applied to mesh
-vertices — so every pixel the layer had before contact is still drawn
-afterwards, through the same rasterizer. (A layer split by a drawn seam is
-drawn as its two halves, each through a texel mask, and the two masks cover
-every pixel exactly once.) Backing the piercer out restores the artwork
-exactly, with nothing to undo or restore.
+never punches a hole. There is no second render pass and no stencil. Every
+pixel the layer had before contact is still drawn afterwards, through the
+same rasterizer, in the same single pass. The only thing that changes is
+where some mesh vertices are — the very same lever bone skinning already
+pulls — which is why backing the piercer out restores the artwork exactly,
+with nothing to undo or restore.
 
 ### Piercer and Pierced
 
@@ -1586,10 +1584,9 @@ to aim at. **This camera is the window's alone**: zooming to 800%, panning
 around and leaving again cannot move, scale or rotate either layer. Their
 real transforms are read, never written.
 
-**Painting.** One finger paints. A **target switch** picks what you are
-painting — **Tip** (pink) on the piercer; **Pierceable** (cyan),
-**Seam** (violet) and **Barrier** (white) on the pierced layer; and
-**Hinges**, which places rather than paints — and separate **Paint** and **Erase**
+**Painting.** One finger paints. A **target switch** picks which of the
+two you are painting — **Tip** (pink) on the piercer, **Pierceable**
+(cyan) on the pierced layer — and separate **Paint** and **Erase**
 tools, explicitly selected rather than hidden toggles, add and remove.
 Brush sizes run **1×1 to 10×10** in the same "⌄" menu the rest of the app
 uses. A stroke fills in the texels between samples rather than leaving a
@@ -1649,9 +1646,9 @@ depth = clamp(Enter - gap, 0, End)          t = depth / End
 `t` runs 0 at first touch to 1 at the limit, and scales how hard the contact
 presses back on the pierced layer's bones.
 
-The **V** has a third depth of its own and does not read `t` — see
-[the Dent Trigger Distance](#the-dent-trigger-distance-contact-and-parting-are-two-events).
-Enter governs contact, containment and force; the trigger governs the V.
+The **notch** has a third depth of its own and does not read `t` — see
+[the Dent Trigger Distance](#the-dent-trigger-distance-touching-and-denting-are-two-events).
+Enter governs contact, z-order and force; the trigger governs the dent.
 
 The axis is read from the artwork: it points from the middle of the whole
 piercer layer toward the middle of its painted tip — a needle has its
@@ -1669,13 +1666,14 @@ an Enter of 12) was simply unreachable.
 
 One consequence is the effect rather than a side effect of it: at the
 instant the tip actually touches, the gap is 0 and the depth is already
-Enter, so contact has begun *ahead* of the tip. Enter is how far ahead of
-itself the piercer is felt.
+Enter, so the flesh has retreated *ahead* of the tip. Flesh dents away
+from a needle instead of being skewered by it, and Enter is how far ahead
+of itself the needle pushes.
 
 **End is a hard limit, and it binds the piercer as well as the shape.**
 Capping the depth was only half of it. The contact's *geometry* also stops
-advancing past End, so the V holds fully open instead of closing
-again — but the piercer's own artwork was still drawn wherever the drag had
+advancing past End, so the dent holds at its deepest instead of melting
+away — but the piercer's own artwork was still drawn wherever the drag had
 got to, and the drag does not stop. A needle driven past End therefore
 carried on straight through the layer and came out the other side while
 every number sat pinned at End. Measured against a 32 px block: depth held
@@ -1702,161 +1700,113 @@ is the touch target — otherwise a finger aiming at the needle it can see
 would grab the empty grid its coordinates still point at, and the layer
 would be stuck where no tap could reach it.
 
-### The V: two halves that part to let the piercer between them
+### Which pierceable pixels may actually move
 
-Close a fist and press the thumb into the seam between the index and middle
-fingers. Nothing is cut. The two fingers turn away from each other, each
-about its own base, and a V opens — exactly as wide as the thumb has gone
-deep, and never before the thumb is there to fill it. The thumb's tip is in
-view the whole way: it does not dive under anything, and it does not appear
-inside an opening that was already waiting for it.
+Pierceable answers *can a piercer make contact here*. That is a different
+question from *and may this pixel then move*, and the two used to share one
+mask — so anything a piercer could touch was also something that gave way.
 
-That is now the whole of how a pierced layer gives way. It replaced a
-parametric triangle dent cut out of the artwork and a painted **Deformable**
-rim that bunched outward around it; both are gone (see
-[what the V replaced](#what-the-v-replaced)).
+They are now two independently painted masks on the pierced layer:
 
-| | |
+| Mask | Decides |
 | --- | --- |
-| **The halves** | the two things that part — two separate layers, or the two sides of one layer split by a seam you draw |
-| **The hinges** | one fixed point per half, at its base; each half turns about its own |
-| **The opening** | one number, 0 shut to 1 fully open, driven by the piercer's depth and nothing else |
-| **Full opening** | how wide the V is at its mouth when the piercer reaches End — the one slider |
+| **Pierceable** | where contact is detected at all — the Enter state, the z-order swap, the depth reading, and the only place the notch may cut |
+| **Deformable** | which pixels **bunch up** around that notch, pushing outward as it opens |
 
-#### Two ways to have two halves
+A pierceable pixel that is *not* deformable registers the contact
+completely — the tip still sinks beneath the surface, the depth still
+reads, the solver still reports it engaged, and the notch still cuts — and
+simply does not move. That is what a firm edge inside soft tissue looks
+like: bone under flesh, a buckle under a belt, a fingernail at the end of a
+finger.
 
-**V spread**, in the Pierce window of a pierced layer, is **Off**, **Seam**
-or **Two layers**:
+**The mask's meaning was inverted by the dent rework, and so was its
+default.** It used to mean *which pixels may give way*, with an unpainted
+mask meaning all of them. It now means *which pixels gather around the
+dent*, with an unpainted mask meaning **none** of them. That is the right
+way round for what it now does: bunching is an effect you ask for on the
+pixels you want it on, not one every pierceable pixel gets until told
+otherwise. Anyone who learned the old meaning would read the same button
+and get the opposite answer, so the painter's hint line, the ⓘ popover and
+the Pierce window's own summary all state both halves outright rather than
+leaving it to be discovered.
 
-- **Two layers** — this layer is one half and another pierced layer is the
-  other: an index finger and a middle finger imported as separate PNGs.
-  Pick the other half from the list (it is made Pierced if it is not
-  already), and the two share one opening, set on either. The seam between
-  them is found from the artwork itself — where their texels come within
-  1.6 px of each other at rest, fitted with a principal axis — and each
-  hinge defaults to its half's inside base corner, the point of the V.
-- **Seam** — this one layer is split along a line you draw on it with the
-  painter's ordinary brush (**Paint regions… → Seam**): the same
-  stroke-filled, one-undo-step freehand brush every other mask uses. The
-  end of the seam nearer the pierceable paint is its mouth; both hinges sit
-  at the other end, so the V's point is where the drawn seam stops.
+A project saved under the old meaning is **not** migrated into a Depth and a
+Width: those numbers cannot be recovered from a freehand outline without
+inventing them, and inventing them would silently give an old project a
+dent nobody configured. It opens with the defaults, and the two sliders are
+then the whole setup.
 
-Either way the two halves are measured as **one target**. The piercer's
-contact is taken against the union of both halves' pierceable paint, so
-there is one gap, one depth and one opening, and the halves cannot disagree
-about how far in the piercer is.
+It is painted in the same window as the others, as one of four paint targets
+— Tip, Pierceable, Deformable, Barrier — with the same brush and the same
+stroke undo, alongside a fifth target, Dent, which places rather than paints.
 
-#### Hinges are found like PxLink points
+### Deformable bulges. It never cuts.
 
-Each hinge is a point in its half's own texel grid, found on the deformed
-layer every frame by the same nearest-triangle lookup PxLink uses for its
-link points (`locateTexel` / `landTexel`, moved into `pxlinkState.js` so the
-two share one copy). The turn is a rigid rotation `{cos, sin, from, to}`
-applied by `carryByCorrection` with `from = to = hinge`, so the hinge is a
-**fixed point by construction**. It does not drift and cannot come apart: over a full sweep
-in and back out, the worst hinge drift measures **1.6 × 10⁻¹⁴ px** for two
-layers and **0** for a seam. And because the turn is applied before PxLink's
-own solve, a half that is PxLinked to a palm at its hinge stays joined to it.
+The two halves of a dent are produced by two completely separate calculations,
+and only one of them removes anything:
 
-The hinges are draggable. **Paint regions… → Hinges** shows both halves'
-hinges as handles on the artwork, with each half's inner edge at rest and a
-dashed line where that edge will be at full opening, so the V can be seen
-before anything is driven. **Paint the other half** switches the view to
-the other layer of a pair.
+| | reads | does |
+| --- | --- | --- |
+| **the cut** | the triangle ∩ **Pierceable** | zeroes texels in the draw mask |
+| **the bunching** | the triangle + **Deformable** | moves mesh vertices |
 
-#### One number, not two synchronized ones
+`dentCutMask` does not consult the Deformable mask anywhere, and the suite
+pins that down rather than trusting the reading: the published draw mask is
+**byte-identical** with Deformable full, empty, and every other texel — and
+with no dent configured at all, `dentTriangleAt` returns null, every vertex
+offset is exactly 0, and nothing is cut.
 
-```
-gap    = how far the tip still has to go, along the piercer's axis (signed)
-depth  = clamp(Enter - gap, 0, End)                                contact, force
-open   = clamp((trigger - gap) / (trigger - (Enter - End)), 0, 1)        the V
-swing  = ± open * asin(min(0.95, (FullOpening / 2) / lever))         each half
-```
+**One real bug, and it is why this is worth stating.** The push direction was
+computed as `vertex − nearestPointOnWedge` for *every* vertex. Outside the
+wedge that points away from it, which is right. **Inside** the wedge it points
+from the face into the interior — so material the artist had marked "pile up
+here" was driven *into the hole*, and with a Deformable mask painted over the
+notch the mask read as though it were doing the carving. Measured on a wedge 8
+texels wide and 10 deep with a rise of 1: a vertex sitting **0.186 texels
+inside** the left face came out **1.184 texels inside** it, further in than it
+started and travelling toward the middle of the hole. With a larger rise it
+was worse in a different way — the same direction carried vertices straight
+*across* the notch and out the far side.
 
-`lever` is the distance from a half's hinge to its mouth corner, so each
-half turns by exactly the angle that carries its own mouth corner half the
-full opening away from the seam — two halves of different lengths still
-open to the configured width together. The sign comes from which side of
-the seam the half is on, so they always turn away from each other, by equal
-and opposite angles.
+The direction is now chosen by side. Outside, away from the nearest boundary
+point; inside, toward it — out through the face it sits on. The magnitude for
+an inside vertex carries it clear of the face first and then gives it the same
+rim rise everything else gets, so the two cases agree exactly at the boundary:
+at distance 0 both are a plain `rise`.
 
-The tip's position and the V's opening are read off the **same** gap in the
-**same** contact test, so there is nothing to keep in sync: a given position
-of the piercer always produces the same V however it was arrived at, and
-backing out runs the same numbers backwards to shut. Measured in the real
-app, dragging the thumb in one pixel at a time and back out — 97 frames
-each, for two layers and for one layer with a drawn seam:
+The invariant is checked directly rather than by eye. A signed clearance —
+positive outside the wedge, negative inside — is measured for every vertex
+before and after the push, at twenty dent fractions, with **every** pixel on
+the layer painted Deformable (the worst case, since the mask then covers the
+notch itself). It never decreases for any vertex at any fraction, and every
+vertex that starts inside the wedge ends up clear of it.
 
-| gap | depth | V | two layers | one layer + seam |
-| --- | --- | --- | --- | --- |
-| 31 | 0 | 0% | 0.0° / 0.0° | 0.0° / 0.0° |
-| 6 | 6 | 25% | −3.5° / +3.5° | +4.4° / −4.4° |
-| 0 | 12 | 50% | −7.0° / +7.0° | +8.9° / −8.9° |
-| −6 | 18 | 75% | −10.6° / +10.6° | +13.3° / −13.3° |
-| −12 | 24 | 100% | −14.1° / +14.1° | +17.7° / −17.7° |
+So: one tool cuts, one tool bulges, and the bulging one can only ever move
+material away from the notch.
 
-(The seam's halves turn further for the same 14 px opening because they are
-shorter.) On every frame the opening equals what the tip's depth predicts,
-to **0.0**; the two swings are equal and opposite, to **0.0°**; the thumb's
-nail is on screen at all 20 of its pixels; and it moves one pixel per pixel
-of drag, never backwards. On the way out every frame reproduces the way in
-exactly.
+**On a report that this mask was stored but not respected:** not
+reproducible. Traced through the actual deformation path and measured
+every way it could be set — the real brush in the painter as well as the
+store directly, patches from 6×6 px up to the full region, on a 32 px
+layer and a 96 px one, and through a save/load round trip. The bunching
+reads the mask in all of them: a sub-region painted where the tip arrives
+gathers, and the same pixels left unpainted hold at 0.000 px while still
+registering contact. There is one real limit behind it, and it
+is resolution rather than wiring: the mask is expressed through mesh cells,
+and a pierced layer that was never bound gets an auto-generated mesh
+6–10 cells across whatever its size — 12 px cells on a 96 px layer. A mask
+painted finer than a cell still works, but gives way at cell resolution. On the canvas debug overlay it is drawn in amber over the pierceable
+cyan, so the split is visible at a glance: cyan is where a pierce
+registers, amber is where it actually moves something.
 
-| | Shut | Half way | At the End point |
-| --- | --- | --- | --- |
-| **Two layers** | ![Index and middle fingers side by side, the thumb above them](docs/images/v-pair-shut.png) | ![The thumb's nail between the fingers, which have turned apart into a narrow V](docs/images/v-pair-half.png) | ![The thumb deep between the fingers, turned fully apart about their bases](docs/images/v-pair-full.png) |
-| **One layer + drawn seam** | ![One hand layer, a dark seam line down its middle, the thumb above](docs/images/v-seam-shut.png) | ![The two halves of the hand parted into a V around the thumb's nail](docs/images/v-seam-half.png) | ![The halves fully parted, the V's point at the seam's closed end, the palm whole beneath it](docs/images/v-seam-full.png) |
-
-#### One layer, drawn as its two halves
-
-A layer split by a seam has one mesh, and a mesh whose triangles straddle
-the seam can stretch but never open. So while its V is open the layer is
-drawn as **two copies** of itself: copy A deformed as if the whole layer
-were half A and drawn only through side A's texels, copy B likewise. The
-two texel masks come from the drawn seam and cover every pixel of the layer
-**exactly once**, so nothing is lost or drawn twice; each copy is one
-continuous deformation, so neither can tear. The V is simply the gap that
-opens between them. Shut, the layer is drawn whole again, exactly as before.
-
-Near the hinge each half turns progressively rather than creasing at one
-texel — a bend band a quarter of the seam's length (2–8 texels), eased with
-a smoothstep — and every triangle that reaches behind the hinge is held
-still in both copies. So at and below the V's point the two copies are
-**identical** and the layer stays one piece there: the palm under two
-parted fingers does not grow a crease. Measured at full opening, the two
-copies differ by **0.0 px** across the whole palm, and the smallest drawn
-triangle stays at 14 px² on every frame (a fold would make one negative).
-
-#### Setting one up
-
-In a pierced layer's Pierce window:
-
-1. **V spread → Two layers**, and pick the other half — or **→ Seam**.
-2. **Full opening** — the V's mouth width at End, 0–64 px. One slider for
-   both halves of a pair; each drag is one undo step.
-3. **Paint regions…** — **Pierceable** around the mouth, where the piercer
-   comes in; for a Seam, the **Seam** itself, drawn from the gap inward;
-   optionally **Barrier** down each half's inner edge; and **Hinges** to
-   check or move the two turning points.
-
-The window names what is missing rather than letting the V silently do
-nothing — a Seam V with no seam drawn, a pair whose other half is gone, or
-halves with no pierceable paint — on the Paint regions… button and in the
-painter's status line.
-
-#### What the V replaced
-
-The parametric triangle dent — a wedge of Depth × Width placed on the
-artwork and cut out of it texel by texel — and the **Deformable** mask that
-bunched a rim of pixels outward around it are removed entirely. `dent.js`
-and its suite are deleted, along with the dent's fields, sliders and
-handles and the Deformable paint target.
-
-A project saved with a dent still opens. Its roles, regions, depths,
-Barrier and Dent Trigger Distance load as they were, the old dent and
-Deformable fields are ignored, and its V starts **Off** until one is set
-up: inventing two halves from a dent that had none would give an old
-project a V nobody configured.
+Measured with the deformable mask painted away from where the tip arrives:
+the arriving pixels displaced **0.000 px** and rendered at row 431 — their
+exact rest position — while the same pixels with the mask painted over them
+displaced 2.68 px and rendered at row 421. Contact stayed engaged at full
+depth and the z-order swap still fired in both cases. With **nothing at all**
+painted Deformable the notch still cut its 42 texels and nothing moved,
+which is the two promises being separate.
 
 ### Walls: containing the tip sideways
 
@@ -1951,36 +1901,6 @@ negative: whatever the walls say sideways, it can only ever lag the drag,
 never lead it. Swept across 448 positions with and without walls, the
 forward component measures **exactly 0** at every one.
 
-### Inside a V, the walls turn with the halves
-
-Barrier keeps its meaning — painted pixels that stop the tip sideways — and
-inside a V it gains one property and gives one up:
-
-- **The walls turn with their halves.** A wall painted down a finger's
-  inner edge is where that finger's texels *are*, so as the halves part the
-  walls part with them, and the channel the tip may move in widens exactly
-  as the V does. The walls are placed with the same interpolated mesh
-  weights the artwork is drawn with, so the wall the tip is held by is the
-  wall on screen. And because the opening depends on how deep the tip got,
-  which can depend on the walls, containment is measured at the raw opening
-  and then once more at the opening that produced.
-- **Inside a V the Barrier is sideways only.** It is swept from the V's
-  centre line — open by construction, since that is exactly where the
-  halves part — across to where the drag put the tip, never along the
-  approach. So walls can hold a tip to the channel but can never stall the
-  way in: straight down the middle the V opens fully with **0.00 px** held
-  back before End. A wall painted right across the centre line fails open
-  rather than trapping the tip.
-
-Measured with walls down both fingers and the thumb dragged 7 px across at
-79% depth: with the V held shut it gets **2.0 px** sideways, and with a
-14 px V, **6.0 px**. A layer whose V is Off keeps the swept containment
-above, unchanged.
-
-| V held shut | 14 px V |
-| --- | --- |
-| ![The thumb dragged sideways between closed fingers, held near the middle](docs/images/v-barrier-shut.png) | ![The same drag with the fingers parted, the thumb further across](docs/images/v-barrier-open.png) |
-
 ### Physics Direction: which side's movement counts
 
 The gap is a measurement between two painted regions, so it has no opinion
@@ -2011,24 +1931,13 @@ It simply stops being able to push it further. The accumulator is
 re-baselined whenever the pair drifts out of range, so it cannot wander
 over a long session.
 
-**Against a V it governs the whole coupled motion**, because the V opens
-from the same gap the accumulator corrects — measured against both halves
-together, so a pair counts once. Measured in the real app, the thumb driven
-30 px in and then the fist moved 30 px up onto it:
-
-| Physics Direction | thumb 30 px in | then fist 30 px up |
-| --- | --- | --- |
-| **Piercer** | V 58% | 58% — the fist changes nothing |
-| **Pierced** | V 0% | 100% |
-| **Both** | V 58% | 100% |
-
 ### Setting the three depths by hand, on the piercer
 
 The depth window still has the numeric fields, and now also draws the
 piercer's own artwork with its painted tip tinted and a ruler running out
 along the direction that tip points. The depths sit on that ruler as
-handles: **Enter** where contact begins, **Dent** where the V starts to
-open, **End** where both stop.
+handles: **Enter** where contact begins, **Dent** where the notch starts to
+appear, **End** where both stop growing.
 
 Neither input owns the value — the Part does, and both are views onto it.
 Dragging a handle writes the field; typing in the field moves the handle.
@@ -2063,6 +1972,277 @@ only the sprite put the End handle 62 px below the bottom edge of a
 480×300 canvas for a needle pointing down, where it could be neither seen
 nor dragged.
 
+### A wedge, not two drawn shapes
+
+The shape of a pierce is a **notch, stated as two numbers**. On the pierced
+layer the artist sets a **Depth** and a **Width**, in that layer's own
+pixels — by dragging the wedge itself, or by typing — and the app builds a
+triangle where the artist placed it, every frame:
+
+```
+        base, WIDTH across the surface
+     b1 ------------------ b2        <- the region's outline
+         \              /
+          \            /             <- the notch, cut out of the artwork
+           \          /
+            \        /   DEPTH along the approach
+             \      /
+              \    /
+               apex                  <- pointing inward, down the axis
+```
+
+The base sits at the placed point; the apex is driven inward along the placed
+direction. Neither moves. Both dimensions are multiplied by the **dent
+fraction**, which is the only thing the piercer contributes:
+
+```
+t = (dentStart - gap) / (dentStart - (enter - end))    clamped to 0..1
+half-width = Width * t / 2           reach-in = Depth * t
+```
+
+So at the Dent Trigger Distance the wedge has zero size, and it grows
+continuously to the configured Depth × Width at the End point. Measured over a full sweep
+with a 10 × 16 dent and a 1 scene px drag step: the wedge's depth advances
+**0.625 texels per step with no step larger than that**, and the cut area
+advances on **13 of 15 growth steps** — the two that do not are texel
+quantisation on a wedge one texel wide, not a stage. Past End it holds at
+full size rather than growing on.
+
+**The cut is a per-texel draw mask, not a mesh deformation.** `dentCutMask`
+marks every texel whose centre falls inside the triangle — by the same
+all-edges-one-sign test and the same sample point the rasterizer uses for
+every other pixel in this renderer — and the pierced layer draws through
+that mask. So the notch is pixel-exact whatever the mesh density is. That
+matters: the failure mode that sank the system this replaced was a mesh too
+coarse to carry the shape, and a mask cannot have that problem. The cut is
+intersected with the **pierceable** mask, so a deep wedge cannot chew
+through whatever else the layer happens to draw nearby.
+
+**And the material has to go somewhere.** A wedge pushed into something
+does not leave a clean hole with dead artwork around it — what it displaces
+piles up at the rim. So the **Deformable** mask, in its new meaning, marks
+which pixels are allowed to do that. Each marked vertex is pushed away from
+its nearest point on the wedge's *boundary*, by
+
+```
+rise  = 0.45 * Depth * t                       how far the rim gathers
+reach = max(2, max(Depth, Width) * 0.85)       how far out it reaches
+push  = rise * smoothstep(1 - distance/reach) * influence
+```
+
+The reach is deliberately **not** scaled by `t`. The area that responds is a
+property of the dent the artist configured; only the *amount* it moves grows
+as the piercer goes in. Scaling the reach too makes the rim crawl outward as
+it rises, which reads as the material spreading rather than gathering.
+
+**One wedge, one push.** Both halves come off the same triangle object, built
+once per contact per frame in `publishOcclusion`, so they cannot drift out of
+step with each other or with the drag — the notch opening and the rim rising
+are one effect driven by one number, not two effects that happen to overlap.
+
+**Nothing integrates.** The wedge *is* the depth. A given depth always
+produces exactly the same triangle and exactly the same rim, however it was
+arrived at, so withdrawing runs the identical numbers backwards to exactly
+zero. Measured across a 53-position sweep in and back out again: every depth
+on the way out reproduced the way in to the last decimal, and fully
+withdrawn the cut area, the wedge depth and the moving-vertex count were all
+zero. Px Pin still wins over everything, exactly as before.
+
+### Why the two drawn outlines had to go
+
+The system this replaced asked the artist to draw the pierceable shape
+twice — once at rest, once "entered" — traced both with Moore-neighbourhood
+border following, resampled each to 64 points at equal arc length, and
+blended between them point for point with mean value coordinates.
+
+On a rectangle or a cone that works. On real character art it does not, and
+the reason is not a bug that was left unfixed: **two freehand drawings of a
+curvy silhouette have no reliable point-to-point correspondence to blend
+along.** They have different perimeters (measured on one real pair: 173.7
+texels against 178.5), different local detail, and no agreement about which
+point means which place. Every fix tried against that — rigid rotation to
+the best cyclic alignment, then pinning the stretches where the two
+drawings coincide — narrowed the failure without removing it, because the
+premise was wrong.
+
+Three separate faults were traced to that one premise, and each is worth
+recording because each looked like something else first:
+
+- **The change appeared in the wrong place.** Reported as *"instead of the
+  tip deforming into an opening, the top is changing pixels"*. Not a
+  geometry error: the two resampled point lists simply did not line up, so
+  the deformation landed wherever point 17 happened to be on each shape.
+- **The change appeared to be inverted.** Reported as *"look where it
+  deformed and look where I drew Deformable — it's the inverse"*. Mean value
+  coordinates are a **global** interpolation, so movement refused at the tip
+  did not vanish; it leaked out wherever the Deformable mask did allow
+  motion. A cancelled change *relocated* rather than disappearing.
+- **A patch is not a silhouette.** The Entered target sat fifth in a row of
+  four masks and so got used like one — a band brushed in where the tip
+  arrived. That stores perfectly well and then blends a 120-texel perimeter
+  toward a 51-texel one whose centre sits 14 texels away, which does not
+  read as an opening at all.
+
+It also asked for a whole second silhouette to express what is usually one
+small local change. The wedge asks for two numbers.
+
+**The wedge cannot have any of those faults.** There is no correspondence to
+get wrong, because there is no second drawing. The push is a pure function
+of distance from the triangle, so a Deformable mask painted twenty rows away
+from the notch does not relocate anything — it is simply out of reach, and
+the answer is zero in *both* places. `test_pierce_barrier.mjs` runs exactly
+the scene that produced the original report and measures **0.000 px at the
+tip and 0.000 px over the mask's own rows**.
+
+### Verified on organic artwork, not on a primitive
+
+The system this replaced worked on a triangle and a rectangle and failed on
+a character, so "it works" is only worth saying about artwork of the second
+kind. The check runs on a lumpy 96 × 96 blob built from four overlapping
+ellipses with a wobbling radius — no straight edge, no symmetry, no axis a
+test could accidentally line up with — pressed by a curved, tapered finger
+with a nail. The whole silhouette is pierceable (4,596 texels), a rim of 299
+texels is painted Deformable around where the finger lands, and Depth 14 /
+Width 22 are set by driving the real sliders in the real Pierce window.
+
+The frames below are the scene bitmap itself, magnified nearest-neighbour,
+with the region overlay **off** and the piercer hidden — so what is shown is
+the pierced layer's own silhouette and nothing else.
+
+| Apart | About half depth | At the End point |
+| --- | --- | --- |
+| ![The organic blob at rest, its top edge smooth](docs/images/dent-rest.png) | ![The same blob half way in, a shallow V opening with slight shoulders](docs/images/dent-half.png) | ![The same blob at full depth, a deep V notch with the material raised either side](docs/images/dent-full.png) |
+
+And the same moment with the finger drawn, its pad sunk beneath the surface
+by the z-order swap:
+
+![The finger at full depth, its tip beneath the flesh, the notch closed around it](docs/images/dent-full-with-piercer.png)
+
+Measured over the same sweep, one scene pixel at a time:
+
+| | |
+| --- | --- |
+| Wedge at the End point | **14.00 texels**, exactly as configured |
+| Biggest single step in the wedge | **0.699 texels** — 5% of the dent, no stages |
+| Steps of the approach that grew the cut | **19 of 20** |
+| Rendered notch depth | **14 canvas px** against a 3 px raised rim |
+| Columns notched in / raised out | 24 / 8, adjacent rather than in one place |
+| Positions on the way out reproducing the way in | **65 of 65, exactly** |
+| Artwork after full withdrawal | **4,596 px, worst column drift 0 px** |
+
+### Where the dent is, is placed; how big it is, is driven
+
+The dent used to appear wherever the piercer's tip happened to be touching,
+which made its position a live readout of the drag rather than a decision
+anybody got to make. It is now the other way round. The artist **places** the
+wedge — base point and the direction it points — once, and it stays exactly
+there. The piercer's approach drives only *how much* of it there is.
+
+The placement lives on the pierced layer in its **own texel grid**, like every
+other mask on a Part:
+
+| Field | Means |
+| --- | --- |
+| `pierceDentX`, `pierceDentY` | the base's centre, in this layer's texels |
+| `pierceDentAngle` | the direction the apex is driven in |
+| `pierceDentPlaced` | whether the artist has placed it yet |
+
+A layer that has never had one placed still needs somewhere sensible for the
+handles to start, so `dentPlacement` derives one from the pierceable paint:
+the middle of the region's topmost run, pointing at the region's middle — a
+point *on* the outline aimed *into* the material. It is a starting position
+rather than a stored decision, and the first drag replaces it with a real one.
+
+**Storing it in texel space is what removed a whole class of bug rather than
+fixing one instance of it.** The previous version read the contact point out
+of the solver — scene space, with the bone carriage already folded in — and
+inverted the layer's rest transform to get back to texels. On a **bound**
+layer `x`/`y` are *rest* coordinates: dragging the character moves what is
+drawn without changing them by one pixel, so inverting only the rest transform
+put the wedge wherever the layer used to be. Measured on a 32-texel-wide bound
+layer after a 36 px whole-character drag: the notch's base came out at texel
+**x = 52**, twenty texels off the right-hand edge of the artwork — nothing cut,
+no vertex near enough to bunch, the whole effect silently doing nothing on
+precisely the layers most likely to be rigged.
+
+That was patched by carrying the carriage through the contact and subtracting
+it again. The placement rework deletes the conversion instead: `worldToTexel`,
+`directionToTexel` and the contact's `carriage` field are all gone, because a
+number stored in the grid it is used in never has to be converted into it. The
+wedge now rides the layer's transform for free — re-measured with the layer
+dragged 37 px across and 11 px up, the base stays on the same texel to the
+last bit.
+
+### Placing it by hand, on the artwork
+
+Two numbers in a slider are a poor way to answer *where should this notch
+happen*, so the wedge itself is draggable. The Pierce painter gains a fifth
+target, **Dent**, which paints nothing: it draws the triangle at full size
+over the pierced layer's artwork with three handles on it.
+
+| Handle | Sets |
+| --- | --- |
+| **base** | where on the artwork the notch opens — moves the whole wedge |
+| **apex** | how deep it goes *and* which way it faces |
+| **width** | how wide its mouth is, and nothing else |
+
+Three, because a triangle pinned to a surface has exactly three degrees of
+freedom worth exposing. The apex carries both depth and direction since
+dragging it around the base swings the wedge and dragging it away deepens it;
+too close to the base to read an angle from, it keeps the one it has rather
+than letting the wedge spin under a fingertip. The width handle counts only
+the component *across* the wedge, so dragging at any angle widens it without
+knocking it off its own axis.
+
+The Depth and Width sliders in the Pierce window show the same two numbers and
+write the same fields. Neither is the source of truth — the Part is, and both
+are views onto it. Verified in a real browser by dispatching the pointer
+events a fingertip produces: dragging the base marks the dent placed and lands
+it under the finger to within a pixel, dragging the apex 14 texels from the
+base sets Depth to exactly **14**, dragging the width handle 9 texels out sets
+Width to exactly **18**, and reopening the Pierce window shows `14` and `18` on
+the sliders and `14 px` / `18 px` on their labels. Typing into the slider
+writes back to the same field the handle does.
+
+Because the wedge is a large opaque shape, it is drawn **only** while the Dent
+target is selected; the rest of the time it would hide the paint underneath
+it. The Paint/Erase pair and the brush menu are hidden on that target rather
+than greyed — an active-looking Paint button on a target that cannot paint is
+a worse lie than no button.
+
+A placed dent can be dragged somewhere there is nothing to cut, which the
+numbers alone cannot show: Depth and Width would both read as set while the
+notch never appeared. `pierceDentIssue` asks the wedge at **full size** whether
+it cuts anything — so a dent that only reaches the paint part-way through its
+growth still counts as working — and names the problem in the painter's status
+line and on the Pierce window's own button.
+
+### What the wedge breaks off, it takes with it
+
+One more artifact, found by that same organic sweep and invisible on any
+primitive. The notch is cut out of artwork whose own boundary wobbles, and
+where the wedge's mouth meets a bump in that boundary it can clip the bump's
+base away and leave the top of it floating: **a single texel detached from
+the silhouette at five of 71 positions**, a speck hanging in the air just
+above the opening. Transient, one pixel, and on pixel art unmistakable.
+
+Attributed rather than guessed at, by running each half of the effect alone:
+with the Deformable mask cleared the speck appeared at exactly the same five
+positions, and with the dent set to zero it never appeared at all. The cut
+does it; the bunching does not.
+
+So the wedge takes what it strands. After the cut, a flood fill seeded from
+the one-texel ring around the wedge's bounding box marks everything still
+joined to the rest of the artwork; anything left over is an island, and an
+island is removed **only if one of its neighbours is a texel this wedge
+actually cut** — so a speck the artist drew detached stays exactly as drawn.
+The box remembered for the next frame's reset is widened to cover that ring,
+or a texel cleaned up there would never be put back and the notch would
+leave a permanent nick behind it.
+
+Re-measured over the same 71 positions: **one connected piece at every
+one**, with each half alone and with both together.
+
 ### The painter's canvas, and a hint line that broke it
 
 The hint line added above — the one that says what each paint target is —
@@ -2090,12 +2270,11 @@ only ever worked because the two targets happened to have hints of the same
 height. It now asks the app where the finger is, which is the thing that
 was always meant.)
 
-### The Dent Trigger Distance: contact and parting are two events
+### The Dent Trigger Distance: touching and denting are two events
 
 Enter used to answer two questions at once — *are these two in contact* and
-*has the pierced layer started to give way* — so a piercer could not touch
-anything without it giving way at once. They are separate settings, and the
-V kept the setting and its name.
+*has the surface started to give way* — so a piercer could not touch anything
+without immediately denting it. They are now separate settings.
 
 **Dent Trigger Distance** is a third depth on the piercer, in the same scene
 pixels as the other two, measured the same way: from the painted tip to the
@@ -2103,69 +2282,89 @@ nearest pierceable pixel.
 
 | Setting | Decides |
 | --- | --- |
-| **Enter** | when the pair is in **contact** — containment, force transfer, the depth starts counting |
-| **Dent Trigger** | when the **V starts to open** |
-| **End** | where both stop — the depth caps and the V is fully open |
+| **Enter** | when the pair is in **contact** — the tip draws beneath the surface, the depth starts counting, force transfers to the pierced layer's bones |
+| **Dent Trigger** | when the **notch** starts to appear |
+| **End** | where both stop growing — the one place they share |
 
-The V runs on its own scale: 0% at the trigger, 100% at the End Point, a
-straight line between — every pixel of drag opens it by the same amount, so
-there are no stages. Sharing the far end is deliberate; a drag should not
-have two different "all the way in" positions, one for the numbers and one
-for the artwork.
+The dent's fraction runs on its own scale: 0 at the trigger, 1 at the End
+Point. Sharing the far end is deliberate; a drag should not have two different
+"all the way in" positions, one for the numbers and one for the artwork.
 
-Set it closer than Enter and the tip touches, goes on in, and only then do
-the halves part — a thumb resting in the seam before it pushes. Set it
-further out than Enter and the halves start parting as the tip approaches,
-before it touches. Equal to Enter is the default: the V starts opening on
-contact.
+```
+dentT = clamp((dentStart - gap) / (dentStart - (enter - end)), 0, 1)
+```
 
-**It is gated on the trigger alone, not on contact.** Two independent
-settings have to be able to disagree, and reading engagement would quietly
-overrule a trigger set further out than Enter.
+Set it closer than Enter and the tip touches, sinks in, and only then does the
+notch open — a needle resting on skin before it breaks it. Set it equal to
+Enter and the dent begins on contact, which is how every project behaved
+before this setting existed, so that is the default and old saves load with
+it.
+
+**It is gated on the trigger alone, not on `contact.engaged`.** Two
+independent settings have to be able to disagree: a trigger further out than
+Enter has to be able to start the notch *before* contact, and one closer has
+to hold it back *after* contact has begun. Reading engagement would quietly
+overrule both.
 
 Enter and End stay editable underneath it, and nothing stops a later edit
-leaving the trigger behind the End Point, where the span would be zero or
-negative. Rather than refuse the edit or divide by nothing, the trigger is
-held one pixel clear of the End Point, so the V starts as late as it still
-can.
+leaving the trigger behind the End Point — where the growth span would be zero
+or negative. Rather than refuse the edit or divide by nothing, the trigger is
+held one pixel clear of the End Point, so the dent starts as late as it still
+can. Measured with Enter 20, End 24 and a trigger of 1 (an End Point at gap
+−4): still a finite fraction, still exactly **1.000** at the End Point.
 
-Measured in the real app on the same one-layer V, Enter 12 and End 24, with
-the trigger typed into the **Edit Enter / Dent / End Points** dialog:
+Measured on organic artwork with Enter 20, End 24, trigger 6:
 
-| trigger | the V | contact against parting |
-| --- | --- | --- |
-| **4 px** | shut until gap 4, then +6.25% per px of drag to 100% at End | **8 frames touching** (depth 1–8 px) with the V still shut |
-| **12 px** (= Enter) | shut until gap 12, then +4.17% per px | parts on contact |
-| **20 px** | shut until gap 20, then +3.13% per px | **8 frames not yet touching** (gap 19–12 px) with the V already parting |
+| gap | engaged | depth | dent |
+| --- | --- | --- | --- |
+| 24 | no | 0.0 | 0% |
+| 12 | **yes** | 8.0 | **0%** |
+| 6 | yes | 14.0 | 0% |
+| 4 | yes | 16.0 | 20% |
+| 2 | yes | 18.0 | 40% |
+| 0 | yes | 20.0 | 60% |
+| −2 | yes | 22.0 | 80% |
+| −4 | yes | 24.0 | 100% |
+| −12 | yes | 24.0 | 100% |
 
-In all three the opening matched the formula to 0.0 on every frame, the tip
-stayed on screen and moving, nothing folded, and backing out retraced it
-exactly.
+The row that matters is **gap 12**: in contact, eight pixels deep, and the
+artwork has not moved. That is the whole feature, and it was not expressible
+before.
 
-![A trigger of 4 px: the thumb 4 px into contact, the fingers still shut](docs/images/v-trigger-touching.png)
+It is set the same two ways Enter and End are — typed into a third field, or
+dragged as a third handle on the piercer's own ruler. All three handle labels
+are drawn out to one side, alternating, because the default puts the trigger
+exactly under the Enter handle and that is precisely where a user goes looking
+for it.
 
-It is set the same two ways Enter and End are — typed into a third field,
-or dragged as a third handle on the piercer's own ruler.
+### The dent's two sliders
 
-### The V's one slider
+The notch's size lives on the **pierced** layer, in the Pierce window, as
+two sliders rather than a paint target — it describes the material's
+reaction, which is a property of the material and not of whatever goes into
+it. Both run 0–128 in the layer's own pixels, update the canvas live while
+dragging, and take one undo step per drag rather than one per pixel of
+slider travel. Setting either to 0 means no notch, which is a finished,
+valid setup and not a missing step: contact, the depth reading and the
+z-order swap all carry on normally, and nothing errors or warns.
 
-The V's size lives on the **pierced** layer, as one slider: **Full
-opening**, 0–64 px, the width of the V's mouth at the End Point. It
-describes the material's reaction, which is a property of the material and
-not of whatever goes into it; for a pair it is one number, set on either
-half. It updates the canvas live while dragging and takes one undo step per
-drag. 0 means the halves never part — a finished, valid setup rather than a
-missing step: contact, depth, containment and force all carry on.
+They are the secondary way in. The primary one is dragging the wedge itself,
+above.
 
-Measured at the End Point with 14 px configured, the mouth corners ended
-**14.61 px** further apart for two layers and **13.25 px** for a seam; the
-corner texels sampled sit a pixel or so from the point each angle is aimed
-at, which is the difference.
+**One bug found by painting to the edge**, from the system this replaced and
+worth keeping because the shape of it recurs. A mask is a flat array of
+texels, so column −1 is the previous row's last texel and column `width` is
+the next row's first. A boundary walk with no bounds test wrapped round at
+the row end and marched off down the image — on a 32-texel sprite that
+produced an "outline" **1034 texels wide** and a move of **1020 px** where
+17 px was the most anything should have moved. The wedge's cut does its own
+bounds clamping on both axes for the same reason.
 
 ### No skeleton required
 
-The V is applied *per vertex* — each half's turn moves mesh vertices — so
-a pierced layer needs a mesh to carry it. Layers used to get a mesh only by being bound to a
+The bunching is applied *per vertex*, so a pierced layer needs a mesh to
+carry it. (The notch itself does not — it is a texel mask — but the two
+travel together.) Layers used to get a mesh only by being bound to a
 skeleton in Bind mode — which meant that unless you had already rigged and bound the
 flesh, the whole feature silently did nothing. Nothing in the Pierce UI
 ever asked for a rig, and piercing has nothing to do with bones.
@@ -2177,17 +2376,16 @@ painted: the contact read perfectly the whole way in — gap `31 → 7 → -1 �
 displacement sat at **0.000 px at every depth**, because the layer never
 reached the solver at all.
 
-(Both bugs in this section belong to the spring displacement that the V
-has since replaced, by way of a blend-shape morph and a dent that were each
-replaced in turn; the mesh they needed is still exactly what the V turns,
-so the fixes still carry.)
+(Both bugs in this section belong to the spring displacement that the dent
+has since replaced, by way of a blend-shape morph that was itself replaced;
+the mesh they needed is still exactly what the bunching writes into, so the
+fixes still carry.)
 
 The solver now builds the mesh itself, the first time it looks at a
 pierceable layer. An unbound mesh has no bind pose and no weights, so
 skinning it is the identity: the layer renders exactly as the flat sprite
 did, and the pierce offsets are the only thing that ever moves it. Binding
-the layer later replaces the mesh as usual — and a V then turns the bound
-mesh, on top of its skinning. Gaining one is invisible —
+the layer later replaces the mesh as usual. Gaining one is invisible —
 every fixture colour renders at an identical pixel count before and after.
 
 **A second bug surfaced once the first was fixed.** A vertex sitting
@@ -2200,34 +2398,29 @@ distance are now kept apart, and the borrowed heading is the piercer's real
 axis. The bound path never hit this because no vertex happened to land on
 the tip; the unbound mesh puts one there.
 
-### Visible the whole way in
+### Going in, not lying on top
 
-A 2D stack does not imply depth; draw order is the only depth cue the scene
-bitmap has. The dent this replaced used it one way: while in contact, the
-piercer's painted **tip** was drawn *beneath* the layer it had entered and
-the surface closed over it. A V needs the opposite. The piercer goes
-**between** the halves, so its tip has to stay in view, moving inward on
-every frame — never diving under, and never looking as if it appears inside
-an opening that was already there.
+A 2D stack does not imply depth. A piercer drawn above the flesh it has
+entered goes on looking like it is lying *on* the surface however far in
+the numbers say it is, because draw order is the only depth cue the scene
+bitmap has. So while a tip is actually in contact, it is drawn **beneath**
+the layer it has entered and the surface closes over it — the same
+information a 3D renderer would take from a depth buffer, taken from the
+one place this app actually knows it.
 
-So while a piercer is engaged with a V — or the V is open at all, which a
-trigger further out than Enter makes possible before contact — its tip is
-**lifted in front of both halves**, placed in the draw list just above the
-topmost one. Only the painted tip moves in the stack; the rest of the
-piercer stays where it was, so the artwork still reads as one object. The
-split is by *texel*, not by geometry: both parts are drawn from the same
-vertices through the same triangles, so they cannot drift apart or open a
-seam between them. It reads the same contact test the V's opening comes
-from, published in the same pass, so the tip cannot be lifted a frame early
-or dropped a frame late.
+Only the painted **tip** moves. The rest of the piercer — the shaft of a
+needle, the finger behind a nail — has not entered anything and stays
+exactly where it was in the stack, so the artwork reads as one object going
+in rather than the whole sprite ducking under. The split is by *texel*, not
+by geometry: both halves are drawn from the same vertices through the same
+triangles, differing only in which texels each pass may touch, so they
+cannot drift apart or open a seam between them.
 
-A pierced layer with its V **Off** keeps the old behaviour — the tip sinks
-beneath it on contact — so a needle into a belly still reads as going in.
-The End Point hold is the same either way.
-
-Measured over the full sweep for both kinds of V: the thumb's nail on
-screen at **20 of 20 px on every frame**, in and back out, moving **1.00 px
-per 1 px** of drag and never the wrong way.
+The switch is driven by `contact.engaged` — the very same reading the
+blend is taken from, published in the same pass. There is one contact test
+and both effects read its answer, so the tip cannot sink a frame before the
+flesh gives way or stay sunk a frame after it lets go. A
+piercer already below its target is left alone; there is nothing to fix.
 
 Making the renderer read that state meant it might need the measurement
 before the frame loop has taken its step, which profiling turned into a
@@ -2241,18 +2434,19 @@ brings the same case to **0.48 ms**. A piercer actually aimed at flesh —
 the case that matters — measures in **0.005 ms**, so the renderer's extra
 look costs nothing worth counting.
 
-For a plain pierced layer, measured at full depth: **648 tip pixels on
-screen out of contact, 0 in**, with the shaft unchanged at 2808 pixels
-either way, and the tip back to all 648 one pixel outside the Enter Point.
+Measured at full depth: **648 tip pixels on screen out of contact, 0 in**,
+with the shaft unchanged at 2808 pixels either way, and the tip back to all
+648 one pixel outside the Enter Point.
 
 ### Seeing the painted regions (a testing aid)
 
 Which pixels the app thinks are painted is invisible once the painter is
 closed, so *"nothing is happening"* and *"the regions are not where I think
-they are"* look identical. **Show painted regions on the canvas**, in the
-Pierce window, tints every painted tip pink and every pierceable area cyan
-— the painter's own two colours — directly on the artwork, and puts a live
-contact reading in the corner of the canvas:
+they are"* look identical. The **Pierce regions** view of the Debug overlay
+(the bug button; the Pierce window's *Debug overlay…* opens the same panel)
+tints every painted tip pink and every pierceable area cyan — the painter's
+own colours — directly on the artwork, and its **Pierce depth readout** view
+puts a live contact reading in the corner of the canvas:
 
 ```
 P_needle -> P_flesh
@@ -2265,11 +2459,8 @@ is the point: *"the tip is 14 px out and nothing is moving"* has to be
 distinguishable from a solver that is not running. The tint rides the
 layer's own triangles with the same texel mask as the artwork, so it
 follows every deformation exactly, and a sunk tip's tint is occluded
-exactly as the tip is. Seams are drawn violet and Barrier white, and with
-a V the readout adds how open it is and each half's angle —
-`V 50%  halves -7.0° +7.0°  tip in front`. It is off by default,
-remembered across a reload, and switching it off restores the artwork to
-an identical pixel count.
+exactly as the tip is. Both are off by default, remembered across a reload,
+and switching them off restores the artwork to an identical pixel count.
 
 ### Force transfer: what a pierce gives back
 
@@ -2353,23 +2544,7 @@ something is pressing, precisely so that "pressing hard, nothing moving"
 can be told apart from "not pressing", since the usual cause is the lever
 rather than a missing force.
 
-**Against a V, the halves are pushed apart.** A thumb between two fingers
-does not push them down its own axis; it pushes them away from each other.
-So each half's own physics bones get a push **across** the seam — away from
-it, the way that half is turning — scaled by how open the V is plus any
-overshoot past End, while the bones above them still take the along-axis
-press, once each however many halves hang from them. Released, they spring
-back through rest and settle; the jiggle is the spring doing what it always
-did. Measured in the real app with a physics bone in each finger and the V
-held open: Index leaning **−10.96°** and Medio **+10.96°**, equal and
-opposite and away from the seam, overshooting rest on release and settling
-at ±0.02°.
-
 ### Two reported regressions, and what the measurements said
-
-(Both predate the V. The first names the wedge the V has since replaced;
-they are kept for the reasoning, which carries over unchanged — there is
-still exactly one deformation path and one contact test.)
 
 Both were investigated before anything was changed, and the fix in each
 case was not the one the symptom suggested.
@@ -2437,40 +2612,10 @@ shape and let the rest give way. It appears once and is remembered.
 
 ### Verified end to end
 
-The V has two suites of its own:
-
-- **The V, headless** (49 checks, `tests/spread.mjs` — pure Node, no
-  dependencies, part of `npm test`) — both kinds of V driven through the
-  real solver and renderer's draw list, one pixel at a time, in and back
-  out. The seam and hinges found from the artwork; the opening equal to the
-  depth's prediction with both swings one number; equal and opposite
-  swings; hinges fixed (worst drift 1.6 × 10⁻¹⁴ px); each half of a pair
-  turning rigidly; no triangle of any drawn half folding; the two seam
-  copies identical behind the hinge, per texel; the tip moving 1 px per px
-  and drawn in front whenever in contact; the way out retracing the way in;
-  every texel in exactly one half; placed hinges honoured; Barrier walls
-  swinging with the halves (2.0 / 4.0 / 6.0 px sideways for a shut, 8 px
-  and 20 px V) without ever blocking the way in; each half's bone pushed
-  away from the seam (±10.56°) and settling; Physics Direction in all three
-  settings; save and load of a pair and of a seam; deleting one half; an
-  old dent project and a pair missing its partner both loading with the V
-  Off; and the missing-seam message.
-- **The V, in the real app** (34 checks) — phone-sized Chromium (390 × 844
-  at DPR 3) and real touch events. The V set up through the real Pierce
-  popup and painter — Two layers with the partner picked from the list, and
-  a seam drawn with one finger stroke on the Seam target; then 97 frames of
-  dragging for each, measuring the nail's pixels on screen, the hinges, the
-  mesh and the opening on every frame; the Barrier widening with the V
-  (2.0 px shut, 6.0 px open); force transfer (±10.96°, settling to ±0.02°);
-  Physics Direction (Piercer 58% / 58%, Pierced 0% / 100%, Both 58% /
-  100%); the palm under the V one piece (0.0 px); and the Dent Trigger
-  Distance typed into its dialog at 4 px and at 20 px, with contact and
-  parting coming apart in each direction.
-
-The suites below predate the V. They were run against the build they
-describe and their figures are what was measured at the time; where they
-mention a dent, a notch, bunching or a Deformable mask, that is the system
-the V replaced.
+Twelve browser suites cover this, all passing. The dent's own suite is
+committed, in `tests/dent.mjs`, and runs anywhere Node does — `node
+tests/dent.mjs`, no dependencies, no browser. The rest were run against the
+build they describe; their figures are what was measured at the time.
 
 - **Setup** (24 checks) — the three roles; the mandatory depth popup;
   cancel leaving the role at None; the painter's isolated camera; stroke
@@ -2548,6 +2693,43 @@ the V replaced.
   returning to 13.52 px once that area is painted deformable; a deformable
   mark on non-pierceable pixels moving nothing; the painter's third target;
   and the mask surviving a serialize/load round trip at 256 px.
+- **The dent** (25 checks, `tests/dent.mjs` — pure Node, no dependencies,
+  run it with `node tests/dent.mjs`) — the whole system on a lumpy 48 × 48
+  blob, driven through the real solver rather than a re-implementation of it.
+  *Deformable never cuts*: no vertex displaced toward the notch at any of 20
+  dent fractions with **every** pixel painted Deformable, every vertex that
+  starts inside the wedge evicted clear of it, the published draw mask
+  **byte-identical** with the mask full, empty and half-painted, and with no
+  dent configured every offset exactly 0 and nothing cut. *The trigger*:
+  contact at gap 19 with the dent still at **0%**, the dent starting at the
+  trigger and not before, reaching exactly 1.000 at the End Point and never
+  more however far past it, growth monotonic over 100 positions, moving the
+  trigger changing where the dent starts and leaving depth and engagement
+  untouched, a trigger set beyond Enter starting the notch *before* contact,
+  and a trigger stranded behind the End Point still finite and still full at
+  End. *The placement*: an unplaced dent landing on the painted region and
+  cutting; the wedge built at the placed spot; the base fixed across a
+  41-position approach, across a sideways sweep of the piercer, and across a
+  37 px drag of the pierced layer itself; both dimensions scaling about it;
+  and withdrawal reproducing the approach's fractions exactly, back to zero.
+  *All of it together*: the cut growing from the trigger and holding past
+  End, every zeroed texel inside the pierceable region, one wedge feeding
+  both halves, and everything back to nothing when the piercer leaves.
+- **The dent's UI, in a real browser** (12 checks) — Chromium, the real page,
+  the pointer events a fingertip produces. The Dent target selectable; the
+  dent starting unplaced; dragging the base marking it placed and landing it
+  under the finger to within a pixel; the apex dragged 14 texels from the base
+  setting Depth to **14**; the width handle dragged 9 texels out setting Width
+  to **18**; the Pierce window — opened through the layer's own ⋮ menu — then
+  reading `14` / `18` on its sliders and `14 px` / `18 px` on its labels;
+  typing into a slider writing back to the same field; and the dent's base
+  staying on **one** position across the piercer's whole travel.
+- **The effect on screen** (9 frames, overlay off) — Enter 20, End 24,
+  trigger 6, dent 11 × 16 placed on the blob's surface. Rendered at gaps 24
+  through −12: untouched and not engaged at 24; **engaged, 8 px deep, and
+  visibly untouched at 12**; still nothing at the trigger itself; then 20%,
+  40%, 60%, 80%, 100% as it closes, holding at 100% past End. The notch sits
+  on the same texel in every frame, with the rim raised either side of it.
 - **Enter/End markers** (23 checks) — both handles found by their own
   colours on the drawing, 77.2 px apart; dragging End 40 px moving End
   38.5 px and Enter **0.00 px**, with the Enter field untouched at 12;
@@ -2915,8 +3097,8 @@ one-line route the component was built for.
 | **Pierce role** | Pierce modal | Piercer vs Pierced, and that a layer is always exactly one, the other, or neither. |
 | **Physics direction** | Pierce modal (piercer only) | Piercer / Pierced / Both, as *whose movement* deepens contact — not who is "allowed" to move, since both sides always can. |
 | **Depths** | Pierce modal (piercer only) | Enter vs End, adapted from the Enter & End Points dialog's own wording so the two never drift apart. |
-| **Paint target** | Pierce painter | Every target on the pierced layer at once — Pierceable where the piercer comes in, Seam splitting one layer into two halves, Barrier down each half's inner edge swinging with it — and that Hinges are placed rather than painted. (Until the V it described Pierceable, Deformable and Barrier.) |
-| **V spread** | Pierce modal (pierced only) | Seam vs Two layers, that each half turns about its hinge like a PxLink point, and that Full opening is the V's mouth width at End, shut at the Dent Trigger Distance. (It replaced **Dent shape**, which explained the wedge's Depth and Width.) |
+| **Paint target** | Pierce painter | All three masks on the pierced layer at once — Pierceable, Deformable, Barrier — giving Deformable its *inverted* new meaning (which pixels bunch outward, empty meaning none rather than all) and saying outright that the notch itself is not painted at all. |
+| **Dent shape** | Pierce modal (pierced only) | Depth and Width as the notch measured at the End point, that it grows from nothing at Enter and shrinks back on the way out, and that 0 means no notch. |
 | **Follows parent** | Rig mode's bone editor | Rigid / Physics / Pivot, side by side rather than one at a time. |
 | **Paint tool** | Px Pin's own window | What a pin does (held exactly at rest, immune to bone rotation and spring physics) and the difference between Pin and Eraser Pin. |
 | **Weight tool** | Bind panel | Paint vs Erase sharing one brush, that erasing hands the freed weight to the other bones influencing those vertices so the total stays at 1, and what erasing a vertex's last influence means. |
@@ -6415,9 +6597,9 @@ to bend.
   whole-character drag are all untouched.
 - **Px Pin / Pierce windows** draw each layer at its bones' carriage, as
   always: a link moves no layer as a whole, so there is nothing to add.
-- **Pierce** touch regions and layer centres are the layer's own; the V's
-  halves turn about their hinges before the link's solve, so a half linked
-  at its hinge stays joined.
+- **Pierce** touch regions and layer centres are the layer's own; a pierced
+  layer's dent bunching is part of its own deformation, applied before the
+  link's welds, so a dented layer that is also linked stays joined.
 - **Mesh Trim** crops a layer's texture, so that layer's link points shift
   with the crop and stay on the same physical pixel.
 - **Deleting a layer** ends *its* links only. A three-way link loses that
@@ -6928,6 +7110,190 @@ so CSS px land on whole device pixels (`pixelScale.js`; Android enables
   their square pixels.
 - **No WebGL:** on a device without WebGL, the turned view falls back to
   the old blended rotation.
+
+## 2.5.1: the dent returns, and every tool stays on the art
+
+Seven items: the mesh sitting on the artwork, strokes confined to it, Pierce
+back to the triangle dent, a menu that scrolls, notifications you can put
+away, and a workspace that shares the screen fairly. A patch under the
+version rule — nothing here is a new tool, window, screen or mode, and the
+dent is a model the Pierce tool has had before (the V, 2.4.1, was also a
+patch).
+
+### 1. The mesh sits on the artwork
+
+**What was wrong.** `generateMesh` laid its grid over the whole image
+*file*: a PNG with a transparent margin got a mesh spanning the margin, with
+uniform fractional cells that did not line up with the pixels. Bound, the
+wireframe sat visibly off the figure it was meant to carry.
+
+**Now** (`mesh.js`):
+- the grid spans `artworkBounds(part)` — the opaque pixels' own rectangle —
+  so its outer edges *are* the artwork's edges;
+- every vertex sits on a whole texel, so at rest it lands on a whole scene
+  pixel and the snap moves nothing;
+- a cell with no opaque pixel is dropped, so an L-shaped layer gets an
+  L-shaped mesh;
+- `mesh.grid` records the edges, and density, pin distances, seam cells,
+  Mesh Trim's hit radius and PxLink's weld radius all read it
+  (`meshGrid`, `meshCellSize`);
+- an untouched legacy mesh is refitted when a project loads
+  (`refitLegacyMesh`), with its weights carried across.
+
+**Measured** in the real app on a 72×96 PNG holding a 22×40 figure in a
+wide transparent margin: mesh bounds equal the artwork's pixel bounds
+exactly, and the mesh covers 880 px² over 880 opaque pixels, where 2.5.0
+spread 6,912 px² — the whole file. `tests/meshfit.mjs` (9 checks) pins it down headlessly.
+
+### 2. Every tool marks only the artwork
+
+**One rule** (`www/js/artwork.js`): a stroke, dab, pin, region, boundary or
+joint lands only where the layer it is aimed at has pixels — alpha above
+zero, the same line `artworkBounds` and the importer's crop draw. A touch
+past the silhouette, on the transparent margin or out in the window around
+it, does not register: nothing is written and no undo step is added.
+
+| Tool | How the rule applies |
+|---|---|
+| Px Pin | the brush footprint is clipped to the Above layer's opaque texels |
+| Pierce painter | Tip, Pierceable, Deformable and Barrier paint only the target layer's opaque texels |
+| Weight painting (Bind) | a dab counts only when the finger is over the selected layer's artwork *as drawn now*, looked up on the deformed mesh (`texelUnder`) — the brush reaching edge vertices from off the layer no longer paints them |
+| Mesh Trim | the boundary brush draws only on the art; Add and Move put vertices only on it |
+| CLayer | the boundary brush draws only on the picture's art |
+| PxLink | the joint lands only on (or at the edge of) the art of a layer being joined — across a gap between two layers it goes on either one's edge; dragged off, it waits at the last spot that was on it |
+| PCreate | see below |
+
+**The artwork's edge closes a boundary.** With the line confined to the
+art, a loop can no longer be closed through empty space — so the flood fill
+(`floodFillFrom`, `{ pixels }`) treats transparent pixels as walls, and the
+silhouette closes it instead. One line across a wrist, from one side of the
+arm to the other, is a closed cut. Transparent pixels hold nothing to keep
+or extract, so walling them off changes what a fill *reaches*, never what
+it *produces*.
+- **CLayer's Fill** takes the tapped piece. Taps add pieces to the same
+  extraction (separate strands of hair used to be one loop drawn round all
+  of them through the gaps), and a tap on a green piece takes it back out.
+  A piece that reaches the image's edge is still "not closed", as before.
+- **Mesh Trim** still trims a loop drawn fully on the art without being
+  told where its inside is. When the line is a cut the silhouette closes,
+  there is no single inside, so Trim asks you to **tap the piece to keep**.
+  Only boundary line that touches the kept piece goes with it.
+
+**PCreate** is where the rule needs care. A PCreate layer *is* its canvas,
+and a new one is empty — locked to its non-transparent pixels, nothing could
+ever be drawn on it. So by default every stroke stays on the canvas (it
+already clipped there), and a stroke wholly off it no longer leaves an empty
+undo step. **Lock to art** (with the brushes, shapes and fill, and in
+Settings → PCreate) is the strict version: brush, eraser, shade, shapes and
+fill touch only pixels that already have colour.
+
+**Measured** with real CDP touches (`b7/strokes.mjs`), strokes begun outside
+the art and dragged across and out: 20/20 across all seven tools. The same
+script on 2.5.0 scores 0/7 on the first three: Px Pin pinned 30 transparent
+texels, the Pierce painter painted 92 off the art, and dabs beside a layer
+changed its weights. `tests/artwork.mjs` (15 checks) covers the rule and the
+walled fill headlessly.
+
+### 3. Pierce is the triangle dent again
+
+**The V is gone.** The two-halves hinge mechanic (2.4.1) proved too hard to
+drive in practice, so it is removed, not kept beside the dent: `spread.js`,
+its seam and hinge targets, its partner pairing, its Pierce-window row and
+its fields on a layer are all deleted. A project saved with V settings loads
+with them dropped and the dent's defaults in their place. Earlier chapters
+(and 2.4.1 in the changelog) still describe the V — as history.
+
+**The dent, as it was, with what came after it kept** (`dent.js`, pre-V):
+- a triangular notch, **Depth** and **Width**, cut out of the pierceable
+  region;
+- growing smoothly from nothing at the **Dent Trigger Distance** to full at
+  **End**, and closing the same way;
+- **placed by you**: Paint regions… → Dent, drag the base handle to the
+  spot, the apex handle for depth and direction, the width handle for the
+  opening. Where the dent happens is fixed; the piercer decides only how
+  much of it there is;
+- Deformable pixels bunch outward around it; Barrier, Physics Direction and
+  force transfer behave as before.
+
+The painter's handle labels used to stack above their grips, so a narrow
+wedge's "width" and "base" ran together; each label now sits off its handle
+in the direction it points.
+
+**Measured** in the real app (`b7/pierce_dent.mjs`, 13/13): roles set and
+the wedge placed with real touches (base at texel (10, 0), depth 12,
+width 14, 90°), then the needle driven 40 px in and out through Free Move.
+The wedge's base stays at (10, 0) throughout; the notch grows 0 → 0.13 →
+0.46 → 0.96 → 1.00 monotonically; at full depth 84 texels are cut, all
+within u 3..16 — at the wedge, not under the needle at u 22; backing out
+leaves nothing cut, and the same depth gives the same notch in and out.
+
+### 4. The top-level menu scrolls
+
+The ☰ menu (Back to Menu, Settings, What's new, projects, PSaver, CLayer,
+Checkpoints, saved state) had grown past a phone's height and could not
+scroll: on 360×640 it ran to y 875 on a 640 px screen, and the last entries
+were unreachable. It is now a bounded scroll box — `fitAppMenu()` caps it at
+the room below the top bar on open and on resize, `overscroll-behavior:
+contain` keeps the swipe off the page underneath. Measured with touch swipes
+at 390×844 and 360×640: the last entry comes on screen, the page does not
+move, and tapping it opens its confirmation.
+
+### 5. Notifications you can put away
+
+Every tool had its own four-line toast and none could be dismissed. Now
+there is one (`toast.js`), shared by every screen:
+- an **X** at its end (40×40 px);
+- **drag it sideways**: past a third of its width, or **thrown** that way as
+  the finger lets go (300 px/s over the last 100 ms, in the direction it is
+  already out), it slides off; short of that it springs back, and thrown
+  back toward where it started it stays;
+- **held**, its clock stops, so reading or dragging it is never cut short.
+
+The toast takes touches now, which it deliberately did not before (*A toast
+can silently eat a tap*, above). That was about an *invisible* obstacle;
+this one is a card you can see, with an X, and a touch on it is a gesture on
+it. Measured with real touches: X, drag, flick, throw-back, hold and
+timeout all behave (9 checks).
+
+### 6 and 7. The Recent row and the canvas share the screen
+
+**Recent row.** It sat in the workspace's flex column with the default
+`min-height: 0` of a scroller, so the column squeezed it: 13 to 31 px tall
+around 36 px chips, depending on mode. It is now `flex: 0 0 auto`, 40 px in
+every mode, with a clock icon in place of the RECENT label and chips sized
+to their names.
+
+**Canvas.** It was a fixed 405 px, and everything below it — mode tabs,
+tool controls — got what was left. `fitWorkspace()` now measures the chrome
+above it (`--chrome-h`) and the canvas takes half of the remaining height:
+349–350 px at 390×844 (41%), 281–298 px at 360×740, with the controls the
+other half.
+
+### Found along the way
+
+- **Mesh Trim's Trim button was off the screen.** `.btn--cancel` is full
+  width (written for a modal's Cancel), so in Mesh Trim's no-wrap action
+  row "Clear boundary" took all 358 px and pushed Trim to x 386–442 on a
+  390 px phone. The two now share the row.
+- **Tool windows keep the work centred.** A tool window fits its camera
+  once, on opening; when the rows below its canvas changed height (Mesh
+  Trim's Trim Boundary adds two), the art slid off-centre, half out of
+  view. `keepCentred()` in `pixelCanvas.js` now holds the centre through a
+  resize in all six tool windows.
+
+### Tests
+
+- New: `tests/artwork.mjs` (15) and `tests/meshfit.mjs` (9), in `npm test`.
+- Browser suites updated on purpose: Mesh Trim's Move check finds its
+  vertex by place (the old index sat in a transparent corner the mesh no
+  longer covers) and its loops are drawn on the art; the audit's eraser
+  check sets up its head-only vertices explicitly (the new grid's best was
+  0.999, not 1); PxLink's UI suite drops its shoulder joint on the
+  torso's edge instead of in the empty 4 px gap beside it; Mesh Trim's
+  preset stamp is aimed where a whole 6×6 square is artwork; Settings and
+  What's new read the version from the release log.
+- All unit tests, the 12 browser suites, PxLink's suites and the 2.5.0
+  feature sweeps pass.
 
 ## What's next
 

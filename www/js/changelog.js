@@ -33,6 +33,23 @@
 
 export const RELEASES = [
   {
+    version: '2.5.1',
+    date: '2026-09-27',
+    title: 'The dent returns, and every tool stays on the art',
+    kind: 'patch',
+    notes: [
+      'Pierce is the triangle dent again. Drag the wedge onto the spot it should happen in the painter’s Dent target; it grows smoothly from the Dent Trigger Distance to the End point, and backs out the same way. The two-halves V is gone — projects saved with one open with the dent’s defaults.',
+      'A layer’s mesh now sits exactly on its artwork — its own pixel bounds, position and scale — instead of spanning the whole image file, transparent margins and all.',
+      'Every tool that marks a layer marks only its artwork: Px Pin, Pierce painting, weight painting, Mesh Trim, CLayer and PxLink ignore touches off the art, so a brush overhanging the edge paints what it covers and nothing beyond.',
+      'The artwork’s own edge now closes a boundary: in CLayer and Mesh Trim one line across a limb is a cut. CLayer’s Fill gathers several pieces into one extraction, and Mesh Trim asks which piece to keep.',
+      'PCreate keeps every stroke on its canvas, and Lock to art confines brush, eraser, shade, shapes and fill to pixels that already have colour.',
+      'The top menu scrolls on shorter screens, all the way down to Discard everything.',
+      'Every notification has an X, and can be swiped or flicked away; it waits while you hold it.',
+      'The Recent tools row keeps its full height, and the main canvas takes a fair share of the screen instead of squeezing the bar, the tabs and the tool controls around it.',
+      'Mesh Trim’s Trim button no longer sits off the edge of a phone screen, and tool windows keep your artwork centred when their controls change height.',
+    ],
+  },
+  {
     version: '2.5.0',
     date: '2026-09-26',
     title: 'Pixel-perfect, and quicker to get around',

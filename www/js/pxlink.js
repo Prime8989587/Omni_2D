@@ -65,7 +65,7 @@
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import {
-  deformVerticesUncorrected, applyLinkWelds, generateMesh, defaultDensity,
+  deformVerticesUncorrected, applyLinkWelds, generateMesh, defaultDensity, meshCellSize,
 } from './mesh.js';
 import { registerPxLinkSolver, locateTexel, landTexel } from './pxlinkState.js';
 
@@ -266,7 +266,7 @@ export function ensureLinkMesh(part) {
 }
 
 // A layer's geometry as the renderer draws it, before PxLink: vertex
-// positions -- its own bones, springs, pins and V, nothing else -- and the
+// positions -- its own bones, springs, pins and pierce dent, nothing else -- and the
 // texel coordinates they carry.
 function layerGeometry(part, transforms) {
   const mesh = ensureLinkMesh(part);
@@ -285,8 +285,7 @@ function welded(geometry, correction) {
 }
 
 // The triangle a texel point sits in, and where it lands -- pxlinkState.js's
-// locateTexel/landTexel, the same two functions a pierced half uses to find
-// its hinge.
+// locateTexel/landTexel.
 function locate(geometry, u, v) {
   return locateTexel(geometry.uvs, geometry.triangles, u, v);
 }
@@ -494,8 +493,7 @@ export function solve(transforms) {
   // 3. A weld at every link point that has to move, sized to how far.
   for (const [id, g] of geometry) {
     const part = partsById.get(id);
-    const cellU = part.naturalWidth / Math.max(1, g.mesh.cols || 1);
-    const cellV = part.naturalHeight / Math.max(1, g.mesh.rows || 1);
+    const { w: cellU, h: cellV } = meshCellSize(g.mesh, part);
     const radius = Math.max(UNSNAP_MIN_TEXELS, WELD_CELLS * Math.hypot(cellU, cellV));
     const scale = Math.max(1e-6, part.scale || 1);
     // Every link point on this layer, with how far it is from its link's
