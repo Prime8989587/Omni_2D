@@ -17,6 +17,7 @@ import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
 import { deformVerticesSnapped, partQuad } from './mesh.js';
 import { isLinked, ensureLinkMesh, linkPositions } from './pxlink.js';
+import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion } from './raster.js';
@@ -598,15 +599,17 @@ function drawSnapCell(pen, cell) {
   pen.polyline(corners, ACCENT);
 }
 
-function drawPartOutline(pen, part) {
+function drawPartOutline(pen, part, boneTransforms) {
   // The quad where the part is DRAWN, not where its coordinates say it is.
   // A piercer held back at its End Point is the one case where those differ,
   // and an outline left behind at the raw dragged position would be ringing
   // empty grid several cells away from the artwork it is selecting.
   const back = part.isPiercer ? pierceHold().get(part.id) : null;
-  // (A PxLink only welds around its link point, so a linked layer's own quad
-  // is still where it is.)
-  const quad = partQuad(part).positions;
+  // A layer attached to another by PxLinks is drawn moved onto it as a
+  // whole, so its outline goes with it. (A joint only welds around its
+  // point, and leaves the quad where it is.)
+  const move = isLinked(part) ? pxlinkMove(part, boneTransforms) : null;
+  const quad = partQuad(part).positions.map((p) => applyPxLinkMove(move, p));
   const placed = back
     ? quad.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
     : quad;
@@ -819,7 +822,7 @@ function render() {
   // what you manipulate. Rig, Bind and Free Move are all about the
   // skeleton, so the outline would just be noise over the artwork.
   const selected = appState.state === AppState.HOME ? partsStore.selected : null;
-  if (selected) drawPartOutline(pen, selected);
+  if (selected) drawPartOutline(pen, selected, boneTransforms);
   pen.end();
 
   drawPierceProbe();

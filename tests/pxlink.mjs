@@ -23,11 +23,12 @@ import { bonesStore, JointType } from '../www/js/bones.js';
 import { bindPart, deformVertices, deformVerticesSnapped, deformVerticesUncorrected } from '../www/js/mesh.js';
 import {
   pxlinkStore, initPxLink, sceneToTexel, defaultAnchor, linkPositions,
-  serializePxLinks, deserializePxLinks, solve,
+  serializePxLinks, deserializePxLinks, solve, attachedMembers,
 } from '../www/js/pxlink.js';
 import { serializeProject, applyProject } from '../www/js/project.js';
 import { history } from '../www/js/history.js';
 import { setTargetLayer, beginPoseDrag, updatePoseDrag, endPoseDrag, targetBone } from '../www/js/poseTool.js';
+import { pxlinkMove, applyPxLinkMove } from '../www/js/pxlinkState.js';
 
 initPxLink();
 
@@ -535,6 +536,157 @@ console.log('\nAn unbound layer, pins, and the Free-Move drag');
     say(same(hand.angles, handControl.angles), `Free-Move dragging the physics HAND, ${label}: its bone and spring follow the finger exactly as unlinked`);
     say(hand.worst < EXACT && hand.outside === 0, `and it is drawn where that drag puts it (outside the weld), joined at the wrist throughout`,
       `worst gap ${hand.worst.toExponential(2)}, outside the weld ${hand.outside}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nTwo or more points ATTACH a layer: it moves as a whole, onto the one beneath');
+{
+  // How far a set of points is from being a rigid move (rotation and
+  // translation) of another: the worst residual of the best such fit.
+  const rigidResidual = (A, B) => {
+    const n = A.length;
+    const ca = A.reduce((s, p) => ({ x: s.x + p.x / n, y: s.y + p.y / n }), { x: 0, y: 0 });
+    const cb = B.reduce((s, p) => ({ x: s.x + p.x / n, y: s.y + p.y / n }), { x: 0, y: 0 });
+    let sxx = 0; let sxy = 0;
+    for (let i = 0; i < n; i++) {
+      const a = { x: A[i].x - ca.x, y: A[i].y - ca.y }; const b = { x: B[i].x - cb.x, y: B[i].y - cb.y };
+      sxx += a.x * b.x + a.y * b.y; sxy += a.x * b.y - a.y * b.x;
+    }
+    const th = Math.atan2(sxy, sxx); const c = Math.cos(th); const s = Math.sin(th);
+    const map = (p) => ({ x: cb.x + c * (p.x - ca.x) - s * (p.y - ca.y), y: cb.y + s * (p.x - ca.x) + c * (p.y - ca.y) });
+    let worst = 0;
+    for (let i = 0; i < n; i++) { const q = map(A[i]); worst = Math.max(worst, Math.hypot(q.x - B[i].x, q.y - B[i].y)); }
+    return { worst, map, turn: th };
+  };
+  // A patch on the torso, on a bone of its own, sitting 3 px right and 4 px
+  // up from its place; three links put it in place, each joining a patch
+  // texel to the torso texel it belongs on.
+  const patchScene = ({ spring = false, points = 3, anchor = 'torso' } = {}) => {
+    const parts = scene();
+    const patch = layer('Patch', 10, 8, 55 + 3, 44 - 4, [250, 240, 90]);
+    bonesStore.addBone({ parentId: bone('torso').id, head: { x: 63, y: 44 }, tail: { x: 63, y: 52 }, name: 'patch' });
+    bonesStore.setAttachedPart(bone('patch').id, patch.id);
+    bindPart(patch, bonesStore);
+    if (spring) bonesStore.setJointType(bone('patch').id, JointType.PHYSICS);
+    const texels = [[1, 1], [8, 2], [4, 7], [9, 6]].slice(0, points);
+    const links = texels.map(([u, v]) => pxlinkStore.add({
+      members: [{ partId: patch.id, u, v }, { partId: parts.torso.id, u: 55 + u - 52, v: 44 + v - 30 }],
+      anchorId: anchor === 'torso' ? parts.torso.id : null,
+    }));
+    return { ...parts, patch, links };
+  };
+  const torsoCarry = (torso, before, T) => rigidResidual(before, deformVertices(torso.mesh, torso, T)).map;
+
+  {
+    const { patch, links } = patchScene();
+    const T = snapshot();
+    const own = deformVerticesUncorrected(patch.mesh, patch, T);
+    const drawnNow = deformVertices(patch.mesh, patch, T);
+    const fit = rigidResidual(own, drawnNow);
+    const shift = { x: drawnNow[0].x - own[0].x, y: drawnNow[0].y - own[0].y };
+    say(fit.worst < EXACT && Math.abs(shift.x + 3) < EXACT && Math.abs(shift.y - 4) < EXACT && Math.abs(fit.turn) < 1e-9,
+      'at rest, the patch is moved into its place AS A WHOLE -- every vertex by the same (-3, +4), its shape untouched',
+      `residual ${fit.worst.toExponential(2)}, shift (${shift.x.toFixed(3)}, ${shift.y.toFixed(3)})`);
+    say(links.every((l) => gap(l) < EXACT), 'and every one of its links meets exactly', `worst ${Math.max(...links.map((l) => gap(l))).toExponential(2)}`);
+    say(solve(T).get(patch.id).welds.length === 0 || solve(T).get(patch.id).welds.every((w) => Math.hypot(w.dx, w.dy) < 1e-6),
+      'with nothing left for a weld to bend: no local stretch anywhere on it');
+  }
+  {
+    const { torso, patch } = patchScene();
+    const rest = deformVertices(patch.mesh, patch, snapshot());
+    const torsoRest = deformVertices(torso.mesh, torso, snapshot());
+    // Its own bone turned 35 degrees: the patch still sits where the torso
+    // holds it.
+    bone('patch').rotation += rad(35);
+    let T = snapshot();
+    const held = deformVertices(patch.mesh, patch, T);
+    const off = Math.max(...held.map((p, i) => Math.hypot(p.x - rest[i].x, p.y - rest[i].y)));
+    say(off < 1e-6, "its own bone turned 35 degrees, the patch does not budge from its place on the torso", `moved ${off.toExponential(2)} px`);
+    // The torso turned 40 degrees: the patch goes with it, as a whole.
+    bone('torso').rotation += rad(40);
+    T = snapshot();
+    const carry = torsoCarry(torso, torsoRest, T);
+    const now = deformVertices(patch.mesh, patch, T);
+    const stray = Math.max(...now.map((p, i) => { const e = carry(rest[i]); return Math.hypot(p.x - e.x, p.y - e.y); }));
+    say(stray < 1e-6, 'the torso turned 40 degrees: the patch is carried exactly as the torso carries its own pixels', `strays ${stray.toExponential(2)} px`);
+  }
+  {
+    // The torso thrown back and forth, the patch on a SPRING bone that lags:
+    // every frame it stays exactly on the torso.
+    const { torso, patch } = patchScene({ spring: true });
+    const rest = deformVertices(patch.mesh, patch, snapshot());
+    const torsoRest = deformVertices(torso.mesh, torso, snapshot());
+    const base = bone('torso').rotation;
+    let stray = 0;
+    let lag = 0;
+    for (let f = 0; f < 90; f++) {
+      bone('torso').rotation = base + 0.7 * Math.sin(f / 3);
+      bonesStore.stepPhysics(1 / 60);
+      const T = snapshot();
+      const carry = torsoCarry(torso, torsoRest, T);
+      const now = deformVertices(patch.mesh, patch, T);
+      stray = Math.max(stray, ...now.map((p, i) => { const e = carry(rest[i]); return Math.hypot(p.x - e.x, p.y - e.y); }));
+      const own = deformVerticesUncorrected(patch.mesh, patch, T);
+      lag = Math.max(lag, ...own.map((p, i) => { const e = carry(rest[i]); return Math.hypot(p.x - e.x, p.y - e.y); }));
+    }
+    say(stray < 1e-6 && lag > 2, 'thrown for 90 frames on a lagging spring bone, the patch never leaves its place on the torso',
+      `its own spring wanted it ${lag.toFixed(1)} px off; drawn ${stray.toExponential(2)} px off`);
+  }
+  {
+    // One point is still a JOINT: not moved as a whole.
+    const { arm, hand } = scene();
+    link([arm, hand], { x: 45, y: 70 });
+    bone('hand').rotation += rad(30);
+    say(solve(snapshot()).get(hand.id).rigid === null, 'one link point is still a joint: the hand is never moved as a whole');
+    // Two separate joints to two DIFFERENT layers is not an attachment either.
+    const { torso, arm: arm2, hand: hand2, cuff } = scene();
+    link([arm2, hand2], { x: 45, y: 70 }, arm2.id);
+    link([cuff, hand2], { x: 42, y: 71 }, cuff.id);
+    say(solve(snapshot()).get(hand2.id).rigid === null && torso, 'nor are two single joints to two different layers (a hand jointed to the arm and to the cuff)');
+    say(pxlinkStore.links.every((l) => attachedMembers(l).length === 0), 'and the PxLink list calls neither of them attached');
+  }
+  {
+    const { patch } = patchScene();
+    say(pxlinkStore.links.every((l) => attachedMembers(l).length === 1 && attachedMembers(l)[0] === patch.id),
+      'the PxLink list names the patch as attached on every one of its links');
+  }
+  {
+    // Shared: neither holds still, so they meet halfway -- each as a whole.
+    const { torso, patch, links } = patchScene({ anchor: null });
+    const T = snapshot();
+    const patchFit = rigidResidual(deformVerticesUncorrected(patch.mesh, patch, T), deformVertices(patch.mesh, patch, T));
+    const torsoFit = rigidResidual(deformVerticesUncorrected(torso.mesh, torso, T), deformVertices(torso.mesh, torso, T));
+    say(patchFit.worst < EXACT && torsoFit.worst < EXACT && links.every((l) => gap(l) < EXACT),
+      'shared links: the two meet halfway, each moved as a whole, every link exact');
+  }
+  {
+    // A patch on a patch: the second follows the first as the first is moved.
+    const { torso, patch } = patchScene();
+    const badge = layer('Badge', 4, 4, 60, 41, [10, 10, 10]);
+    pxlinkStore.add({ members: [{ partId: badge.id, u: 0.5, v: 0.5 }, { partId: patch.id, u: 2.5, v: 1.5 }], anchorId: patch.id });
+    pxlinkStore.add({ members: [{ partId: badge.id, u: 3.5, v: 3.5 }, { partId: patch.id, u: 5.5, v: 4.5 }], anchorId: patch.id });
+    const torsoRest = deformVertices(torso.mesh, torso, snapshot());
+    const rest = deformVertices(badge.mesh, badge, snapshot());
+    bone('torso').rotation += rad(25);
+    const T = snapshot();
+    const carry = torsoCarry(torso, torsoRest, T);
+    const now = deformVertices(badge.mesh, badge, T);
+    const stray = Math.max(...now.map((p, i) => { const e = carry(rest[i]); return Math.hypot(p.x - e.x, p.y - e.y); }));
+    say(stray < 1e-6, 'a layer attached to an attached layer follows it, all the way down to the torso', `strays ${stray.toExponential(2)} px`);
+  }
+  {
+    // Where the solve says the patch went, everything that places a layer
+    // without deforming it (Pierce's regions, the flat painters) reads too.
+    const { patch } = patchScene();
+    const T = snapshot();
+    const move = pxlinkMove(patch, T);
+    const middle = { x: patch.x + patch.sceneWidth / 2, y: patch.y + patch.sceneHeight / 2 };
+    const moved = applyPxLinkMove(move, middle);
+    const drawnMiddle = pointOn({ positions: deformVertices(patch.mesh, patch, T), uvs: patch.mesh.vertices, triangles: patch.mesh.triangles }, 5, 4);
+    say(move && Math.hypot(moved.x - drawnMiddle.x, moved.y - drawnMiddle.y) < 1e-6,
+      'the whole-layer move is published (pxlinkMove), and lands the layer where it is drawn',
+      `off by ${Math.hypot(moved.x - drawnMiddle.x, moved.y - drawnMiddle.y).toExponential(2)} px`);
   }
 }
 

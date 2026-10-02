@@ -51,6 +51,15 @@ const TOPICS = {
       'a little to keep the two meeting. To have one layer carry another, ' +
       'put its bone under the other\'s -- the skeleton carries, the link ' +
       'joins.\n\n' +
+      'Two or more links between the SAME two layers mean something else: ' +
+      'one is fixed ON the other, like a patch sewn on at several places. ' +
+      'Then it is ATTACHED -- it moves with the other layer as a whole, ' +
+      'turning and travelling with it every frame, so however fast or ' +
+      'violently the layer beneath is thrown about, the one on top stays ' +
+      'exactly where you linked it and keeps its own shape. Its own bones ' +
+      'and springs no longer pull it away. Use one link for a joint that ' +
+      'bends (a wrist), two or more for something that sits on top (a ' +
+      'badge, a strap, an outline).\n\n' +
       '• Pick two or more layers, tap where they meet (drag the marker to ' +
       'adjust), then Link. Three or more layers can share one point.\n' +
       '• The point goes on the artwork: a tap on empty space places ' +
@@ -379,6 +388,9 @@ const TOPICS = {
       '• Eraser Pin removes them, without touching the artwork itself.\n\n' +
       'Painting always happens on the Above layer; Below is shown only as ' +
       'a reference to line pins up against, and is never itself pinned. ' +
+      'Both are shown exactly where the scene draws them -- posed, ' +
+      'linked and all -- and a pin goes on the pixel you see under your ' +
+      'finger. ' +
       'Pins land only on the Above layer\u2019s artwork: a brush that ' +
       'overhangs its edge pins what it covers and nothing beyond.',
   },

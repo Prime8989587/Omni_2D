@@ -11,8 +11,19 @@
 // a part -- zooming to 800%, panning around, and leaving again cannot
 // move, scale or rotate anything. That separation is the whole point:
 // "get closer to see" must never turn into "accidentally moved the
-// artwork". The layers are drawn FLAT (their own pixel grids, undeformed)
-// at their current arrangement, which is exactly the frame pins live in.
+// artwork".
+//
+// WHERE THE LAYERS ARE DRAWN: EXACTLY WHERE THE SCENE DRAWS THEM
+//
+// Both layers are drawn through the very triangles the main canvas draws
+// them through (canvas.js's layerDrawGeometry) -- their bones, springs,
+// pins, and any PxLink that holds them in place -- so this window shows the
+// two exactly as the scene does, and a tap is mapped back to the texel
+// under the finger through those same triangles. It used to draw each
+// layer flat at its own origin plus its bones' carriage, which is not
+// where a layer the links had put in place is drawn: the reference layer
+// and the one being pinned could sit a whole feature apart here while
+// meeting perfectly in the scene.
 //
 // One finger paints, two fingers move the view. Pressing down starts a
 // stroke and every texel the finger crosses is pinned (or erased) as it
@@ -27,7 +38,10 @@ import { cellEdge, gridStrips } from './pixelDraw.js';
 import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
-import { pinCarriageOffset } from './mesh.js';
+import { layerDrawGeometry } from './canvas.js';
+import { rasterizeTriangle } from './raster.js';
+import { texelNearest } from './artwork.js';
+import { locateTexel, landTexel } from './pxlinkState.js';
 import { getSetting } from './settings.js';
 import { haptic } from './haptics.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
@@ -103,30 +117,86 @@ function closePicker() {
 // ---------------------------------------------------------------------------
 // Session
 
-// A layer's pixels as an offscreen canvas, drawn once on entry; drawImage
-// with smoothing off scales it losslessly at any zoom.
-function layerCanvas(part) {
+// A layer exactly as the scene draws it right now, captured once on entry --
+// the main scene cannot change underneath a full-screen window -- and used
+// for BOTH drawing and tap mapping, so what you see is exactly what you hit.
+//
+// Its drawn triangles are rasterised, by the scene's own rasterizer, into a
+// bitmap covering their bounds; drawImage with smoothing off then scales it
+// losslessly at any zoom. The texel corners' drawn positions are worked out
+// once too, so pins -- possibly thousands -- are drawn without a search each.
+function captureLayer(part) {
+  const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
+  const { positions, uvs, triangles } = layerDrawGeometry(part, transforms);
+  let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+  for (const p of positions) {
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+  }
+  x0 = Math.floor(x0); y0 = Math.floor(y0);
+  const width = Math.max(1, Math.ceil(x1) - x0);
+  const height = Math.max(1, Math.ceil(y1) - y0);
+  const buffer = new Uint8ClampedArray(width * height * 4);
+  const local = positions.map((p) => ({ x: p.x - x0, y: p.y - y0 }));
+  for (let t = 0; t < triangles.length; t += 3) {
+    const a = triangles[t]; const b = triangles[t + 1]; const c = triangles[t + 2];
+    rasterizeTriangle(buffer, width, height, part.pixels, part.naturalWidth, part.naturalHeight,
+      local[a], local[b], local[c], uvs[a], uvs[b], uvs[c]);
+  }
   const canvas = document.createElement('canvas');
-  canvas.width = part.naturalWidth;
-  canvas.height = part.naturalHeight;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext('2d');
-  const image = context.createImageData(part.naturalWidth, part.naturalHeight);
-  image.data.set(part.pixels);
+  const image = context.createImageData(width, height);
+  image.data.set(buffer);
   context.putImageData(image, 0, 0);
-  return canvas;
+  return {
+    canvas, x0, y0, width, height, positions, uvs, triangles,
+    corners: cornerPositions(part, positions, uvs, triangles),
+  };
 }
 
-// Where a layer currently sits: its own origin plus the carriage its
-// bones have given it since bind (zero for unbound layers). Captured once
-// on entry -- the main scene cannot change underneath a full-screen
-// window -- and used for BOTH drawing and tap mapping, so what you see is
-// exactly what you hit.
-function layerPlacement(part) {
-  const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  const offset = pinCarriageOffset(part, transforms);
-  // (A PxLink only welds the neighbourhood of its link point; it never moves
-  // a layer as a whole, so it adds nothing to where the layer sits.)
-  return { x: part.x + offset.x, y: part.y + offset.y };
+// Where every texel CORNER of a layer is drawn: a grid of (W+1) x (H+1)
+// scene points, NaN where the layer has no triangle (trimmed-away margin).
+function cornerPositions(part, positions, uvs, triangles) {
+  const W = part.naturalWidth;
+  const H = part.naturalHeight;
+  const out = new Float64Array((W + 1) * (H + 1) * 2).fill(NaN);
+  for (let t = 0; t < triangles.length; t += 3) {
+    const ia = triangles[t]; const ib = triangles[t + 1]; const ic = triangles[t + 2];
+    const A = uvs[ia]; const B = uvs[ib]; const C = uvs[ic];
+    const den = (B.v - C.v) * (A.u - C.u) + (C.u - B.u) * (A.v - C.v);
+    if (Math.abs(den) < 1e-12) continue;
+    const u0 = Math.max(0, Math.floor(Math.min(A.u, B.u, C.u)));
+    const u1 = Math.min(W, Math.ceil(Math.max(A.u, B.u, C.u)));
+    const v0 = Math.max(0, Math.floor(Math.min(A.v, B.v, C.v)));
+    const v1 = Math.min(H, Math.ceil(Math.max(A.v, B.v, C.v)));
+    for (let v = v0; v <= v1; v++) {
+      for (let u = u0; u <= u1; u++) {
+        const i = (v * (W + 1) + u) * 2;
+        if (!Number.isNaN(out[i])) continue;
+        const l0 = ((B.v - C.v) * (u - C.u) + (C.u - B.u) * (v - C.v)) / den;
+        const l1 = ((C.v - A.v) * (u - C.u) + (A.u - C.u) * (v - C.v)) / den;
+        const l2 = 1 - l0 - l1;
+        if (l0 < -1e-9 || l1 < -1e-9 || l2 < -1e-9) continue;
+        const pa = positions[ia]; const pb = positions[ib]; const pc = positions[ic];
+        out[i] = l0 * pa.x + l1 * pb.x + l2 * pc.x;
+        out[i + 1] = l0 * pa.y + l1 * pb.y + l2 * pc.y;
+      }
+    }
+  }
+  return out;
+}
+
+function cornerAt(part, layer, u, v) {
+  const i = (v * (part.naturalWidth + 1) + u) * 2;
+  const x = layer.corners[i];
+  return Number.isNaN(x) ? null : { x, y: layer.corners[i + 1] };
+}
+
+// A texel point (not just a corner) to where the scene draws it.
+function drawnPoint(layer, u, v) {
+  const located = locateTexel(layer.uvs, layer.triangles, u, v);
+  return located ? landTexel(layer.positions, located) : null;
 }
 
 function startSession() {
@@ -148,10 +218,8 @@ function startSession() {
     belowId: below.id,
     get above() { return partsStore.parts.find((part) => part.id === this.aboveId); },
     get below() { return partsStore.parts.find((part) => part.id === this.belowId); },
-    aboveAt: layerPlacement(above),
-    belowAt: layerPlacement(below),
-    aboveCanvas: layerCanvas(above),
-    belowCanvas: layerCanvas(below),
+    aboveLayer: captureLayer(above),
+    belowLayer: captureLayer(below),
     cam: { zoom: 1, panX: 0, panY: 0 },
     tool: 'pin',
     // The Rig section's remembered default, rather than a hardcoded 1, so
@@ -196,11 +264,11 @@ function sizeCanvas() {
 // so the user can always come back out to the overview.
 function fitCamera() {
   if (!session.cssWidth || !session.cssHeight) return;
-  const { above, below, aboveAt, belowAt, cam } = session;
-  const x0 = Math.min(aboveAt.x, belowAt.x);
-  const y0 = Math.min(aboveAt.y, belowAt.y);
-  const x1 = Math.max(aboveAt.x + above.sceneWidth, belowAt.x + below.sceneWidth);
-  const y1 = Math.max(aboveAt.y + above.sceneHeight, belowAt.y + below.sceneHeight);
+  const { aboveLayer: a, belowLayer: b, cam } = session;
+  const x0 = Math.min(a.x0, b.x0);
+  const y0 = Math.min(a.y0, b.y0);
+  const x1 = Math.max(a.x0 + a.width, b.x0 + b.width);
+  const y1 = Math.max(a.y0 + a.height, b.y0 + b.height);
   const spanX = Math.max(1, x1 - x0);
   const spanY = Math.max(1, y1 - y0);
   const zoom = Math.min(session.cssWidth / spanX, session.cssHeight / spanY) * 0.9;
@@ -215,25 +283,39 @@ function fitCamera() {
 // ---------------------------------------------------------------------------
 // Rendering
 
-function drawLayer(ctx, canvas, at, part, opacity) {
+function drawLayer(ctx, layer, opacity) {
   if (opacity <= 0) return;
   const { cam } = session;
   ctx.globalAlpha = opacity;
   ctx.drawImage(
-    canvas,
-    at.x * cam.zoom + cam.panX,
-    at.y * cam.zoom + cam.panY,
-    part.sceneWidth * cam.zoom,
-    part.sceneHeight * cam.zoom
+    layer.canvas,
+    layer.x0 * cam.zoom + cam.panX,
+    layer.y0 * cam.zoom + cam.panY,
+    layer.width * cam.zoom,
+    layer.height * cam.zoom
   );
   ctx.globalAlpha = 1;
+}
+
+// The texel grid can be drawn as straight strips only where the layer is
+// drawn square-on: its texel (0, 0), (W, 0) and (0, H) corners exactly
+// where an unturned, unbent sprite would put them.
+function squareOn(part, layer) {
+  const o = cornerAt(part, layer, 0, 0);
+  const r = cornerAt(part, layer, part.naturalWidth, 0);
+  const d = cornerAt(part, layer, 0, part.naturalHeight);
+  if (!o || !r || !d) return null;
+  const s = part.scale;
+  const ok = Math.abs(r.x - o.x - part.naturalWidth * s) < 1e-6 && Math.abs(r.y - o.y) < 1e-6
+    && Math.abs(d.y - o.y - part.naturalHeight * s) < 1e-6 && Math.abs(d.x - o.x) < 1e-6;
+  return ok ? o : null;
 }
 
 function render() {
   if (!session) return;
   const canvas = els.pxpinCanvas;
   const ctx = canvas.getContext('2d');
-  const { cam, above, below, aboveAt, belowAt } = session;
+  const { cam, above, below, aboveLayer } = session;
   if (!above || !below) { endSession(); return; } // a layer went away under us
 
   ctx.setTransform(session.dpr, 0, 0, session.dpr, 0, 0);
@@ -241,30 +323,46 @@ function render() {
   ctx.fillStyle = '#101014';
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
 
-  drawLayer(ctx, session.belowCanvas, belowAt, below, session.belowOpacity);
-  drawLayer(ctx, session.aboveCanvas, aboveAt, above, session.aboveOpacity);
+  drawLayer(ctx, session.belowLayer, session.belowOpacity);
+  drawLayer(ctx, aboveLayer, session.aboveOpacity);
 
-  // Texel grid over the ABOVE layer once cells are big enough to aim at.
+  // Texel grid over the ABOVE layer once cells are big enough to aim at --
+  // where it is drawn square-on, which is the usual case.
   const cell = above.scale * cam.zoom;
-  if (cell >= GRID_MIN_CELL_PX) {
-    gridStrips(ctx, aboveAt.x * cam.zoom + cam.panX, aboveAt.y * cam.zoom + cam.panY,
+  const origin = squareOn(above, aboveLayer);
+  if (cell >= GRID_MIN_CELL_PX && origin) {
+    gridStrips(ctx, origin.x * cam.zoom + cam.panX, origin.y * cam.zoom + cam.panY,
       above.naturalWidth, above.naturalHeight, cell, 'rgba(255, 255, 255, 0.12)', session.dpr);
   }
 
   // Pinned pixels: solid pink corner marks + translucent fill, so the pin
-  // reads clearly without completely hiding the artwork under it.
+  // reads clearly without completely hiding the artwork under it -- each on
+  // its texel's four corners as drawn.
+  const toScreen = (p) => ({ x: p.x * cam.zoom + cam.panX, y: p.y * cam.zoom + cam.panY });
   for (const index of above.pins) {
     const u = index % above.naturalWidth;
     const v = Math.floor(index / above.naturalWidth);
-    const x = (aboveAt.x + u * above.scale) * cam.zoom + cam.panX;
-    const y = (aboveAt.y + v * above.scale) * cam.zoom + cam.panY;
-    const size = above.scale * cam.zoom;
+    const c = [[u, v], [u + 1, v], [u + 1, v + 1], [u, v + 1]].map(([cu, cv]) => cornerAt(above, aboveLayer, cu, cv));
+    if (c.some((p) => !p)) continue;
+    const s = c.map(toScreen);
+    const left = Math.min(...s.map((p) => p.x)); const right = Math.max(...s.map((p) => p.x));
+    const top = Math.min(...s.map((p) => p.y)); const bottom = Math.max(...s.map((p) => p.y));
     // Skip the ones off-screen: a wide brush can leave thousands of pins,
     // and at the zoom that makes single pixels aimable most are outside.
-    if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
+    if (right < 0 || bottom < 0 || left > session.cssWidth || top > session.cssHeight) continue;
     ctx.fillStyle = 'rgba(255, 46, 147, 0.45)';
-    ctx.fillRect(x, y, size, size);
-    if (size >= 6) cellEdge(ctx, x, y, size, Math.min(2, Math.max(1, size / 10)), ACCENT, session.dpr);
+    const square = Math.abs(s[1].y - s[0].y) < 1e-6 && Math.abs(s[3].x - s[0].x) < 1e-6;
+    if (square) {
+      const size = right - left;
+      ctx.fillRect(left, top, size, bottom - top);
+      if (size >= 6) cellEdge(ctx, left, top, size, Math.min(2, Math.max(1, size / 10)), ACCENT, session.dpr);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(s[0].x, s[0].y);
+      for (let k = 1; k < 4; k++) ctx.lineTo(s[k].x, s[k].y);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   els.pxpinStatus.textContent =
@@ -323,12 +421,15 @@ function canvasPoint(event) {
   return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 }
 
-// The ABOVE layer's texel under a point in the window, or null off-layer.
+// The ABOVE layer's texel under a point in the window: through the very
+// triangles it is drawn with, so the texel picked is the one drawn under the
+// finger. Off the layer it is carried on from the nearest triangle, so a
+// brush overhanging the edge still reaches the texels it covers.
 function texelAt(point) {
-  const { above, aboveAt, cam } = session;
-  const u = Math.floor(((point.x - cam.panX) / cam.zoom - aboveAt.x) / above.scale);
-  const v = Math.floor(((point.y - cam.panY) / cam.zoom - aboveAt.y) / above.scale);
-  return { u, v };
+  const { aboveLayer, cam } = session;
+  const scene = { x: (point.x - cam.panX) / cam.zoom, y: (point.y - cam.panY) / cam.zoom };
+  const t = texelNearest(aboveLayer.uvs, aboveLayer.positions, aboveLayer.triangles, scene);
+  return t ? { u: Math.floor(t.u), v: Math.floor(t.v) } : { u: -1, v: -1 };
 }
 
 // The brush's square of texel indices, centred on (u, v) -- only the ones
@@ -511,8 +612,12 @@ export function pxpinDebug() {
     zoom: session.cam.zoom,
     panX: session.cam.panX,
     panY: session.cam.panY,
-    aboveAt: { ...session.aboveAt },
-    belowAt: { ...session.belowAt },
+    // Where each layer's texel (0, 0) is drawn -- with drawnTexel, where any
+    // texel point is drawn, in scene px. The same mapping the window draws
+    // and maps taps with.
+    aboveAt: drawnPoint(session.aboveLayer, 0, 0),
+    belowAt: drawnPoint(session.belowLayer, 0, 0),
+    drawnTexel: (u, v) => drawnPoint(session.aboveLayer, u, v),
     tool: session.tool,
     brush: session.brush,
     brushMenuOpen: session.brushMenuOpen,

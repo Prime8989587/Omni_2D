@@ -16,12 +16,28 @@ export function registerPxLinkSolver(fn) {
 // The correction PxLink applies to one layer under these bone transforms, or
 // null when the layer is in no link. Shape (see pxlink.js):
 //
-//   welds                    exact local closures at each link point -- the
-//                            ONLY thing a link moves
+//   rigid                    the whole-layer move of a layer ATTACHED to
+//                            another (tied to it at two or more points), or
+//                            null: q = (bx, by) + R(turn) (p - (ax, ay))
+//   welds                    exact local closures at each link point
 //   nearLink                 which vertices a weld reaches (left unsnapped)
 //   uncorrected, mesh        the geometry the solve already computed
 export function pxlinkCorrection(part, transforms) {
   return solver && part ? solver(part, transforms) : null;
+}
+
+// Just the whole-layer move, for anything that places a layer without
+// deforming it (Pierce's contact regions, the flat painters), or null.
+export function pxlinkMove(part, transforms) {
+  const correction = pxlinkCorrection(part, transforms);
+  return correction && correction.rigid ? correction.rigid : null;
+}
+
+export function applyPxLinkMove(move, p) {
+  if (!move) return p;
+  const x = p.x - move.ax;
+  const y = p.y - move.ay;
+  return { x: move.bx + move.cos * x - move.sin * y, y: move.by + move.sin * x + move.cos * y };
 }
 
 // ---------------------------------------------------------------------------

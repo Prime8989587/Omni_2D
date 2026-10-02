@@ -20,6 +20,7 @@ import { sceneStore } from './scene.js';
 import { layerDrawGeometry } from './canvas.js';
 import {
   pxlinkStore, sceneToTexel, defaultAnchor, distanceToArtwork, linkPositions, currentTransforms,
+  attachedMembers,
 } from './pxlink.js';
 import { playEnter } from './transitions.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
@@ -261,7 +262,9 @@ function renderList() {
     show.setAttribute('aria-pressed', String(session.focusId === link.id));
     show.textContent = linkName(link);
     const sub = document.createElement('small');
-    sub.textContent = link.anchorId ? `${nameOf(link.anchorId)} holds still` : 'shared — all give way';
+    const attached = attachedMembers(link);
+    sub.textContent = (link.anchorId ? `${nameOf(link.anchorId)} holds still` : 'shared — all give way') +
+      (attached.length ? ` · ${attached.map(nameOf).join(', ')} attached` : '');
     show.appendChild(sub);
     show.addEventListener('click', () => focusLink(link.id));
     const del = document.createElement('button');

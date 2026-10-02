@@ -31,6 +31,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
+import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
 import { pierceDentIssue } from './pierce.js';
 import { openingPlacement, openingMarker } from './opening.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
@@ -113,9 +114,13 @@ function layerCanvas(part) {
 function layerPlacement(part) {
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
   const offset = pinCarriageOffset(part, transforms);
-  // (A PxLink only welds the neighbourhood of its link point; it never moves
-  // a layer as a whole, so it adds nothing to where the layer sits.)
-  return { x: part.x + offset.x, y: part.y + offset.y };
+  // A layer attached to another by PxLinks is moved as a whole onto it; this
+  // flat view takes that move's shift (at the layer's middle), so the two
+  // layers sit here as they meet in the scene. A joint adds nothing.
+  const move = pxlinkMove(part, transforms);
+  const middle = { x: part.x + offset.x + part.sceneWidth / 2, y: part.y + offset.y + part.sceneHeight / 2 };
+  const moved = applyPxLinkMove(move, middle);
+  return { x: part.x + offset.x + (moved.x - middle.x), y: part.y + offset.y + (moved.y - middle.y) };
 }
 
 // Opens on whichever layer the user came from, with the other side of the

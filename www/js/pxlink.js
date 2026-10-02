@@ -30,12 +30,26 @@
 //      it.
 //
 // There is no memory: nothing about where the layers were when the link was
-// made, or last frame, enters the solve. And there is no whole-layer
-// correction. The first version moved each follower rigidly so its link
-// point sat on the anchor's, which overrode whatever the follower's own bone
-// did to its position: a dragged follower was snapped back onto the link and
-// could only pivot about it, and a follower's spring could only show as a
-// turn about the link. That is replaced by the weld alone.
+// made, or last frame, enters the solve.
+//
+// ONE POINT IS A JOINT; TWO OR MORE ATTACH
+//
+// A single link point between two layers is a joint: each keeps its own
+// bones and only the neighbourhood of the point is welded. (The first
+// version moved such a follower rigidly onto the anchor, which snapped a
+// dragged hand back onto its wrist and turned its spring into a pivot about
+// the link -- so a joint is never moved as a whole.)
+//
+// Two or more link points between the SAME two layers say something else:
+// that one is fixed ON the other, the way a patch is sewn on at several
+// places. A joint about two points cannot turn at all, so the layer has to
+// go wherever the other one takes it -- as a whole. So before any weld, an
+// ATTACHED layer is given the one rotation and translation that best carries
+// its link points onto the other layer's (a least-squares rigid fit), and
+// moved by it, every vertex; the welds then close only what is left, which
+// is the little the two layers' own shapes disagree by. Its own shape is
+// never stretched to make it fit, however violently the layer beneath it is
+// thrown, and however far the links had to bring it from where it was drawn.
 //
 // A weld is sized to the gap it closes -- a couple of mesh cells at the
 // least, and at least two and a half times the distance its point has to
@@ -54,6 +68,8 @@
 // under the first's -- the skeleton is what carries, the link is what joins.
 //
 // WHERE THE CORRECTION IS APPLIED
+//
+// (The whole-layer move first, then the welds -- applyLinkWelds.)
 //
 // Inside mesh.js's deformVertices, through pxlinkState.js -- the one function
 // every consumer of a layer's geometry already calls. So the renderer, Pierce,
@@ -476,8 +492,12 @@ export function solve(transforms) {
     const located = locate(g, member.u, member.v);
     return located ? { located, at: landing(g, located) } : null;
   }));
+  const uncorrected = new Map([...geometry].map(([id, g]) => [id, g.positions]));
 
-  // 2. Each link's meeting point, from those current points alone: the
+  // 2. Attached layers move as a whole first (see ONE POINT IS A JOINT).
+  const rigid = solveAttachments(links, geometry, points);
+
+  // 3. Each link's meeting point, from those current points alone: the
   //    anchor's own point, or the middle of all of them. No iteration is
   //    needed -- every weld below lands its point EXACTLY, anchored points
   //    included (held at zero), so one pass is already the answer.
@@ -490,7 +510,7 @@ export function solve(transforms) {
     return n ? { x: x / n, y: y / n } : null;
   });
 
-  // 3. A weld at every link point that has to move, sized to how far.
+  // 4. A weld at every link point that has to move, sized to how far.
   for (const [id, g] of geometry) {
     const part = partsById.get(id);
     const { w: cellU, h: cellV } = meshCellSize(g.mesh, part);
@@ -531,9 +551,159 @@ export function solve(transforms) {
     // shrank with the gap would flip vertices between rounded and unrounded
     // mid-drag, a half-pixel shimmer at its edge.
     const nearLink = g.mesh.vertices.map((t) => sites.some(({ member: a, hold }) => Math.hypot(t.u - a.u, t.v - a.v) <= hold));
-    result.set(id, { welds, nearLink, uncorrected: g.positions, mesh: g.mesh });
+    result.set(id, { rigid: rigid.get(id) || null, welds, nearLink, uncorrected: uncorrected.get(id), mesh: g.mesh });
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Attached layers
+
+// Who is attached to whom: every link point at which a layer gives way to a
+// given other layer -- as a follower of that layer's anchored links, or as
+// one of a shared link's members -- grouped by that other layer. A group of
+// two or more is an attachment. Map partId -> [{ k, i }] (link, member).
+function pairGroups(links) {
+  const groups = new Map(); // `${id}|${other}` -> [{ k, i, other }]
+  links.forEach((link, k) => {
+    link.members.forEach((member, i) => {
+      if (member.partId === link.anchorId) return;
+      const others = link.anchorId
+        ? [link.anchorId]
+        : link.members.filter((m) => m.partId !== member.partId).map((m) => m.partId);
+      for (const other of others) {
+        const key = `${member.partId}|${other}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push({ k, i, other });
+      }
+    });
+  });
+  return groups;
+}
+
+// The members of `link` that are ATTACHED (tied to the same other layer by
+// this link and at least one more) -- for the PxLink window's list.
+export function attachedMembers(link, links = pxlinkStore.links) {
+  const groups = pairGroups(links);
+  const k = links.indexOf(link);
+  const out = [];
+  for (const member of link.members) {
+    if (member.partId === link.anchorId) continue;
+    for (const [key, group] of groups) {
+      if (key.startsWith(`${member.partId}|`) && group.length >= 2 && group.some((e) => e.k === k)) {
+        out.push(member.partId);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+function attachmentsOf(links) {
+  const groups = pairGroups(links);
+  const attached = new Map();
+  for (const [key, group] of groups) {
+    if (group.length < 2) continue;
+    const id = key.slice(0, key.indexOf('|'));
+    if (!attached.has(id)) attached.set(id, []);
+    for (const entry of group) {
+      // A point shared with several layers counts once.
+      if (!attached.get(id).some((e) => e.k === entry.k)) attached.get(id).push(entry);
+    }
+  }
+  return attached;
+}
+
+// The rigid move for every attached layer, applied to its geometry and its
+// link points in place. Layers are moved after the layers they are attached
+// to, so a patch on a patch follows the one beneath it as moved. A loop of
+// attachments (each attached to the other) is taken in link order.
+function solveAttachments(links, geometry, points) {
+  const attached = attachmentsOf(links);
+  const moves = new Map();
+  if (attached.size === 0) return moves;
+  const order = [];
+  const visiting = new Set();
+  const visit = (id) => {
+    if (order.includes(id) || visiting.has(id)) return;
+    visiting.add(id);
+    for (const { k } of attached.get(id) || []) {
+      const anchor = links[k].anchorId;
+      if (anchor && attached.has(anchor)) visit(anchor);
+    }
+    visiting.delete(id);
+    order.push(id);
+  };
+  for (const id of attached.keys()) visit(id);
+  // A shared link's meeting point is the middle of where its members ARE,
+  // before any of them moves -- each then goes its half of the way. (Taken
+  // after the first had moved, the second would chase a middle that had
+  // already shifted.)
+  const before = points.map((pts) => pts.map((p) => (p ? p.at : null)));
+
+  for (const id of order) {
+    const from = [];
+    const to = [];
+    for (const { k, i } of attached.get(id)) {
+      const own = points[k][i];
+      if (!own) continue;
+      const link = links[k];
+      const anchorIndex = link.members.findIndex((m) => m.partId === link.anchorId);
+      let target = null;
+      if (anchorIndex >= 0) {
+        if (points[k][anchorIndex]) target = points[k][anchorIndex].at;
+      } else {
+        // Shared: the middle of everyone, as they were before any moved.
+        let x = 0, y = 0, n = 0;
+        for (const p of before[k]) { if (!p) continue; x += p.x; y += p.y; n++; }
+        if (n) target = { x: x / n, y: y / n };
+      }
+      if (!target) continue;
+      from.push(own.at);
+      to.push(target);
+    }
+    const move = rigidFit(from, to);
+    if (!move) continue;
+    moves.set(id, move);
+    const g = geometry.get(id);
+    g.positions = g.positions.map((p) => moveRigid(move, p));
+    links.forEach((link, k) => {
+      link.members.forEach((member, i) => {
+        if (member.partId === id && points[k][i]) points[k][i] = { ...points[k][i], at: landing(g, points[k][i].located) };
+      });
+    });
+  }
+  return moves;
+}
+
+// The rotation and translation that best carry `from` onto `to` (least
+// squares, no scaling): q = to-centre + R (p - from-centre). Points that all
+// sit on one spot fix no direction, so they only translate. Null with
+// nothing to fit.
+export function rigidFit(from, to) {
+  const n = from.length;
+  if (n === 0) return null;
+  let ax = 0, ay = 0, bx = 0, by = 0;
+  for (let i = 0; i < n; i++) { ax += from[i].x; ay += from[i].y; bx += to[i].x; by += to[i].y; }
+  ax /= n; ay /= n; bx /= n; by /= n;
+  let sxx = 0;
+  let sxy = 0;
+  let spread = 0;
+  for (let i = 0; i < n; i++) {
+    const px = from[i].x - ax; const py = from[i].y - ay;
+    const qx = to[i].x - bx; const qy = to[i].y - by;
+    sxx += px * qx + py * qy;
+    sxy += px * qy - py * qx;
+    spread += px * px + py * py;
+  }
+  const turn = spread > 1e-6 && Math.hypot(sxx, sxy) > 1e-9 ? Math.atan2(sxy, sxx) : 0;
+  return { ax, ay, bx, by, cos: Math.cos(turn), sin: Math.sin(turn), turn };
+}
+
+export function moveRigid(move, p) {
+  const x = p.x - move.ax;
+  const y = p.y - move.ay;
+  return { x: move.bx + move.cos * x - move.sin * y, y: move.by + move.sin * x + move.cos * y };
 }
 
 // ---------------------------------------------------------------------------

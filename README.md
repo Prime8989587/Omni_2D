@@ -6494,6 +6494,13 @@ all twelve browser suites pass.
 
 ## PxLink: drawn connections between independent layers
 
+> **Since 2.5.4**, two or more links between the **same** two layers
+> *attach* one to the other. The attached layer moves with the other as a
+> whole, so it stays exactly in place and in shape however violently the
+> other is thrown. One link, or links to different layers, are still joints,
+> exactly as described below. See "2.5.4: a layer linked on at several points
+> stays put; Px Pin shows the real scene" near the end of this file.
+
 A hand and an arm imported as two separate layers share no mesh, no
 weights and no vertices. Give each its own bone and nothing in the rig
 relates them, so the moment either moves a gap opens between them. That is
@@ -7504,6 +7511,117 @@ stores it on the piercer, and the project saves it. `tests/opening.mjs`
 exactly the unlocked one; past it, identical frame to frame and identical
 to the frame at the Lock; the needle keeps advancing; backing out mirrors
 it; the value clamps to 1–100% and is left alone when a caller omits it.
+
+## 2.5.4: a layer linked on at several points stays put; Px Pin shows the real scene
+
+A patch, for two reports that came together.
+
+### 1. A linked overlay drifted and bent when the layer beneath was thrown
+
+The setup: an overlay (line art that has to sit exactly on the layer
+beneath it) imported a little off its place and **put in place with
+PxLinks**, eight of them, all to that layer. Move the parent bone fast and
+the overlay came apart from the layer under it and bent out of shape.
+
+**Why.** Since *PxLink: held at the point, nowhere else*, a link holds two
+layers together **at the link point and nowhere else**. Otherwise each layer
+moves on its own bones and springs, and only a small weld round each point
+bends to close the gap. That is right for a joint, like a hand at the wrist.
+But eight links to the same layer are not eight joints. They say the overlay
+is **on** that layer. Held only at the points, everything between them still
+followed the overlay's own bone. Under a fast throw its spring lagged, so
+the art drifted off between the points, and the welds stretched it to reach
+them: up to **5.1 px** off and **5.0 px** out of shape in the reproduction.
+It was bent even at rest, because the welds were closing the import offset
+(9.5 px) locally.
+
+**The fix** (`pxlink.js`, `solveAttachments`). Two or more link points
+between the **same two layers** now **attach** the one that gives way.
+
+- **The move.** Before any weld, the attached layer gets the one rotation
+  and translation that best carries all its link points onto the other
+  layer's (a least-squares rigid fit, `rigidFit`), and every vertex moves
+  by it. The welds then close only what is left: the little by which the
+  two shapes disagree, which is nothing when they agree. However the layer
+  beneath is thrown, the one on top goes with it, in its own shape.
+- **Chains.** Attached layers move after the layers they ride on, so a
+  badge on a patch on a torso follows all the way down.
+- **Shared links** (nobody holds still) meet halfway, each layer as a
+  whole. Both targets come from where the points were before either layer
+  moved.
+- **What stays a joint.**
+  - One link point is still a joint that bends.
+  - Links to two *different* layers are still two joints. Case c3 of the
+    PxLink verification, a physics hand linked at the wrist to the arm and
+    at the knuckle to the cuff, swings exactly as it did in 2.5.3.
+- **The PxLink window** marks an attached layer in its list
+  (`Base holds still · Overlay attached`), and the help says when to use
+  one link and when to use several.
+
+Everything that finds a layer by where it is drawn follows the move:
+- the selection outline (`drawPartOutline`);
+- Pierce's touch regions and layer centre (`regionPoints`, `layerCentre`);
+- the painter windows' placement (`layerPlacement`);
+- Px Pin.
+
+### 2. Px Pin showed a layer somewhere else than the scene
+
+Px Pin drew each layer flat, at its imported position plus the pin carry.
+A layer that the scene draws posed, turned or moved by links therefore
+showed up somewhere else. In the reproduction, the overlay's V point was
+**10.4 px** from where the scene draws it, which looked like a gap that
+isn't there.
+
+Now Px Pin takes each layer's **drawn** geometry from the renderer when it
+opens (`canvas.layerDrawGeometry`) and rasterizes it the same way, so what
+it shows is the scene.
+- A tap goes back through the drawn triangles to the texel under it
+  (`texelNearest`), so a pin lands on the pixel under the finger, turned
+  layer or not.
+- Pins are drawn on their texels' drawn corners.
+- The texel grid is drawn whenever the layer is square-on.
+
+### Verified
+
+Checked in the real app: phone-sized Chromium with real touches
+(`b11/overlay.mjs`).
+- **The layers.** A 50×64 base with a dark wedge, and a 26×18 V overlay
+  imported 3 px right and 9 px up of its place.
+- **The links.** Eight PxLinks along the V's arms, all to the base; the
+  base holds still.
+- **The bones.** The base is on the root bone; the overlay is on a spring
+  bone under it.
+- **The motion.** The whole character was thrown through Free Move, fast,
+  and let settle.
+
+Every one of the 76 frames was measured on the geometry the renderer draws.
+
+| | Before (2.5.3) | After |
+| --- | --- | --- |
+| Overlay strays from where the base carries it | up to **5.08 px** | **0.00 px** |
+| Overlay's own shape distorted (rigid-fit residual) | up to **5.01 px** | **0.00 px** |
+| Link points apart | 0 px | 0 px |
+| Px Pin vs the scene, the V's point | **10.42 px** off | **0.00 px** |
+| A real tap in Px Pin, at rest and turned 30° | pins what Px Pin showed | pins the pixel the scene draws there |
+
+![Before: the linked overlay bent at rest, torn from the wedge in the worst frame of the throw, and shown 10.4 px off in Px Pin. After: in place and in shape on every frame, and Px Pin shows the scene](docs/images/pxlink-attached.png)
+
+`tests/pxlink.mjs` (73 checks, 13 of them new) proves the attachment
+headlessly. A patch on its own bone, imported 5 px off and attached by
+three links:
+- it moves to its place as a whole, exactly, with no weld left to bend it;
+- its own bone turned 35°: it does not budge;
+- the torso turned 40°: it is carried exactly as the torso carries its own
+  pixels;
+- its spring thrown for 90 frames (wanting 16 px of lag): it stays put;
+- one link point is still a joint, and two joints to two different layers
+  are not an attachment;
+- shared links meet halfway, both layers rigid;
+- a badge attached to the patch follows it.
+
+The PxLink verification (c1–c7) gives the same numbers as 2.5.3. The PxLink
+browser suite, the twelve browser regression suites and `npm test` all
+pass.
 
 ## What's next
 

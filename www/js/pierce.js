@@ -92,6 +92,7 @@ import {
   openingFor, openingMarker, markerCoversArtwork, tipInTexels, resetOpeningCaches,
 } from './opening.js';
 import { haptic } from './haptics.js';
+import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -131,10 +132,14 @@ function regionPoints(part, transforms, which = 'pierce') {
   const region = REGIONS[which].set(part);
   if (!region || region.size === 0) return [];
   const carriage = pinCarriageOffset(part, transforms);
-  // (A PxLink never moves a layer as a whole -- it only welds the
-  // neighbourhood of its link point -- so it adds nothing here.)
+  // A layer ATTACHED to another by PxLinks (tied to it at two or more
+  // points) is moved as a whole onto it -- carried here the same way, so
+  // its regions are measured where it is drawn. A joint only welds the
+  // neighbourhood of its point and adds nothing.
+  const move = pxlinkMove(part, transforms);
   const key = `${part.x},${part.y},${part.rotation},${part.scale},` +
-    `${REGIONS[which].version(part)},${region.size},${carriage.x},${carriage.y}`;
+    `${REGIONS[which].version(part)},${region.size},${carriage.x},${carriage.y}` +
+    (move ? `,${move.ax},${move.ay},${move.bx},${move.by},${move.turn}` : '');
   const cacheKey = `${part.id}:${which}`;
   const cached = pointsCache.get(cacheKey);
   if (cached && cached.key === key) return cached.points;
@@ -147,7 +152,7 @@ function regionPoints(part, transforms, which = 'pierce') {
     const v = Math.floor(index / part.naturalWidth);
     const world = localToWorld(part, { x: u + 0.5 - halfW, y: v + 0.5 - halfH });
     const carried = { x: world.x + carriage.x, y: world.y + carriage.y };
-    points.push(carried);
+    points.push(applyPxLinkMove(move, carried));
   }
   pointsCache.set(cacheKey, { key, points });
   return points;
@@ -302,7 +307,7 @@ function centroidOf(points) {
 function layerCentre(part, transforms) {
   const carriage = pinCarriageOffset(part, transforms);
   const middle = localToWorld(part, { x: 0, y: 0 });
-  return { x: middle.x + carriage.x, y: middle.y + carriage.y };
+  return applyPxLinkMove(pxlinkMove(part, transforms), { x: middle.x + carriage.x, y: middle.y + carriage.y });
 }
 
 function centroid(points) {

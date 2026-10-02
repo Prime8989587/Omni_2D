@@ -1123,17 +1123,28 @@ export function deformVertices(mesh, part, boneTransforms) {
   return applyLinkWelds(mesh, base, link);
 }
 
-// A PxLink correction applied to a layer's deformed vertices: each weld -- a
-// smooth local displacement that lands the layer's link point EXACTLY on the
-// link's meeting point, fading to nothing a few cells away. Nothing else
-// moves: vertices outside every weld are returned exactly as the layer's own
-// bones, springs, pins and pierce dent put them. (pxlink.js applies the same function
-// when it reads a link point back.)
+// A PxLink correction applied to a layer's deformed vertices. A layer
+// ATTACHED to another (tied to it at two or more points) is first moved as a
+// whole -- one rotation and translation, every vertex -- onto the layer it is
+// attached to. Then each weld: a smooth local displacement that lands the
+// layer's link point EXACTLY on the link's meeting point, fading to nothing
+// a few cells away. Nothing else moves: a layer that is only jointed has
+// every vertex outside its welds exactly where its own bones, springs, pins
+// and pierce put them. (pxlink.js applies the same function when it reads a
+// link point back.)
 export function applyLinkWelds(mesh, positions, link) {
-  const welds = link && link.mesh === mesh ? link.welds : [];
-  if (welds.length === 0) return positions;
+  const own = link && link.mesh === mesh;
+  const rigid = own ? link.rigid : null;
+  const welds = own ? link.welds : [];
+  if (!rigid && welds.length === 0) return positions;
   return positions.map((p, i) => {
     let { x, y } = p;
+    if (rigid) {
+      const dx = x - rigid.ax;
+      const dy = y - rigid.ay;
+      x = rigid.bx + rigid.cos * dx - rigid.sin * dy;
+      y = rigid.by + rigid.sin * dx + rigid.cos * dy;
+    }
     const vertex = mesh.vertices[i];
     for (const weld of welds) {
       const d = Math.hypot(vertex.u - weld.u, vertex.v - weld.v);

@@ -33,6 +33,19 @@
 
 export const RELEASES = [
   {
+    version: '2.5.4',
+    date: '2026-10-02',
+    title: 'PxLink: a layer linked on at several points stays put; Px Pin shows the real scene',
+    kind: 'patch',
+    notes: [
+      'A layer tied to the SAME layer by two or more PxLinks is now attached to it: it moves with that layer as a whole, every frame, so however fast or violently the layer beneath is thrown about, the one on top stays exactly where it was linked, in its own shape. Before, only the link points were held and the art between them stretched and drifted with its own bones and springs.',
+      'One link is still a joint that bends (a wrist), and links to two different layers are still two joints — their physics swings exactly as before.',
+      'The PxLink list marks a layer that is attached.',
+      'Px Pin draws both layers exactly where the scene does — posed, turned, linked — instead of flat at their imported positions, and a tap pins the pixel that is drawn under the finger.',
+      'The selection outline, Pierce’s touch regions and its painters follow an attached layer to where it is drawn.',
+    ],
+  },
+  {
     version: '2.5.3',
     date: '2026-10-02',
     title: 'Pierce: the wedge locks its shape part-way in',
