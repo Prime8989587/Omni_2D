@@ -16,7 +16,7 @@
 
 import {
   Part, partsStore, reservePartId,
-  PierceRole, PIERCE_ROLES, clampPierceDepth,
+  PierceRole, PIERCE_ROLES, clampPierceDepth, clampWedgeLock, DEFAULT_WEDGE_LOCK,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
   clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH,
   clampDentCoord, normalizeAngle,
@@ -167,6 +167,7 @@ function serializePart(part, copyPixels) {
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
     pierceDentStart: part.pierceDentStart,
+    pierceWedgeLock: part.pierceWedgeLock,
     mesh: serializeMesh(part.mesh),
   };
 }
@@ -237,6 +238,11 @@ function deserializePart(data) {
   // line, when it began at the Enter Point -- so that is what those projects
   // load with.
   part.pierceDentStart = clampPierceDepth(data.pierceDentStart ?? part.pierceEnter);
+  // The Wedge Lock Point. Absent before the opening held its shape part-way
+  // in; those projects load with the default, which is the behaviour every
+  // project should have had -- the opening finishing well before the End
+  // Point and holding there.
+  part.pierceWedgeLock = clampWedgeLock(data.pierceWedgeLock ?? DEFAULT_WEDGE_LOCK);
   part.mesh = refitLegacyMesh(part, deserializeMesh(data.mesh));
   return part;
 }

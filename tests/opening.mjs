@@ -9,6 +9,7 @@
 import { strict as assert } from 'node:assert';
 import {
   Part, partsStore, PierceRole, DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
+  DEFAULT_WEDGE_LOCK, clampWedgeLock,
 } from '../www/js/parts.js';
 import {
   contactOf, pierceOpeningOf, markPierceStale, resetPierceContainment, pierceDentIssue,
@@ -464,6 +465,13 @@ section('3. Driven by the live contact');
   piercer.pierceRegionVersion++;
   piercer.pierceEnter = DEFAULT_PIERCE_ENTER;
   piercer.pierceEnd = DEFAULT_PIERCE_END;
+  // Unlocked for the growth checks: the shape follows the needle all the way
+  // to the End Point. The Wedge Lock Point is checked on its own below.
+  check('a new piercer\'s Wedge Lock Point is half way', () => {
+    assert.equal(piercer.pierceWedgeLock, DEFAULT_WEDGE_LOCK);
+    assert.equal(DEFAULT_WEDGE_LOCK, 50);
+  });
+  piercer.pierceWedgeLock = 100;
   partsStore.add(pierced);
   partsStore.add(piercer);
 
@@ -527,6 +535,91 @@ section('3. Driven by the live contact');
     assert.ok(/no artwork/.test(pierceDentIssue(pierced) || ''));
     assert.equal(read(100).opening, null);
     pierced.pierceDentX = 20;
+  });
+
+  // --- The Wedge Lock Point.
+  //
+  // 75% of the way from the trigger (gap 12) to the End Point (gap -12) is a
+  // gap of -6: the needle's tip 6 texels in.
+  const both = (opening) => {
+    if (!opening) return null;
+    const rest = { positions: pierced.mesh.vertices.map((vx) => ({ x: 100 + vx.u, y: 100 + vx.v })) };
+    return [-1, 1].map((side) => openingGeometry(pierced, rest, opening, side).positions);
+  };
+  const lockSweep = (lock) => {
+    piercer.pierceWedgeLock = lock;
+    const rows = [];
+    for (let y = 50; y <= 110; y += 1) rows.push({ y, ...read(y) });
+    return rows;
+  };
+  const locked = lockSweep(75);
+  const unlocked = lockSweep(100);
+  const past = locked.filter((r) => r.contact && r.contact.dentT > 0.75 + 1e-9);
+  const before = locked.filter((r) => r.contact && r.contact.dentT > 0 && r.contact.dentT <= 0.75);
+
+  check('up to the Wedge Lock Point the opening grows exactly as it does with no lock at all', () => {
+    assert.ok(before.length > 10, `${before.length} frames before the lock`);
+    for (const r of before) {
+      const free = unlocked.find((x) => x.y === r.y).opening;
+      assert.equal(r.opening.fraction, free.fraction);
+      assert.equal(r.opening.sTip, free.sTip);
+      assert.deepEqual(both(r.opening), both(free));
+    }
+  });
+
+  check('past it the shape is FROZEN: every frame from the lock to the End Point and beyond draws the identical opening', () => {
+    assert.ok(past.length > 10, `${past.length} frames past the lock`);
+    const first = both(past[0].opening);
+    for (const r of past) {
+      assert.equal(r.opening.fraction, 0.75);
+      const g = both(r.opening);
+      let worst = 0;
+      for (let side = 0; side < 2; side++) {
+        for (let i = 0; i < g[side].length; i++) {
+          worst = Math.max(worst, Math.hypot(g[side][i].x - first[side][i].x, g[side][i].y - first[side][i].y));
+        }
+      }
+      assert.ok(worst < 1e-9, `y ${r.y}: moved ${worst}`);
+    }
+  });
+
+  check('and it is the very shape the opening had AT the lock -- not a different one it jumps to', () => {
+    // Exactly at the lock: the needle placed so the gap is -6.
+    const atLock = locked.find((r) => r.contact && Math.abs(r.contact.dentT - 0.75) < 1e-9);
+    assert.ok(atLock, 'a frame exactly at the lock');
+    assert.deepEqual(both(atLock.opening), both(past[0].opening));
+    const free = unlocked.find((x) => x.y === atLock.y).opening;
+    assert.deepEqual(both(atLock.opening), both(free));
+  });
+
+  check('the needle itself keeps going in past the lock, in step with the depth', () => {
+    const tips = past.map((r) => r.contact.tip.y);
+    for (let i = 1; i < tips.length; i++) assert.ok(tips[i] >= tips[i - 1]);
+    const inPast = past.filter((r) => r.contact.dentT < 1);
+    assert.ok(inPast.length > 3 && inPast.at(-1).contact.tip.y - inPast[0].contact.tip.y > 3, `the tip moved ${(inPast.at(-1).contact.tip.y - inPast[0].contact.tip.y).toFixed(1)} px past the lock`);
+    assert.ok(inPast.at(-1).contact.dentT > inPast[0].contact.dentT, 'and the depth kept climbing');
+  });
+
+  check('backing out: held while past the lock, then closing through the same shapes it opened through', () => {
+    piercer.pierceWedgeLock = 75;
+    const back = [];
+    for (let y = 110; y >= 50; y -= 1) back.push({ y, ...read(y) });
+    for (const r of back) {
+      const fwd = locked.find((x) => x.y === r.y);
+      assert.equal(Boolean(r.opening), Boolean(fwd.opening));
+      if (r.opening) assert.deepEqual(both(r.opening), both(fwd.opening));
+    }
+    assert.equal(back.at(-1).opening, null);
+  });
+
+  check('the lock is saved with the piercer, and a project from before it loads at half way', () => {
+    assert.equal(clampWedgeLock(0), 1);
+    assert.equal(clampWedgeLock(250), 100);
+    assert.equal(clampWedgeLock('x'), DEFAULT_WEDGE_LOCK);
+    partsStore.setPierceDepths(piercer.id, 12, 24, 12, 65);
+    assert.equal(piercer.pierceWedgeLock, 65);
+    partsStore.setPierceDepths(piercer.id, 12, 24, 12);
+    assert.equal(piercer.pierceWedgeLock, 65, 'left alone when not given');
   });
 }
 

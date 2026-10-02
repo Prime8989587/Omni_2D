@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.5.3',
+    date: '2026-10-02',
+    title: 'Pierce: the wedge locks its shape part-way in',
+    kind: 'patch',
+    notes: [
+      'New Wedge Lock Point in the Enter / Dent / Lock / End window (default 50%): the wedge grows from the Dent Trigger Distance up to the Lock, then holds exactly that shape all the way to the End point and beyond — while the piercer keeps moving in.',
+      'Set it by typing a percentage, or drag the green Lock handle along the ruler between Dent and End. It is saved with the project; older projects open at 50%.',
+      'Backing out, the wedge stays at its locked shape until the piercer is back above the Lock, then closes exactly the way it opened.',
+      'The pierced layer stays fully opaque at every depth — nothing shows through it.',
+    ],
+  },
+  {
     version: '2.5.2',
     date: '2026-10-02',
     title: 'Pierce: a soft opening that follows the tip',

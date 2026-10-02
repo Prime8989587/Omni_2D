@@ -100,6 +100,29 @@ export const DEFAULT_PIERCE_END = 24;
 // existed -- hence the default.
 export const DEFAULT_PIERCE_DENT_START = DEFAULT_PIERCE_ENTER;
 
+// THE WEDGE LOCK POINT
+//
+// How far through its own growth -- 0% at the Dent Trigger Distance, 100%
+// at the End Point -- the opening stops changing. Up to here it grows
+// exactly as before; from here on its shape is FROZEN at what it was here,
+// however much deeper the piercer goes, while the piercer itself carries on
+// in. The opening is evaluated as if the piercer had stopped at this depth
+// (pierce.js, openingOf), so the shape at the lock and the shape at the End
+// Point are the same shape.
+//
+// A percentage, because it is a point WITHIN the other three rather than a
+// distance of its own: move Enter, the trigger or End and it stays the same
+// share of the way. Half way is where the opening reads as finished on real
+// artwork.
+export const DEFAULT_WEDGE_LOCK = 50;
+export const WEDGE_LOCK_RANGE = Object.freeze({ min: 1, max: 100 });
+
+export function clampWedgeLock(value) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return DEFAULT_WEDGE_LOCK;
+  return Math.max(WEDGE_LOCK_RANGE.min, Math.min(WEDGE_LOCK_RANGE.max, number));
+}
+
 // The dent's two numbers, in the pierced layer's own texels. Zero is a
 // legitimate setting -- no dent -- so the floor is zero rather than one,
 // and the ceiling is generous enough for a wedge across a large sprite
@@ -199,6 +222,9 @@ export class Part {
     // The gap at which this piercer starts CUTTING a dent, as opposed to
     // the gap at which it makes contact. See DEFAULT_PIERCE_DENT_START.
     this.pierceDentStart = DEFAULT_PIERCE_DENT_START;
+    // Where the opening stops growing and holds its shape, as a percentage
+    // of the way from the trigger to the End Point. See DEFAULT_WEDGE_LOCK.
+    this.pierceWedgeLock = DEFAULT_WEDGE_LOCK;
 
     // WHICH PIXELS BUNCH AROUND A DENT
     //
@@ -585,6 +611,7 @@ class PartsStore {
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
       part.pierceDentStart = DEFAULT_PIERCE_DENT_START;
+      part.pierceWedgeLock = DEFAULT_WEDGE_LOCK;
     }
     this._emit('structure');
     return true;
@@ -598,15 +625,17 @@ class PartsStore {
     return true;
   }
 
-  // The dent's trigger distance is optional here so that callers with only
-  // the two older numbers to offer leave it alone rather than silently
-  // resetting it to a default the user did not ask for.
-  setPierceDepths(id, enter, end, dentStart) {
+  // The dent's trigger distance and the wedge lock are optional here so
+  // that callers with only the older numbers to offer leave them alone
+  // rather than silently resetting them to a default the user did not ask
+  // for.
+  setPierceDepths(id, enter, end, dentStart, wedgeLock) {
     const part = this._parts.find((candidate) => candidate.id === id);
     if (!part) return false;
     part.pierceEnter = clampPierceDepth(enter);
     part.pierceEnd = clampPierceDepth(end);
     if (dentStart !== undefined) part.pierceDentStart = clampPierceDepth(dentStart);
+    if (wedgeLock !== undefined) part.pierceWedgeLock = clampWedgeLock(wedgeLock);
     this._emit('transform');
     return true;
   }

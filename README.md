@@ -1517,7 +1517,9 @@ settles.
 > **As of 2.5.2** the pierced layer answers with a **soft opening**: its seam
 > parts round the piercer and the material either side swells outward in one
 > smooth curve that follows the tip. That model is described in
-> "2.5.2: Pierce opens soft, and follows the tip" near the end of this file.
+> "2.5.2: Pierce opens soft, and follows the tip" near the end of this file,
+> and since **2.5.3** its shape locks part-way in ("2.5.3: the wedge locks
+> its shape").
 > The sections below keep the history of the models before it (the dent, the
 > V, the triangle notch) and everything that still applies unchanged: roles,
 > the Piercer tab, Enter / Dent Trigger / End, Barrier, Physics Direction and
@@ -7438,6 +7440,70 @@ closed layer.
 - `pinDistances` is exported from `mesh.js`, and `artwork.js` gains
   `texelFrameNearest` — the texel under a point together with the local map
   round it, so a whole tip outline is carried into a layer with one lookup.
+
+## 2.5.3: the wedge locks its shape
+
+A patch. The opening used to keep changing all the way to the End Point. It
+reads as finished well before that — about half way in — so it now **stops
+there and holds**.
+
+### The Wedge Lock Point
+
+A fourth setting beside Enter, Dent and End, in the same window (Pierce →
+**Edit Enter / Dent / Lock / End Points…**): a percentage of the way from the
+Dent Trigger Distance (0%) to the End Point (100%), **50% by default**.
+Type it, or drag the green **Lock** handle along the ruler between the Dent
+and End handles; the bar under the ruler shows it too. It belongs to the
+piercer, like the other three, and is saved with the project (projects saved
+before it load at 50%).
+
+- From the Dent Trigger to the Lock, the wedge grows exactly as before.
+- From the Lock to the End Point and beyond, its shape is **frozen**: the
+  rim, the swelling, every vertex of it, exactly as it was at the Lock.
+- The piercer is untouched and keeps moving in, in step with the depth,
+  under a seam that no longer moves.
+- Backing out, the shape holds until the piercer is back above the Lock,
+  then closes through the same shapes it opened through.
+
+### How
+
+A clamp on the opening's *input*, not a new formula (`pierce.js`,
+`openingOf`). Past the Lock the opening is evaluated **as if the piercer had
+stopped at the Lock**: its fraction is clamped to the Lock, and its tip is
+taken back along its approach by however far it has come since — the gap
+closes one pixel per pixel of advance, so that is `(open − lock) × span`.
+Clamping the fraction alone would not have been enough: the shape also
+follows where the tip is, and it would have kept sliding down the seam.
+Both inputs are held, so the whole shape is. The readout shows
+`open 75% (shape held at 50%)`.
+
+### Verified
+
+In the real app, with real taps, typing and touches (`b10/lock_sweep.mjs`):
+the rod made a Piercer, its depths typed into the window (Enter 4, Dent 4,
+End 28, so the Lock lands 10 px into the flesh), then driven 44 px in —
+past the End Point — and back out through Free Move. Every one of the 89
+frames was read off the screen, one sample per scene pixel, and from the
+geometry the renderer hands the rasterizer.
+
+![Real-app frames at 25%, 50% (the Lock), 75%, 100% and past the End Point; on the way back out at 75% and 25%; and with the Lock set to 60%. The flesh is identical from the Lock on while the rod keeps going in](docs/images/wedge-lock.png)
+
+| | Lock 50% (default, 11/11) | Lock 60% (12/12) |
+| --- | --- | --- |
+| Growing up to the Lock | 14 frames, swelling 0.29 → 4.00 texels, tip 0 → 10.5 along the seam | 16 frames, 0.29 → 4.57, tip 0 → 12.5 |
+| From the Lock through End and past it | **every vertex of both passes identical** (0.0 px) on all 25 frames | identical on all 23 |
+| On screen, those frames | flesh pixels identical, pixel for pixel and colour for colour | identical |
+| The piercer meanwhile | moved **12 px** further in, visibly (its drawn top moved 12 px) | moved 10 px |
+| Opacity, in and out | 0 see-through pixels, every flesh pixel an exact art colour, all 89 frames | the same |
+| Way out vs way in | identical geometry and pixels at every position; held above the Lock, closing below it, closed at the end | the same |
+
+The window was checked too: the Lock field defaults to 50%; its bar mark sits
+half way between Dent and End; dragging the green handle changes it; Confirm
+stores it on the piercer, and the project saves it. `tests/opening.mjs`
+(40 checks) adds the headless version: up to the Lock the opening is
+exactly the unlocked one; past it, identical frame to frame and identical
+to the frame at the Lock; the needle keeps advancing; backing out mirrors
+it; the value clamps to 1–100% and is left alone when a caller omits it.
 
 ## What's next
 

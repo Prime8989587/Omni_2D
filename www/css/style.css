@@ -1433,6 +1433,19 @@ button, input, select, textarea {
   color: #a078ff;
 }
 
+/* Where the opening's shape locks. Green: the one hue the ruler and the
+   bar do not already use (Enter cyan, Dent violet, End amber). Labelled below
+   the bar with the trigger, since both are points WITHIN the opening's range. */
+.pierce-depth__mark--lock {
+  background: #7cf07c;
+}
+
+.pierce-depth__mark--lock span {
+  top: auto;
+  bottom: -18px;
+  color: #7cf07c;
+}
+
 /* ---------- Toast ---------- */
 
 .toast {

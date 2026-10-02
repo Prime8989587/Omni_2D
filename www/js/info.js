@@ -85,17 +85,19 @@ const TOPICS = {
       'by redrawing -- only by Undo.',
   },
   'pierce-depths': {
-    title: 'Enter, Dent & End points',
-    body: 'All three are measured in scene pixels, from the piercer’s ' +
-      'painted tip to the nearest pierceable pixel.\n\n' +
+    title: 'Enter, Dent, Lock & End points',
+    body: 'Enter, Dent and End are measured in scene pixels, from the ' +
+      'piercer’s painted tip to the nearest pierceable pixel; Lock is a ' +
+      'share of the way from Dent to End.\n\n' +
       '• Enter is the gap where contact starts -- get this close and the ' +
       'tip sinks under the surface and starts pressing on its bones.\n' +
       '• Dent Trigger is the gap where the SEAM starts to open. Its own ' +
       'setting, so touching and opening need not happen at the same moment.\n' +
-      '• End is how much deeper both keep growing before they stop ' +
-      'advancing. Past End the opening and the piercer itself hold at their ' +
-      'deepest.\n\n' +
-      'Set them by typing the numbers, or by dragging the three handles ' +
+      '• Lock is where the opening stops changing. Past it the wedge holds ' +
+      'the shape it had there while the piercer carries on in.\n' +
+      '• End is how much deeper the piercer keeps going before it stops ' +
+      'advancing. Past End it holds at its deepest.\n\n' +
+      'Set them by typing the numbers, or by dragging the handles ' +
       'drawn on the piercer’s own artwork -- both write the same values, ' +
       'so neither one is more "real" than the other.',
   },
@@ -114,8 +116,23 @@ const TOPICS = {
       'project behaved before this setting existed.\n' +
       '• Further out than Enter -- the surface flinches before anything ' +
       'touches it.\n\n' +
-      'Whichever you choose, the opening is at its widest at the End point: ' +
-      'that is the one place both the opening and the depth finish.',
+      'Whichever you choose, the opening grows from here to the Wedge Lock ' +
+      'Point and holds its shape from there to the End point.',
+  },
+  'pierce-wedge-lock': {
+    title: 'Wedge Lock Point',
+    body: 'How far through its growth the opening stops changing -- as a ' +
+      'share of the way from the Dent Trigger Distance (0%) to the End ' +
+      'point (100%).\n\n' +
+      'Up to the Lock the wedge grows smoothly with the depth. From the ' +
+      'Lock on, its shape is frozen exactly as it was there -- the edges, ' +
+      'the swelling, all of it -- however much deeper the piercer goes. The ' +
+      'piercer itself keeps moving in, beneath the layer. Backing out, the ' +
+      'shape holds until the piercer is back above the Lock, then closes ' +
+      'the way it opened.\n\n' +
+      '• 50% (the default) -- the wedge finishes half way in and holds.\n' +
+      '• 100% -- it keeps changing all the way to End.\n\n' +
+      'Type it, or drag the green Lock handle between Dent and End.',
   },
   'pierce-targets': {
     title: 'Paint targets',
@@ -144,7 +161,10 @@ const TOPICS = {
       'and reaches further along the edge; as it comes out, everything eases ' +
       'back to the rest outline the same way.\n\n' +
       '• Depth -- how far the seam runs in from the surface.\n' +
-      '• Width -- how far apart the edges bow at the tip, at the End point.\n\n' +
+      '• Width -- how far apart the edges would bow at the End point. The ' +
+      'wedge stops growing at the Wedge Lock Point (on the piercer, with ' +
+      'Enter and End), so at the default 50% it reaches half of this and ' +
+      'holds.\n\n' +
       'Set either to 0 for no opening at all.\n\n' +
       'Both are easier to set by hand: Paint regions…, then the Dent ' +
       'target, and drag the triangle marker on the artwork. Its base handle ' +

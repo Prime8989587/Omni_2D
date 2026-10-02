@@ -83,7 +83,7 @@
 // component of the motion stops having a visible effect. Sideways motion
 // and pulling back out track the finger one-for-one as they always did.
 
-import { partsStore, PiercePhysics } from './parts.js';
+import { partsStore, PiercePhysics, clampWedgeLock, DEFAULT_WEDGE_LOCK } from './parts.js';
 import { bonesStore } from './bones.js';
 import {
   localToWorld, pinCarriageOffset, generateMesh, defaultDensity, deformVertices,
@@ -430,11 +430,12 @@ function meshFor(part) {
   return part.mesh;
 }
 
-// THE DENT'S OWN TWO ENDS
+// THE OPENING'S OWN TWO ENDS
 //
-// The notch starts at the Dent Trigger Distance -- the piercer's third
-// depth, independent of Enter -- and is complete at the End Point, the same
-// place the depth stops. Sharing the far end is deliberate: a drag should
+// The opening starts at the Dent Trigger Distance -- the piercer's third
+// depth, independent of Enter -- and its fraction runs to 1 at the End
+// Point, the same place the depth stops. (Its SHAPE stops sooner, at the
+// Wedge Lock Point -- see openingOf.) Sharing the far end is deliberate: a drag should
 // not have two different "all the way in" positions, one for the numbers
 // and one for the artwork.
 //
@@ -452,6 +453,11 @@ function dentStartOf(piercer, enter, end) {
 
 function dentSpan(piercer, enter, end) {
   return dentStartOf(piercer, enter, end) - (enter - end);
+}
+
+// The Wedge Lock Point as a fraction of the opening's own range.
+function wedgeLockOf(piercer) {
+  return clampWedgeLock(Number.isFinite(piercer.pierceWedgeLock) ? piercer.pierceWedgeLock : DEFAULT_WEDGE_LOCK) / 100;
 }
 
 export function contactOf(piercer, pierced, transforms) {
@@ -646,6 +652,10 @@ export function contactOf(piercer, pierced, transforms) {
     dentT: inPath
       ? Math.min(1, Math.max(0, (dentStartOf(piercer, enter, end) - gap) / dentSpan(piercer, enter, end)))
       : 0,
+    // How many scene px of travel that fraction runs over, and where along
+    // it the opening's shape locks (the Wedge Lock Point, 0..1).
+    dentSpan: dentSpan(piercer, enter, end),
+    lockT: wedgeLockOf(piercer),
     piercer,
     axis,
     // How far PAST the End Point the piercer has been driven. The depth
@@ -928,7 +938,13 @@ function publishOcclusion(contacts) {
     // while the depth climbs is how the trigger distance proves it is doing
     // something.
     open: contact ? contact.dentT : 0,
-    // Where along the seam the bulge is centred, in the layer's texels.
+    // The Wedge Lock Point (0..1 of that same scale), and whether the
+    // opening's shape is currently held there: past it, `open` keeps
+    // climbing with the piercer while the shape drawn stays the lock's.
+    lock: contact ? contact.lockT : null,
+    locked: Boolean(contact && contact.dentT > contact.lockT),
+    // Where along the seam the bulge is centred, in the layer's texels --
+    // held with the shape once it locks.
     along: openings.has(pierced.id) ? openings.get(pierced.id).sTip : null,
     dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
     engaged: Boolean(contact && contact.engaged),
@@ -1154,6 +1170,19 @@ export function pierceDentIssue(part) {
 // disagree: a trigger set further out than Enter has to be able to start
 // the opening before contact, and one set closer has to be able to hold it
 // back after contact has begun.
+//
+// THE SHAPE LOCKS PART-WAY IN
+//
+// Past the Wedge Lock Point the opening is evaluated exactly AS IF the
+// piercer had stopped at the lock: the fraction is clamped to it, and the
+// tip is taken back along its axis by however far it has come since --
+// (dentT - lock) of the opening's span, because the gap closes one pixel
+// for every pixel the tip advances. Both inputs at once, so the WHOLE shape
+// freezes, the swelling and the rim alike, not just its size. The piercer
+// itself is untouched and carries on in, beneath the layer, under a seam
+// that no longer moves. Below the lock nothing is clamped, so backing out
+// holds the frozen shape down to the lock and then closes it through the
+// same shapes it opened through.
 function openingOf(pierced, contact) {
   if (!contact || !(contact.dentT > 0) || !pierced.mesh) return null;
   if (pierceDentIssue(pierced) !== null) return null;
@@ -1162,7 +1191,13 @@ function openingOf(pierced, contact) {
   // layer as it is posed right now, so a moved or bent layer opens where
   // the tip actually is on it.
   const positions = deformVertices(pierced.mesh, pierced, transforms || {});
-  const shift = { x: contact.tip.x - contact.rawTip.x, y: contact.tip.y - contact.rawTip.y };
+  const lock = Number.isFinite(contact.lockT) ? contact.lockT : 1;
+  const fraction = Math.min(contact.dentT, lock);
+  const past = contact.axis && contact.dentT > lock ? (contact.dentT - lock) * contact.dentSpan : 0;
+  const shift = {
+    x: contact.tip.x - contact.rawTip.x - (contact.axis ? contact.axis.x * past : 0),
+    y: contact.tip.y - contact.rawTip.y - (contact.axis ? contact.axis.y * past : 0),
+  };
   // The LEADING point is what goes into the seam first, so it is where the
   // swelling is centred -- not the tip's middle, which on a long painted
   // tip sits well behind it. The front edge's midpoint, as containment
@@ -1171,7 +1206,7 @@ function openingOf(pierced, contact) {
   const carried = tipInTexels(pierced, positions, leading, contact.tipPoints, shift);
   if (!carried) return null;
   return openingFor(pierced, {
-    fraction: contact.dentT,
+    fraction,
     tip: carried.tip,
     tipHalfWidth: contact.tipHalfWidth / Math.max(1e-6, pierced.scale || 1),
     tipPoints: carried.points,

@@ -56,6 +56,11 @@
 // Nothing is integrated or remembered, so a given contact always produces
 // the same shape, and backing out is the same sweep run backwards.
 //
+// Past the piercer's Wedge Lock Point the solver hands this module the
+// contact AS IT WAS AT THE LOCK -- the fraction clamped there, the tip taken
+// back to where it was (pierce.js, openingOf) -- so from the lock to the
+// End Point the shape built here is one and the same.
+//
 // HOW THE SEAM OPENS WITHOUT TEARING ANYTHING ELSE
 //
 // The layer is drawn twice, through complementary per-texel masks: one

@@ -872,7 +872,8 @@ function drawPierceProbe() {
     // working".
     return `${r.piercer} -> ${r.pierced}\n` +
       `  gap ${gap}  enter ${r.enter}  end ${r.end}  opens at ${r.dentStart}\n` +
-      `  depth ${r.depth.toFixed(1)}  open ${(r.open * 100).toFixed(0)}%${press}  ` +
+      `  depth ${r.depth.toFixed(1)}  open ${(r.open * 100).toFixed(0)}%` +
+      `${r.locked ? ` (shape held at ${Math.round(r.lock * 100)}%)` : ''}${press}  ` +
       `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';

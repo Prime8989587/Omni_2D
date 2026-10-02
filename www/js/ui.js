@@ -8,7 +8,7 @@ import { createIcon, setIcon } from './pixelIcons.js';
 import { initCheckpoints, openCheckpoints } from './checkpoints.js';
 import { initRecentTools, registerToolLauncher } from './recentTools.js';
 import {
-  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics,
+  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics, clampWedgeLock,
 } from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
@@ -176,7 +176,7 @@ function cacheElements() {
     'pierceDentWidthSlider', 'pierceDentWidthValue',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
-    'pierceDentStartInput', 'pierceDepthDentMark',
+    'pierceDentStartInput', 'pierceDepthDentMark', 'pierceWedgeLockInput', 'pierceDepthLockMark',
     'pierceDepthContact', 'pierceDepthEnterMark', 'pierceDepthEndMark',
     'pierceDepthCanvas', 'pierceDrawHint',
     'pierceDepthLegend', 'pierceDepthOkBtn', 'pierceDepthCancelBtn',
@@ -1592,8 +1592,9 @@ function renderPierceModal() {
       : `the seam holds off until ${part.pierceDentStart} px`;
     els.pierceDepthReadout.textContent =
       `Enter ${part.pierceEnter} px · Dent ${part.pierceDentStart} px · ` +
-      `End ${part.pierceEnd} px — contact starts ${part.pierceEnter} px out and ` +
-      `${denting}; both stop growing ${part.pierceEnd} px deeper.`;
+      `Lock ${part.pierceWedgeLock}% · End ${part.pierceEnd} px — contact starts ` +
+      `${part.pierceEnter} px out and ${denting}; the opening holds its shape from ` +
+      `${part.pierceWedgeLock}% of the way in, and the depth stops ${part.pierceEnd} px deeper.`;
   }
 
   const painted = part.pierceRegion.size;
@@ -1672,6 +1673,7 @@ function openPierceDepthModal(mode) {
   els.pierceEnterInput.value = String(part.pierceEnter);
   els.pierceEndInput.value = String(part.pierceEnd);
   els.pierceDentStartInput.value = String(part.pierceDentStart);
+  els.pierceWedgeLockInput.value = String(part.pierceWedgeLock);
   renderPierceDepthBar();
   // The modal has to be visible before the canvas is measured: a hidden
   // element has no layout box, and the drawing is laid out from one.
@@ -1685,7 +1687,15 @@ function readPierceDepthInputs() {
     enter: clampPierceDepth(els.pierceEnterInput.value),
     end: clampPierceDepth(els.pierceEndInput.value),
     dentStart: clampPierceDepth(els.pierceDentStartInput.value),
+    lock: clampWedgeLock(els.pierceWedgeLockInput.value),
   };
+}
+
+// Where the Wedge Lock Point sits on the ruler: that share of the way from
+// the Dent handle to the End handle, so it always reads as a point WITHIN
+// the opening's range, wherever the other three are dragged.
+function lockRulerDistance(enter, end, dentStart, lock) {
+  return dentStart + (lock / 100) * (enter + end - dentStart);
 }
 
 // The bar draws the whole approach in order: a run-up where the tip is
@@ -1695,7 +1705,7 @@ function readPierceDepthInputs() {
 // two numbers change; it is a proportion, not a second distance reading,
 // which is why the legend names distances only where there is one to name.
 function renderPierceDepthBar() {
-  const { enter, end, dentStart } = readPierceDepthInputs();
+  const { enter, end, dentStart, lock } = readPierceDepthInputs();
   const span = Math.max(1, enter + end);
   const enterPct = (enter / span) * 100;
   // The bar's axis is how far the tip has come IN, so a gap threshold g
@@ -1707,6 +1717,9 @@ function renderPierceDepthBar() {
   const dentPct = Math.max(0, Math.min(100, ((2 * enter - dentStart) / span) * 100));
   els.pierceDepthEnterMark.style.left = `${enterPct}%`;
   els.pierceDepthDentMark.style.left = `${dentPct}%`;
+  // The opening's fraction is linear in the gap, so its lock lands that
+  // share of the way from the trigger's mark to End's.
+  els.pierceDepthLockMark.style.left = `${dentPct + (lock / 100) * (100 - dentPct)}%`;
   els.pierceDepthEndMark.style.left = '100%';
   els.pierceDepthContact.style.left = `${enterPct}%`;
   els.pierceDepthContact.style.right = '0';
@@ -1716,10 +1729,13 @@ function renderPierceDepthBar() {
       ? `The seam holds off until ${dentStart} px away — ${enter - dentStart} px ` +
         'further in than first contact.'
       : `The seam starts opening at ${dentStart} px away, before contact does.`);
+  const locking = lock >= 100
+    ? 'The opening keeps changing all the way to End.'
+    : `At Lock (${lock}% of the way from Dent to End) the opening stops changing and holds that shape; the piercer carries on in.`;
   els.pierceDepthLegend.textContent =
     `Left edge: the tip still approaching, nothing moves. Enter at ${enter} px ` +
-    `away: contact begins. ${denting} Right edge: ${end} px deeper still, ` +
-    'maximum push and the seam at its widest — going deeper than this changes nothing more.';
+    `away: contact begins. ${denting} ${locking} Right edge: ${end} px deeper ` +
+    'than Enter, maximum push — going deeper than this changes nothing more.';
 }
 
 // ---- Placing Enter and End by hand, on the piercer itself
@@ -1858,7 +1874,7 @@ function renderPierceDepthCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!plan) return;
 
-  const { enter, end, dentStart } = readPierceDepthInputs();
+  const { enter, end, dentStart, lock } = readPierceDepthInputs();
   const { part, dpr } = plan;
   ctx.imageSmoothingEnabled = false;
 
@@ -1921,12 +1937,15 @@ function renderPierceDepthCanvas() {
   // dent's own mark is there to be dragged off it. Labelled on the far side
   // for the same reason.
   handle(at(dentStart), `Dent ${dentStart}`, '#A078FF', 1);
+  // The lock sits between Dent and End, on the far side from Enter and End
+  // so the three labels near it never stack.
+  handle(at(lockRulerDistance(enter, end, dentStart, lock)), `Lock ${lock}%`, '#7CF07C', 1);
   pen.end();
 
   els.pierceDrawHint.textContent = plan.axis.known
     ? 'Drag any handle along the needle\u2019s path. Enter is where contact ' +
-      'begins, Dent is where the seam starts to open, and End is where ' +
-      'both stop growing.'
+      'begins, Dent is where the seam starts to open, Lock is where its ' +
+      'shape stops changing, and End is where the depth stops.'
     : 'This piercer has no painted tip yet, so the path below is a guess at ' +
       'straight down. Paint the tip and these will follow it.';
 }
@@ -1937,15 +1956,18 @@ function renderPierceDepthCanvas() {
 function grabPierceHandle(x, y) {
   const plan = depthDraw;
   if (!plan) return null;
-  const { enter, end, dentStart } = readPierceDepthInputs();
+  const { enter, end, dentStart, lock } = readPierceDepthInputs();
   const near = (distance) => {
     const point = depthDrawPoint(plan, distance);
     return Math.hypot(x - point.x, y - point.y);
   };
-  // Dent first on a tie, because it is drawn on top and because the default
-  // puts it exactly under the Enter handle -- where a user reaching for it
-  // has no other way to get hold of it.
-  const candidates = [['dent', near(dentStart)], ['end', near(enter + end)], ['enter', near(enter)]];
+  // Lock, then Dent, first on a tie: each is drawn over the one after it,
+  // and Dent's default puts it exactly under the Enter handle -- where a
+  // user reaching for it has no other way to get hold of it.
+  const candidates = [
+    ['lock', near(lockRulerDistance(enter, end, dentStart, lock))],
+    ['dent', near(dentStart)], ['end', near(enter + end)], ['enter', near(enter)],
+  ];
   let best = null;
   for (const [which, distance] of candidates) {
     if (distance > DRAW_GRAB_PX) continue;
@@ -1988,7 +2010,14 @@ function dragPierceHandle(which, x, y) {
   const { enter, end } = readPierceDepthInputs();
   const min = PIERCE_DEPTH_RANGE.min;
 
-  if (which === 'dent') {
+  if (which === 'lock') {
+    // A share of the way from Dent to End, read off where the finger is
+    // between those two handles; neither of them moves.
+    const { dentStart } = readPierceDepthInputs();
+    const range = enter + end - dentStart;
+    const share = Math.abs(range) < 1e-6 ? 1 : (distance - dentStart) / range;
+    els.pierceWedgeLockInput.value = String(clampWedgeLock(share * 100));
+  } else if (which === 'dent') {
     // A gap, exactly like Enter, and placed on the ruler at its own value --
     // so it takes the finger's position directly and neither of the other
     // two moves. That independence is the whole feature.
@@ -2043,22 +2072,23 @@ function initPierceDepthCanvas() {
 function confirmPierceDepths() {
   const part = piercePart();
   if (!part) return;
-  const { enter, end, dentStart } = readPierceDepthInputs();
+  const { enter, end, dentStart, lock } = readPierceDepthInputs();
   const assigning = pierceDepthMode === 'assign';
   pierceDepthMode = null;
   els.pierceDepthModal.hidden = true;
 
   history.run(assigning ? 'Set pierce role' : 'Edit pierce depths', () => {
     if (assigning) partsStore.setPierceRole(part.id, PierceRole.PIERCER);
-    partsStore.setPierceDepths(part.id, enter, end, dentStart);
+    partsStore.setPierceDepths(part.id, enter, end, dentStart, lock);
   });
+  markPierceStale();
   renderPierceModal();
 
   if (assigning) {
     showPierceTipOnce();
     showToast(`"${part.name}" is now a Piercer. Paint its tip next — Paint regions….`);
   } else {
-    showToast(`Enter ${enter} px · Dent ${dentStart} px · End ${end} px.`);
+    showToast(`Enter ${enter} px · Dent ${dentStart} px · Lock ${lock}% · End ${end} px.`);
   }
 }
 
@@ -3199,6 +3229,7 @@ function bindEvents() {
   els.pierceEnterInput.addEventListener('input', onDepthTyped);
   els.pierceEndInput.addEventListener('input', onDepthTyped);
   els.pierceDentStartInput.addEventListener('input', onDepthTyped);
+  els.pierceWedgeLockInput.addEventListener('input', onDepthTyped);
   els.pierceDepthOkBtn.addEventListener('click', confirmPierceDepths);
   els.pierceDepthCancelBtn.addEventListener('click', cancelPierceDepths);
   els.pierceTipOkBtn.addEventListener('click', () => { els.pierceTipModal.hidden = true; });
