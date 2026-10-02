@@ -1550,7 +1550,7 @@ const PIERCE_ROLE_HINTS = {
   [PierceRole.PIERCER]: 'This layer does the piercing. Paint its tip, and set how ' +
     'close it has to get before the other layer starts to move.',
   [PierceRole.PIERCED]: 'This layer gets pierced. Paint the area a piercer is ' +
-    'allowed to push into, and place the notch it cuts (Paint regions…, then Dent). ' +
+    'allowed to push into, and place the seam it opens (Paint regions…, then Dent). ' +
     'Its own bones and physics keep running as normal.',
 };
 
@@ -1575,9 +1575,9 @@ function renderPierceModal() {
     els.piercePhysicsBothBtn.setAttribute('aria-pressed', String(physics === PiercePhysics.BOTH));
     els.piercePhysicsHint.textContent = PIERCE_PHYSICS_HINTS[physics];
   }
-  // The dent's two numbers belong to the PIERCED side: they describe the
-  // notch cut into this layer, which is a property of the material rather
-  // than of whatever goes into it.
+  // The opening's two numbers belong to the PIERCED side: they describe the
+  // seam in this layer, which is a property of the material rather than of
+  // whatever goes into it.
   els.pierceDentRow.hidden = !part.isPierced;
   if (part.isPierced) {
     els.pierceDentDepthSlider.value = String(part.pierceDentDepth);
@@ -1588,8 +1588,8 @@ function renderPierceModal() {
 
   if (part.isPiercer) {
     const denting = part.pierceDentStart === part.pierceEnter
-      ? 'the dent starts with it'
-      : `the dent holds off until ${part.pierceDentStart} px`;
+      ? 'the seam opens with it'
+      : `the seam holds off until ${part.pierceDentStart} px`;
     els.pierceDepthReadout.textContent =
       `Enter ${part.pierceEnter} px · Dent ${part.pierceDentStart} px · ` +
       `End ${part.pierceEnd} px — contact starts ${part.pierceEnter} px out and ` +
@@ -1599,28 +1599,20 @@ function renderPierceModal() {
   const painted = part.pierceRegion.size;
   els.piercePaintBtn.hidden = !part.hasPierceRole;
   const walls = part.pierceBarrierRegion.size;
-  // The bunching count is stated whether or not it exists. A pierced layer
-  // with roles set, depths set and its area painted is completely
-  // configured for a NOTCH -- the dent cuts with or without it -- but the
-  // material around it will sit dead still, and nothing else on screen
-  // would say why. Not a warning, because nothing is broken; just the
-  // sentence that turns "the edges aren't reacting" into "ah, I haven't
-  // painted which ones should".
-  const bunch = part.pierceDeformRegion.size;
+  // How much of the layer gives way as the seam opens: a painted Deformable
+  // region limits it to those pixels, and none painted means all of it.
+  const gives = part.pierceDeformRegion.size;
   const soft = part.isPierced
-    ? ` · ${bunch || 'no'} bunching${walls ? ` · ${walls} wall` : ''}`
+    ? ` · ${gives ? `${gives} give way` : 'all gives way'}${walls ? ` · ${walls} wall` : ''}`
     : '';
   const issue = pierceDentIssue(part);
-  const noBunch = part.isPierced && painted > 0 && bunch === 0;
   if (issue) {
     els.piercePaintBtn.replaceChildren(
-      document.createTextNode('Paint regions… '), createIcon('warning'), document.createTextNode(` no dent — ${issue}`),
+      document.createTextNode('Paint regions… '), createIcon('warning'), document.createTextNode(` no opening — ${issue}`),
     );
   } else {
     els.piercePaintBtn.textContent = painted
-      ? `Paint regions… (${painted} px marked${soft})${noBunch
-        ? ' — nothing painted Deformable, so the notch cuts but the edges stay put'
-        : ''}`
+      ? `Paint regions… (${painted} px marked${soft})`
       : 'Paint regions…';
   }
   els.pierceRemoveBtn.hidden = !part.hasPierceRole;
@@ -1719,15 +1711,15 @@ function renderPierceDepthBar() {
   els.pierceDepthContact.style.left = `${enterPct}%`;
   els.pierceDepthContact.style.right = '0';
   const denting = dentStart === enter
-    ? 'The dent starts on contact.'
+    ? 'The seam opens on contact.'
     : (dentStart < enter
-      ? `The dent holds off until ${dentStart} px away — ${enter - dentStart} px ` +
+      ? `The seam holds off until ${dentStart} px away — ${enter - dentStart} px ` +
         'further in than first contact.'
-      : `The dent starts at ${dentStart} px away, before contact does.`);
+      : `The seam starts opening at ${dentStart} px away, before contact does.`);
   els.pierceDepthLegend.textContent =
     `Left edge: the tip still approaching, nothing moves. Enter at ${enter} px ` +
     `away: contact begins. ${denting} Right edge: ${end} px deeper still, ` +
-    'maximum push and a full dent — going deeper than this changes nothing more.';
+    'maximum push and the seam at its widest — going deeper than this changes nothing more.';
 }
 
 // ---- Placing Enter and End by hand, on the piercer itself
@@ -1933,7 +1925,7 @@ function renderPierceDepthCanvas() {
 
   els.pierceDrawHint.textContent = plan.axis.known
     ? 'Drag any handle along the needle\u2019s path. Enter is where contact ' +
-      'begins, Dent is where the notch starts to appear, and End is where ' +
+      'begins, Dent is where the seam starts to open, and End is where ' +
       'both stop growing.'
     : 'This piercer has no painted tip yet, so the path below is a guess at ' +
       'straight down. Paint the tip and these will follow it.';
@@ -3173,16 +3165,16 @@ function bindEvents() {
       renderPierceModal();
     });
   }
-  // Live while dragging, so the notch on the canvas is the one the finger
+  // Live while dragging, so the opening on the canvas is the one the finger
   // is currently asking for -- the number alone says very little about how
-  // a wedge that size reads on this particular artwork. One undo step per
+  // a bulge that size reads on this particular artwork. One undo step per
   // drag rather than one per pixel of slider travel, the same treatment
   // every other continuous control here gets.
   for (const [slider, readout] of [
     [els.pierceDentDepthSlider, els.pierceDentDepthValue],
     [els.pierceDentWidthSlider, els.pierceDentWidthValue],
   ]) {
-    attachContinuousHistory(slider, 'Change dent shape');
+    attachContinuousHistory(slider, 'Change opening shape');
     slider.addEventListener('input', () => {
       const part = piercePart();
       if (!part) return;

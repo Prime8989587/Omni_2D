@@ -90,10 +90,10 @@ const TOPICS = {
       'painted tip to the nearest pierceable pixel.\n\n' +
       '• Enter is the gap where contact starts -- get this close and the ' +
       'tip sinks under the surface and starts pressing on its bones.\n' +
-      '• Dent Trigger is the gap where the NOTCH starts to appear. Its own ' +
-      'setting, so touching and denting need not happen at the same moment.\n' +
+      '• Dent Trigger is the gap where the SEAM starts to open. Its own ' +
+      'setting, so touching and opening need not happen at the same moment.\n' +
       '• End is how much deeper both keep growing before they stop ' +
-      'advancing. Past End the notch and the piercer itself hold at their ' +
+      'advancing. Past End the opening and the piercer itself hold at their ' +
       'deepest.\n\n' +
       'Set them by typing the numbers, or by dragging the three handles ' +
       'drawn on the piercer’s own artwork -- both write the same values, ' +
@@ -101,58 +101,60 @@ const TOPICS = {
   },
   'pierce-dent-start': {
     title: 'Dent Trigger Distance',
-    body: 'The gap at which the notch begins to appear -- separate from the ' +
+    body: 'The gap at which the seam begins to open -- separate from the ' +
       'Enter point, and measured the same way, in scene pixels from the ' +
       'painted tip to the nearest pierceable pixel.\n\n' +
       'Enter and this answer two different questions. Enter is when the two ' +
       'layers are IN CONTACT: the tip draws beneath the surface and starts ' +
       'pressing back on the pierced layer’s bones. This is when the surface ' +
       'starts to GIVE WAY.\n\n' +
-      '• Closer than Enter -- the tip touches, sinks in, and only then does ' +
-      'the notch start to open. A needle resting on skin before it breaks it.\n' +
-      '• Equal to Enter -- the dent starts on contact, which is how every ' +
+      '• Closer than Enter -- the tip touches, sinks in, and only then do ' +
+      'the edges start to part. A needle resting on skin before it breaks it.\n' +
+      '• Equal to Enter -- the seam opens on contact, which is how every ' +
       'project behaved before this setting existed.\n' +
       '• Further out than Enter -- the surface flinches before anything ' +
       'touches it.\n\n' +
-      'Whichever you choose, the notch is complete at the End point: that is ' +
-      'the one place both the dent and the depth finish.',
+      'Whichever you choose, the opening is at its widest at the End point: ' +
+      'that is the one place both the opening and the depth finish.',
   },
   'pierce-targets': {
     title: 'Paint targets',
     body: 'Tip (on the piercer) is what counts as "in".\n\n' +
       'On the pierced layer, three masks and one placement:\n' +
-      '• Pierceable -- where contact is detected at all, and the only ' +
-      'place the notch is allowed to cut.\n' +
-      '• Deformable -- which pixels BUNCH UP around that notch, pushing ' +
-      'outward as it grows, the way material does when something is ' +
-      'pressed into it. They only ever move AWAY from the notch, and they ' +
-      'never cut anything themselves. Empty means none of them react: the ' +
-      'notch still cuts, the edges around it just stay put.\n' +
+      '• Pierceable -- where contact is detected at all.\n' +
+      '• Deformable -- which pixels GIVE WAY as the seam opens: the edges ' +
+      'bow outward around the tip, carrying the material beside them with ' +
+      'them. Empty means all of it gives; paint some to keep the movement ' +
+      'to just those pixels (everything else holds still).\n' +
       '• Barrier -- solid pixels that stop the piercer sideways while ' +
       'in contact. Never blocks it going deeper -- that’s Enter/End.\n' +
       'All four paint only on the layer\u2019s own artwork, never on the ' +
       'transparent space round it.\n' +
-      '• Dent -- not a mask. The wedge itself, dragged onto the spot where ' +
-      'the notch should happen. This is the only thing that cuts.',
+      '• Dent -- not a mask. The triangle marker, dragged onto the spot ' +
+      'where the seam should open: its base on the surface, its point ' +
+      'aimed the way the piercer goes in. Its centre line IS the seam.',
   },
   'pierce-dent': {
-    title: 'Dent shape',
-    body: 'The notch a pierce cuts into this layer, in its own pixels. ' +
-      'Measured at the End point -- it grows from nothing at the Dent ' +
-      'Trigger Distance, and shrinks back to nothing as the piercer comes ' +
-      'out.\n\n' +
-      '• Depth -- how far the point drives in.\n' +
-      '• Width -- how wide the opening is across the surface.\n\n' +
-      'Set either to 0 for no notch at all.\n\n' +
+    title: 'Opening shape',
+    body: 'The seam a pierce opens in this layer, in its own pixels. ' +
+      'Nothing is cut out: the two edges of the seam bow apart in a smooth ' +
+      'curve around the piercer’s tip -- widest right at the tip, easing ' +
+      'back to closed ahead of it, and resting against the piercer behind ' +
+      'it. As the piercer goes deeper the bulge follows the tip in, grows ' +
+      'and reaches further along the edge; as it comes out, everything eases ' +
+      'back to the rest outline the same way.\n\n' +
+      '• Depth -- how far the seam runs in from the surface.\n' +
+      '• Width -- how far apart the edges bow at the tip, at the End point.\n\n' +
+      'Set either to 0 for no opening at all.\n\n' +
       'Both are easier to set by hand: Paint regions…, then the Dent ' +
-      'target, and drag the wedge on the artwork. Its base handle places ' +
-      'it, its apex handle sets depth and direction, its width handle sets ' +
-      'the opening. These sliders and those handles are the same two ' +
-      'numbers.\n\n' +
-      'WHERE the dent happens is fixed once you place it. The piercer ' +
-      'decides how much of it appears, never where.\n\n' +
-      'Paint Deformable on the same layer to make the material around the ' +
-      'notch bunch up as it opens.',
+      'target, and drag the triangle marker on the artwork. Its base handle ' +
+      'places it, its apex handle sets depth and direction, its width ' +
+      'handle sets the opening. These sliders and those handles are the ' +
+      'same two numbers.\n\n' +
+      'WHERE the seam is is fixed once you place it. The piercer decides ' +
+      'how far it opens and where along it the bulge is, never where it is.\n\n' +
+      'Pins (Px Pin) hold their pixels against the opening, bending the ' +
+      'edge round them smoothly rather than letting it come apart.',
   },
   'clayer-tools': {
     title: 'Boundary and Fill',

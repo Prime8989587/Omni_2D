@@ -32,7 +32,7 @@ import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 import { pierceDentIssue } from './pierce.js';
-import { dentPlacement, dentTriangleAt } from './dent.js';
+import { openingPlacement, openingMarker } from './opening.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { createIcon } from './pixelIcons.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
@@ -48,23 +48,23 @@ const AREA_EDGE = '#2EE6FF';
 // Deformable is a SUBSET of pierceable and is drawn on top of it, so it
 // needs a colour that reads clearly against cyan rather than blending
 // into it -- amber, the warm opposite of both the other two. It marks the
-// material that BUNCHES around a dent, so amber reading as "this is the
-// part that moves" is exactly right.
+// material that GIVES WAY as the seam opens, so amber reading as "this is
+// the part that moves" is exactly right.
 const DEFORM_COLOR = 'rgba(255, 176, 46, 0.6)';
 const DEFORM_EDGE = '#FFB02E';
 // Walls. Near-white, and the most opaque of the four: a barrier is not a
 // degree of anything, it is solid or it is not.
 const BARRIER_COLOR = 'rgba(236, 238, 248, 0.85)';
 const BARRIER_EDGE = '#FFFFFF';
-// The dent, drawn as the shape it will cut rather than as painted texels --
+// The opening's marker, drawn as a triangle rather than as painted texels --
 // because it is not painted, it is placed. Violet: the one hue not already
-// spoken for by a mask, so the wedge never reads as a fifth region.
+// spoken for by a mask, so the marker never reads as a fifth region.
 const DENT_FILL = 'rgba(160, 120, 255, 0.35)';
 const DENT_EDGE = '#A078FF';
 
 // How near a handle a touch counts as grabbing it, in css px. Generous:
 // this is a fingertip on a phone, and the three handles are deliberately
-// never closer together than a dent's own size.
+// never closer together than the marker's own size.
 const HANDLE_GRAB_PX = 30;
 const HANDLE_RADIUS = 9;
 
@@ -280,19 +280,21 @@ function drawRegion(ctx, part, at, fill, edge, region = part.pierceRegion) {
 }
 
 // ---------------------------------------------------------------------------
-// The dent, placed by hand
+// The opening's marker, placed by hand
 //
 // The other four targets paint texels. This one does not paint anything: it
-// puts the wedge itself on the artwork and lets the artist drag it, which is
-// the only way to answer "where should this dent happen" by looking at the
-// drawing rather than by typing coordinates at it.
+// puts a triangle marker on the artwork and lets the artist drag it, which
+// is the only way to answer "where should this seam open" by looking at the
+// drawing rather than by typing coordinates at it. The triangle is never
+// cut out of anything; it says where the seam is (its centreline), how far
+// in it runs, and how far apart its edges bow at full depth (opening.js).
 //
 // Three handles, because a triangle pinned to a surface has exactly three
 // degrees of freedom worth exposing:
 //
-//   BASE   where on the artwork the notch opens     -- moves the whole wedge
-//   APEX   how deep it goes, and which way it faces -- depth and direction
-//   WIDTH  how wide its mouth is                    -- width alone
+//   BASE   where on the artwork the seam opens       -- moves the whole marker
+//   APEX   how far in it runs, and which way it goes -- depth and direction
+//   WIDTH  how far apart the edges bow at the tip   -- width alone
 //
 // The sliders in the Pierce window show the same two numbers and write the
 // same fields; neither is the source of truth, the Part is.
@@ -315,10 +317,12 @@ function windowToTexel(part, at, point) {
 }
 
 // Where the three handles are, in texel space. Always drawn at FULL size --
-// the artist is configuring the dent the layer takes at the End Point, not
-// whatever fraction of it some live contact happens to be at.
+// the artist is configuring the opening at the End Point, not whatever
+// fraction of it some live contact happens to be at. The marker is a
+// placement tool and nothing more: its centreline is the seam, its depth how
+// far the seam runs in, its width how far the edges part at the tip.
 function dentHandles(part) {
-  const place = dentPlacement(part);
+  const place = openingPlacement(part);
   const inward = { x: Math.cos(place.angle), y: Math.sin(place.angle) };
   const across = { x: -inward.y, y: inward.x };
   const depth = part.pierceDentDepth;
@@ -335,7 +339,7 @@ function dentHandles(part) {
 
 function drawDent(ctx, part, at) {
   const handles = dentHandles(part);
-  const tri = dentTriangleAt(part, 1);
+  const tri = openingMarker(part);
   const { dpr } = session;
   // Pixel art on the interface grid (pixelDraw.js), in device pixels.
   const pen = new PixelPen(ctx, dpr).begin();
@@ -345,13 +349,13 @@ function drawDent(ctx, part, at) {
   };
 
   if (tri) {
-    const wedge = [point(tri.b1), point(tri.b2), point(tri.apex)];
-    pen.polygon(wedge, DENT_FILL);
-    pen.polyline(wedge, DENT_EDGE);
+    const marker = [point(tri.b1), point(tri.b2), point(tri.apex)];
+    pen.polygon(marker, DENT_FILL);
+    pen.polyline(marker, DENT_EDGE);
   }
 
-  // A stem from base to apex, so the direction is legible even when the
-  // wedge is too narrow to read as a triangle.
+  // The seam itself, base to apex: the line the two edges part along. Drawn
+  // even when the marker is too narrow to read as a triangle.
   const base = point(handles.base);
   const apex = point(handles.apex);
   pen.line(base.x, base.y, apex.x, apex.y, DENT_EDGE, { dash: 2 });
@@ -360,7 +364,7 @@ function drawDent(ctx, part, at) {
   // AWAY from the others: base outside the layer, apex deeper in, width off
   // the far end of the mouth. Stacked above their grips, as they used to
   // be, the base and width labels ran into each other ("width 14ase") on
-  // any wedge narrower than its two labels.
+  // any marker narrower than its two labels.
   const grip = (p, label, fill, dir) => {
     const r = HANDLE_RADIUS * dpr;
     pen.disc(p.x, p.y, r + pen.u, '#000000');
@@ -381,7 +385,7 @@ function drawDent(ctx, part, at) {
 }
 
 // Which handle a touch is going for, or null for none. Base is tested last
-// so that a dent collapsed to nothing -- every handle stacked on one spot --
+// so that a marker collapsed to nothing -- every handle stacked on one spot --
 // still gives up its apex and width rather than only ever moving as a whole.
 function grabDentHandle(point) {
   const part = session.pierced;
@@ -414,17 +418,17 @@ function dragDentHandle(which, point) {
     partsStore.setPierceDentPlacement(part.id, target.x, target.y, place.angle);
   } else if (which === 'apex') {
     // The apex sets the direction AND the depth: dragging it around the
-    // base swings the wedge, dragging it away from the base deepens it.
+    // base swings the marker, dragging it away from the base deepens it.
     const dx = target.x - place.x;
     const dy = target.y - place.y;
     const depth = Math.hypot(dx, dy);
     // Too close to the base to read an angle from: keep the one it has
-    // rather than letting the wedge spin under a fingertip.
+    // rather than letting the marker spin under a fingertip.
     const angle = depth < 0.5 ? place.angle : Math.atan2(dy, dx);
     partsStore.setPierceDentPlacement(part.id, place.x, place.y, angle);
     partsStore.setPierceDent(part.id, depth, part.pierceDentWidth);
   } else {
-    // Width alone: only the component across the wedge counts, so dragging
+    // Width alone: only the component across the marker counts, so dragging
     // at any angle widens it without dragging it off its own axis.
     const dx = target.x - place.x;
     const dy = target.y - place.y;
@@ -485,47 +489,48 @@ function render() {
   // of whatever they are bounding.
   drawRegion(ctx, pierced, piercedAt, BARRIER_COLOR, BARRIER_EDGE, pierced.pierceBarrierRegion);
   drawRegion(ctx, piercer, piercerAt, TIP_COLOR, TIP_EDGE);
-  // Only while it is the thing being edited: the wedge is a big opaque
+  // Only while it is the thing being edited: the marker is a big opaque
   // shape and would hide the paint underneath it the rest of the time.
   if (session.target === 'dent') drawDent(ctx, pierced, piercedAt);
 
   els.pierceWindowTarget.textContent = session.target === 'tip'
     ? `${piercer.name} · tip`
     : `${pierced.name} · ${session.target === 'dent' ? 'dent' : targetMask().label}`;
-  // A dent that cannot be cut is called out here rather than left to look
-  // like it took: the numbers alone would say a depth and a width are
+  // An opening that cannot happen is called out here rather than left to
+  // look like it took: the numbers alone would say a depth and a width are
   // stored, which they are, while nothing on the canvas ever moved.
   const issue = pierceDentIssue(pierced);
-  const where = dentPlacement(pierced);
+  const where = openingPlacement(pierced);
   const status = `tip ${piercer.pierceRegion.size} px · flesh ${pierced.pierceRegion.size} px · ` +
-      `bunch ${pierced.pierceDeformRegion.size || 'none'} · ` +
+      `gives ${pierced.pierceDeformRegion.size || 'all'} · ` +
       `wall ${pierced.pierceBarrierRegion.size} · ` +
-      `dent ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} ` +
+      `seam ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} ` +
       `@ ${where.x.toFixed(0)},${where.y.toFixed(0)}` +
       `${pierced.pierceDentPlaced ? '' : ' (unplaced)'} · ` +
       `${Math.round(cam.zoom * 100)}%`;
   if (issue) {
-    els.pierceWindowStatus.replaceChildren(createIcon('warning'), document.createTextNode(` no dent — ${issue}`));
+    els.pierceWindowStatus.replaceChildren(createIcon('warning'), document.createTextNode(` no opening — ${issue}`));
   } else {
     els.pierceWindowStatus.textContent = status;
   }
 }
 
 // What the selected target is for, said where it is being used. The
-// Deformable one earns its length: it used to mean "which pixels are
-// allowed to give way", with unpainted meaning all of them, and it now
-// means very nearly the opposite -- the pixels that pile up around the
-// notch, with unpainted meaning none. Somebody who learned the old meaning
-// will read the same button and get the wrong answer unless it says so.
+// Deformable one earns its length: its meaning has changed with the
+// pierce model more than once (2.5.1's meant "the pixels that pile up
+// round the notch, unpainted meaning none"), and somebody who learned an
+// old meaning will read the same button and get the wrong answer unless it
+// says so.
 const TARGET_HINT = {
-  deform: 'Which pixels BUNCH UP around the dent — they push outward as the '
-    + 'notch grows, and never inward. They never cut anything: the notch is '
-    + 'the Dent’s job. Unpainted means none of them react.',
+  deform: 'Which pixels GIVE WAY as the seam opens — the edges bow outward '
+    + 'round the tip and carry these with them. Unpainted means all of the '
+    + 'layer gives; paint some to keep the movement to just those.',
   barrier: 'Solid: the tip cannot cross these, however hard it is pushed.',
   area: 'Where a pierce registers at all on this layer.',
   tip: 'The part of the piercer that goes in.',
-  dent: 'Drag the wedge to where the notch should happen. It stays there — '
-    + 'the piercer decides how much of it appears, not where.',
+  dent: 'Drag the triangle onto the spot the seam should open: base on the '
+    + 'surface, point aimed the way the piercer goes in. Its centre line is the '
+    + 'seam. It stays there — the piercer decides how far it opens, not where.',
 };
 
 function renderTools() {

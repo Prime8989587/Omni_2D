@@ -88,3 +88,80 @@ export function texelUnder(vertices, positions, triangles, point) {
   }
   return null;
 }
+
+// The same lookup for a point that may lie just OFF the layer: carried back
+// through whichever triangle it is nearest to, extended past that
+// triangle's edge. A piercer's tip sits at or just outside the surface it
+// is entering until it is in, and where it is along the layer's own texel
+// axes still has to be known then -- the opening grows from that spot.
+export function texelNearest(vertices, positions, triangles, point) {
+  let best = null;
+  let bestOutside = Infinity;
+  for (let t = 0; t < triangles.length; t += 3) {
+    const ia = triangles[t];
+    const ib = triangles[t + 1];
+    const ic = triangles[t + 2];
+    const a = positions[ia];
+    const b = positions[ib];
+    const c = positions[ic];
+    const den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+    if (Math.abs(den) < 1e-12) continue;
+    const l0 = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / den;
+    const l1 = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / den;
+    const l2 = 1 - l0 - l1;
+    const outside = Math.max(0, -l0, -l1, -l2);
+    if (outside < bestOutside) {
+      bestOutside = outside;
+      const va = vertices[ia];
+      const vb = vertices[ib];
+      const vc = vertices[ic];
+      best = { u: l0 * va.u + l1 * vb.u + l2 * vc.u, v: l0 * va.v + l1 * vb.v + l2 * vc.v };
+      if (outside === 0) break;
+    }
+  }
+  return best;
+}
+
+// The same, plus the map from scene offsets to texel offsets through that
+// triangle: how a whole shape lying near the point -- a piercer's tip
+// outline -- is carried into the layer's texels with a single lookup, all
+// of it through one consistent local map.
+export function texelFrameNearest(vertices, positions, triangles, point) {
+  let best = null;
+  let bestOutside = Infinity;
+  for (let t = 0; t < triangles.length; t += 3) {
+    const ia = triangles[t];
+    const ib = triangles[t + 1];
+    const ic = triangles[t + 2];
+    const a = positions[ia];
+    const b = positions[ib];
+    const c = positions[ic];
+    const den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+    if (Math.abs(den) < 1e-12) continue;
+    const l0 = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / den;
+    const l1 = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / den;
+    const l2 = 1 - l0 - l1;
+    const outside = Math.max(0, -l0, -l1, -l2);
+    if (outside < bestOutside) {
+      bestOutside = outside;
+      const va = vertices[ia];
+      const vb = vertices[ib];
+      const vc = vertices[ic];
+      // d(l0)/dx etc., from the same barycentric formulas.
+      const l0x = (b.y - c.y) / den;
+      const l0y = (c.x - b.x) / den;
+      const l1x = (c.y - a.y) / den;
+      const l1y = (a.x - c.x) / den;
+      best = {
+        u: l0 * va.u + l1 * vb.u + l2 * vc.u,
+        v: l0 * va.v + l1 * vb.v + l2 * vc.v,
+        uX: l0x * (va.u - vc.u) + l1x * (vb.u - vc.u),
+        uY: l0y * (va.u - vc.u) + l1y * (vb.u - vc.u),
+        vX: l0x * (va.v - vc.v) + l1x * (vb.v - vc.v),
+        vY: l0y * (va.v - vc.v) + l1y * (vb.v - vc.v),
+      };
+      if (outside === 0) break;
+    }
+  }
+  return best;
+}

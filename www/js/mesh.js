@@ -27,12 +27,9 @@ const WEIGHT_EPSILON = 0.001;
 const DISTANCE_EPSILON = 0.5; // guards against dividing by a zero distance
 const FALLOFF_EXPONENT = 2;
 
-// The pierce solver's current displacement, read while deforming. Its own
-// state module rather than pierce.js, which imports THIS file -- routing
-// through a leaf keeps the import graph acyclic.
-import { pierceOffsets } from './pierceState.js';
-// And the PxLink solver's correction, through a leaf for the same reason:
-// pxlink.js deforms linked layers through this file.
+// The PxLink solver's correction, read while deforming. Its own state
+// module rather than pxlink.js, which deforms linked layers through THIS
+// file -- routing through a leaf keeps the import graph acyclic.
 import { pxlinkCorrection } from './pxlinkState.js';
 import { localToWorld } from './layerSpace.js';
 
@@ -1029,7 +1026,7 @@ function vertexSignature(mesh) {
 // either actually changes rather than every frame; the per-frame band width
 // is applied on top in pinInfluence. `cell` is one mesh cell, the narrowest
 // band.
-function pinDistances(mesh, part) {
+export function pinDistances(mesh, part) {
   // Keyed on the mesh's vertices as well as the pins: Mesh Trim adds, moves
   // and removes vertices IN PLACE, and a cache keyed on the pins alone would
   // then hand back an array for a different mesh -- the wrong length, so a
@@ -1149,32 +1146,16 @@ export function applyLinkWelds(mesh, positions, link) {
   });
 }
 
-// The layer's own deformation, before any PxLink: bone skinning, pierce
-// offsets, then pins pulling their neighbourhood back toward rest. One pass,
-// one mesh.
+// The layer's own deformation, before any PxLink: bone skinning, then pins
+// pulling their neighbourhood back toward rest. One pass, one mesh.
+//
+// A pierce's opening is NOT applied here. It is drawn on top of this shape
+// (opening.js, through the renderer) and nothing that measures a layer --
+// the pierce contact itself, PxLink, weight painting -- ever sees it, which
+// is what keeps the opening a pure function of the contact instead of
+// something that pushes the flesh away from the tip that opened it.
 export function deformVerticesUncorrected(mesh, part, boneTransforms) {
-  const out = deformRaw(mesh, part, boneTransforms);
-
-  // Pierce, BEFORE pins. A displaced vertex is the bone result plus this
-  // layer's current dent offset (the material bunching around the notch,
-  // dent.js writeBunch) -- read, never advanced: the solver owns those
-  // numbers and writes them once per frame in the physics loop, where a
-  // redraw cannot make the simulation run faster by happening twice.
-  //
-  // It goes before the pin step deliberately. Pins pull their neighbourhood
-  // back toward rest afterwards, so a pinned pixel that a pierce tried to
-  // move is returned to exactly where it was -- pinned pixels stay put
-  // during contact, and the two features compose instead of arguing. (The
-  // solver also masks by pin influence itself, so those vertices never
-  // accumulate an offset to be undone in the first place.)
-  const pierce = pierceOffsets(part);
-  if (pierce && pierce.offsetX.length === out.length) {
-    for (let i = 0; i < out.length; i++) {
-      out[i] = { x: out[i].x + pierce.offsetX[i], y: out[i].y + pierce.offsetY[i] };
-    }
-  }
-
-  return pinned(mesh, part, boneTransforms, out);
+  return pinned(mesh, part, boneTransforms, deformRaw(mesh, part, boneTransforms));
 }
 
 // Pins pulling their neighbourhood back toward rest.

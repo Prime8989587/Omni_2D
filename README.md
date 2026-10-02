@@ -1514,6 +1514,15 @@ settles.
 
 ## Pierce: pushing flesh aside without cutting a hole
 
+> **As of 2.5.2** the pierced layer answers with a **soft opening**: its seam
+> parts round the piercer and the material either side swells outward in one
+> smooth curve that follows the tip. That model is described in
+> "2.5.2: Pierce opens soft, and follows the tip" near the end of this file.
+> The sections below keep the history of the models before it (the dent, the
+> V, the triangle notch) and everything that still applies unchanged: roles,
+> the Piercer tab, Enter / Dent Trigger / End, Barrier, Physics Direction and
+> force transfer.
+
 A needle pressed into a belly does not cut a hole in it. The belly dents.
 **Pierce** is that dent: a piercing layer reshapes a pierced layer's
 pixels out of its way, in proportion to how deep it has come, and they
@@ -7294,6 +7303,141 @@ other half.
   What's new read the version from the release log.
 - All unit tests, the 12 browser suites, PxLink's suites and the 2.5.0
   feature sweeps pass.
+
+## 2.5.2: Pierce opens soft, and follows the tip
+
+A patch: it refines how a pierced layer answers the piercer, and adds no
+tool, window or mode. The triangle in the painter's Dent target and the Dent
+Trigger Distance are still how it is set up.
+
+### What changed, and why
+
+2.5.1's model cut a triangular notch out of the pierced artwork. Removing
+pixels is not what soft material does: nothing round the hole reacted, and
+the hole's straight sides read as a V. (A "two halves rotating on a hinge"
+model was asked about along the way; it never shipped — 2.4.1's V was the
+nearest thing, and 2.5.1 removed it.)
+
+What a soft seam does when something is pushed into it — studied from the
+reference sequence for its mechanics only — is this:
+
+- **the two edges of the seam wrap the tip**: parted by the tip's own width
+  where it is, still closed just ahead of it;
+- **the material either side swells outward**: one rounded bulge centred on
+  the tip's head, easing back to rest ahead of it, and narrowing back
+  toward the surface behind it;
+- **shallow, the bulge is small and local**; deeper, it grows and reaches
+  further along the seam; the whole shape travels down the seam with the
+  tip, and backs out through the same shapes in reverse.
+
+That is now exactly what is drawn (`www/js/opening.js`, which replaces
+`dent.js`).
+
+### How it works
+
+**The marker places the seam.** Its centre line is the seam; its depth is
+how far the seam runs in; its width is how far apart the edges bow round the
+tip at full depth. Nothing is ever subtracted from the artwork.
+
+**The contact drives it, every frame, with no state:**
+- how open: the same fraction as before, 0 at the Dent Trigger Distance, 1 at
+  the End Point;
+- where along the seam: the piercer's **leading point** — the front edge of
+  its painted tip, not its middle — carried into the layer's own texels
+  through the layer as it is posed;
+- what the edges may open round: **every texel of the painted tip**, carried
+  the same way and binned along the seam, side by side.
+
+**Two parts to the shape.**
+- *The swelling* is a smooth hump along the seam (cosine ahead of the tip,
+  settling to the tip's width behind it, tapered to nothing past the seam's
+  far end and outside the surface). Its height is the fraction × half the
+  marker's width; its reach grows with depth.
+- *The rim* is how far each edge stands off the line: the swelling, but never
+  past what the tip covers on that side at that point — so ahead of the tip
+  the seam stays closed, round the tip it wraps the tip's outline, and a tip
+  lying to one side of the line opens nothing it cannot fill. That is the
+  "no tearing" guarantee: whatever shows between the parted edges is the
+  piercer, drawn beneath the layer, never the background through a hole.
+
+Across the seam the push starts at the rim, rises smoothly to the swelling a
+little way out (a stretch of at most about 2×), and fades to nothing over
+four times the swelling's height (a squeeze of at most about a third). It
+never falls faster than it moves sideways, so nothing can fold.
+
+**Drawn without tearing.** The layer is drawn twice through complementary
+per-texel masks, one per side of the seam. Each pass applies one continuous
+field to the *whole* mesh — the true push on its own side, and across the
+line the other side's push with the jump taken out, matched in value and
+slope — so a triangle straddling the seam can never crack it open, and the
+only place the two passes part is the seam, by exactly the two rims. The
+passes run through a **refined copy of the layer's mesh**: every triangle
+split k×k (about 1.5 texels a side), sharing every edge point (no
+T-junctions), each new vertex a fixed blend of its parent's corners. With
+nothing open, it maps every texel exactly where the layer's own mesh does —
+so switching to it at first contact changes no pixel.
+
+**The proven systems underneath are reused, not re-derived.** The opening
+rides on top of the layer's own deformation — bones through the inverse bind
+and normalized weights, springs, PxLink welds and Px Pin — and pushes that
+posed surface through each triangle's own texel-to-scene map. Contact,
+walls, the depth cap and force transfer still measure the layer *closed*, so
+the opening never feeds back into the contact that drives it.
+
+**Pins and Deformable.** Px Pin'd artwork holds against the opening through
+Px Pin's own smooth influence, over a band that widens with the push (four
+times it), so the material between a pin and a deep opening bends round the
+pin instead of folding. **Deformable** now means *which pixels give way*:
+paint some and the opening is limited to them, eased over the region's edge
+the same way; paint none and the whole layer gives.
+
+### Verified
+
+In the real app at phone size, with real touches: roles set in the Pierce
+window, the marker placed and sized by dragging its three handles
+(`b9/opening_sweep.mjs`), then a round-ended rod driven 40 px in and back
+out through Free Move's Piercer tab. Every one of the 81 frames was read off
+the screen, one sample per scene pixel; the outlines' positions were read
+from the very triangles handed to the rasterizer.
+
+![Real-app frames at increasing depth: the rim wrapping the rod and the U contour beside the seam bowing out into a rounded bulb round the rod's head; with a Px Pin block a cell out from the seam, which holds; and on a seam running diagonally across a rotated layer](docs/images/opening-depths.png)
+
+| Straight seam (16/16) | |
+| --- | --- |
+| Opening fraction, 4 px apart | 0.00 → 0.04 → 0.21 → 0.38 → 0.54 → 0.71 → 0.88 → 1.00, monotonic |
+| Where along the seam the tip is | 0 → 1.5 → 5.5 → 9.5 → 12.5 texels, travelling with it |
+| Swelling of the contour beside the seam | 0 → 1.2 → 3.4 → 4.8 → 5.9 px, reaching rows 0 → 5 → 10 → 18 → 19 |
+| Where it is widest, at full depth | row 7, round the rod's head (tip at 12.5); 4.6 px at the surface |
+| Rim at full depth, row by row | `8 8 8 8 8 8 8 8 8 2 0 0 …` — the rod's width, then closed ahead |
+| Background pixels inside the flesh | **0 on all 81 frames**; flesh one connected piece on all 81 |
+| Corners in the swelling | none: slope change shrinks 0.90 → 0.42 at four times the sampling |
+| What is drawn vs the smooth curve | within **0.33 px** everywhere |
+| Way out vs way in | identical, every frame; closed pixel-for-pixel at the end |
+
+| Px Pin block a cell from the seam (12/12) | Diagonal seam, layer turned 28.6° (5/5) |
+| --- | --- |
+| block moved **0.0000 px** at every depth; free side swelled up to 4.6 px; no hole on any frame | opens fully, the tip travels down the diagonal; no hole and nothing see-through on any of 81 frames; one piece; reversible |
+
+`tests/opening.mjs` (33 checks, in `npm test`, replacing `tests/dent.mjs`)
+pins the model down headlessly: the swelling's shape, growth, travel and
+smoothness (corner-free by the same shrinking-slope test); the rim never
+past the tip's outline and closed ahead of it, including an off-centre tip;
+neither pass folding or stretching past about 2× anywhere; each pass exactly
+its field, continuous across the line; the refined mesh exact at rest with
+no T-junctions; a pin or a Deformable edge right beside a deep, wide opening
+bending the material without folding it (both fold — down to −0.10 and
+−1.23 of a triangle's area — with the band left at its old width); and the
+live contact opening, travelling, retracing and staying measured on the
+closed layer.
+
+### Also
+
+- The Pierce window's row is **Opening shape**, and the help, the target hints
+  and the Debug overlay's readout (`open`, `along`) describe the seam rather
+  than a notch.
+- `pinDistances` is exported from `mesh.js`, and `artwork.js` gains
+  `texelFrameNearest` — the texel under a point together with the local map
+  round it, so a whole tip outline is carried into a layer with one lookup.
 
 ## What's next
 

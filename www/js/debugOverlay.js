@@ -29,13 +29,13 @@ const LEGACY_PIERCE_KEY = 'omni2d.pierce.overlay';
 export const VIEWS = {
   pierceRegions: {
     label: 'Pierce regions',
-    hint: 'Tints every painted pierce region on the canvas: tips pink, pierceable cyan, bunching amber, walls white.',
+    hint: 'Tints every painted pierce region on the canvas: tips pink, pierceable cyan, give-way amber, walls white.',
     where: ['home', 'rig', 'bind', 'animating', 'recording'],
     needsPierce: true,
   },
   pierceReadout: {
     label: 'Pierce depth readout',
-    hint: 'The live contact reading for each pierced layer: gap, depth, Enter / End, and how far the dent has grown.',
+    hint: 'The live contact reading for each pierced layer: gap, depth, Enter / End, how far the seam has opened and where along it the bulge is.',
     where: ['home', 'rig', 'bind', 'animating', 'recording'],
     needsPierce: true,
   },

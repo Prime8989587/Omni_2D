@@ -451,7 +451,7 @@
 
         <div id="pierceDentRow" hidden>
           <div class="field-label-row">
-            <div class="field-label">Dent shape</div>
+            <div class="field-label">Opening shape</div>
             <button class="info-btn" type="button" data-info="pierce-dent" aria-haspopup="true" aria-expanded="false" aria-label="What do Depth and Width do?"><span data-icon="info"></span></button>
           </div>
           <label class="slider-field slider-field--wide">
@@ -463,12 +463,14 @@
             <input id="pierceDentWidthSlider" class="slider" type="range" min="0" max="128" step="1" value="10" />
           </label>
           <p class="joint-hint">
-            The triangular notch a pierce cuts into this layer, in its own
-            pixels, at the End Point. Depth is how far the point drives in;
-            Width is how wide the opening is. Both grow from nothing at the
-            Dent Trigger Distance, and shrink back to nothing on the way out.
-            WHERE it happens is yours to place: Paint regions…, then Dent, and
-            drag the wedge onto the spot. Set Depth or Width to 0 for no notch.
+            The seam a pierce opens in this layer, in its own pixels. Depth is
+            how far the seam runs in from the surface; Width is how far apart
+            its two edges bow around the tip at the End Point. Nothing is cut:
+            the edges bulge outward around the tip, follow it in, and ease
+            back to closed on the way out, starting at the Dent Trigger
+            Distance. WHERE the seam is is yours to place: Paint regions…,
+            then Dent, and drag the triangle marker onto the spot. Set Depth
+            or Width to 0 for no opening.
           </p>
         </div>
 
@@ -484,8 +486,8 @@
         <button id="piercePaintBtn" class="toggle-chip toggle-chip--wide" type="button">Paint regions…</button>
         <button id="pierceOverlayBtn" class="toggle-chip toggle-chip--wide" type="button" data-debug-toggle aria-pressed="false" aria-haspopup="dialog"><span class="px-icon--lead" data-icon="bug"></span>Debug overlay…</button>
         <p class="joint-hint">
-          The region tint (tips pink, pierceable cyan, the part that bunches
-          around a dent amber, walls white) and the live contact readout live
+          The region tint (tips pink, pierceable cyan, the part that gives way
+          round the opening amber, walls white) and the live contact readout live
           in the Debug overlay,
           with every other testing view. Leave it off for normal work.
         </p>
@@ -510,10 +512,11 @@
           <button class="info-btn" type="button" data-info="pierce-dent-start" aria-haspopup="true" aria-expanded="false" aria-label="What is the Dent Trigger Distance?"><span data-icon="info"></span></button>
         </div>
         <p class="modal__text">
-          A separate gap: where the notch <b>starts to appear</b>. Contact,
-          z-order and force all begin at the Enter Point; the dent begins here
-          and is complete at the End Point. Set it closer than Enter for a tip
-          that touches first and only dents once it is further in.
+          A separate gap: where the seam <b>starts to open</b>. Contact,
+          z-order and force all begin at the Enter Point; the opening begins
+          here and is at its widest at the End Point. Set it closer than Enter
+          for a tip that touches first and only opens the seam once it is
+          further in.
         </p>
         <div class="bind-row">
           <label class="slider-field">
@@ -541,7 +544,7 @@
           <canvas id="pierceDepthCanvas" class="pierce-draw__canvas" width="480" height="300"></canvas>
           <p id="pierceDrawHint" class="px-pin__hint">
             Drag the three handles along the needle's path: <b>Enter</b> where
-            contact begins, <b>Dent</b> where the notch starts to appear, and
+            contact begins, <b>Dent</b> where the seam starts to open, and
             <b>End</b> where both stop growing.
           </p>
         </div>

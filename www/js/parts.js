@@ -234,29 +234,30 @@ export class Part {
     // THE DENT THIS REGION TAKES AT FULL DEPTH
     //
     // Two numbers rather than a second painted silhouette. How far the
-    // wedge's point pushes in, and how wide its base is across the surface
-    // -- both in this layer's own texels, both scaled by the live depth
-    // fraction, so the dent grows from nothing and shrinks back the same
-    // way. See dent.js for what is built from them and why drawing a whole
-    // second outline turned out not to work on real artwork.
+    // seam runs in from the surface (the marker's depth), and how far apart
+    // its two edges bow at the tip at full depth (the marker's width) --
+    // both in this layer's own texels. The live depth fraction scales the
+    // opening, so it grows from nothing and eases back the same way. See
+    // opening.js for what is built from them.
     //
-    // Zero on either means no dent, which is a finished, valid setup for a
-    // layer that registers contact without giving way.
+    // Zero on either means no opening, which is a finished, valid setup for
+    // a layer that registers contact without giving way.
     this.pierceDentDepth = DEFAULT_DENT_DEPTH;
     this.pierceDentWidth = DEFAULT_DENT_WIDTH;
 
-    // WHERE THE DENT IS, IN THIS LAYER'S OWN TEXELS
+    // WHERE THE SEAM IS, IN THIS LAYER'S OWN TEXELS
     //
-    // The base's centre and the direction the apex is driven in. Placed by
-    // the artist, by dragging the wedge onto the spot it should happen at,
-    // and FIXED once placed: the piercer's approach decides how much of the
-    // dent there is, never where it is.
+    // The base's centre and the direction the apex points -- the seam runs
+    // along that line. Placed by the artist, by dragging the triangle marker
+    // onto the spot it should happen at, and FIXED once placed: the
+    // piercer's approach decides how far it opens and where along the seam
+    // the bulge sits, never where the seam is.
     //
-    // Texel space, like every other mask on a Part, so the dent stays glued
+    // Texel space, like every other mask on a Part, so the seam stays glued
     // to the artwork through any amount of dragging, rigging or rotation
     // without a single coordinate conversion.
     //
-    // Unplaced, these are ignored and dent.js derives a starting position
+    // Unplaced, these are ignored and opening.js derives a starting position
     // from the pierceable paint instead -- so the handles always have
     // somewhere sensible to appear, and nothing is stored until a drag
     // stores it.

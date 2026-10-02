@@ -1,45 +1,40 @@
-// Pierce: displacing flesh, not cutting a hole in it.
+// Pierce: a seam in the pierced artwork that opens around the piercer.
 //
 // WHAT THIS IS NOT
 //
-// It never removes a pixel, never hides one, never makes one transparent
-// and never punches a hole. There is no second rendering pass and no
-// stencil. Every pixel the pierced layer had before contact is still
-// drawn afterwards, through the same rasterizer, in the same single pass.
-// The ONLY thing that changes is where some mesh vertices are, which is
-// exactly the same lever bone skinning already pulls -- so the effect is
-// completely reversible by moving the piercer back out, with nothing to
-// undo or restore.
+// It never removes a pixel and never punches a hole in the artwork. Every
+// pixel the pierced layer had before contact is still drawn afterwards,
+// through the same rasterizer; what changes is WHERE some of them are drawn.
+// The effect is completely reversible by moving the piercer back out, with
+// nothing to undo or restore.
 //
-// A WEDGE, NOT TWO DRAWN SHAPES
+// THE OPENING
 //
-// The local shape of a contact is a triangular dent: an apex driven in
-// along the approach, a base across the surface, both sized by the depth
-// fraction and by two numbers the artist sets. dent.js holds that
-// machinery, cuts the wedge out of the artwork as a per-texel mask, and
-// shoves the material marked Deformable outward around its faces.
+// The artist places a triangle marker on the pierced layer: its centreline
+// is a seam, its depth how far that seam runs in, its width how far apart
+// its edges bow at full depth. As the piercer comes in, the seam's two
+// edges wrap its tip -- parted by the tip's own outline where it is, closed
+// ahead of it -- and the material either side swells outward in one smooth
+// bulge round the tip's head, which travels and grows with the tip.
+// opening.js builds that shape; the renderer draws each side of the seam
+// through its own continuous displacement, so the seam parts and the
+// piercer's tip, drawn beneath, fills it.
 //
-// It replaced a blend between two hand-painted outlines, which worked on
-// primitives and could not work on organic artwork: two freehand drawings
-// of a curvy silhouette have no reliable point-to-point correspondence to
-// blend along, and every attempt to find one narrowed the failure without
-// removing it.
+// It replaces, in order: a blend between two hand-painted outlines (no
+// reliable correspondence between two freehand drawings of a curvy
+// silhouette), a per-vertex spring push (each vertex shoved on its own, on a
+// coarse mesh, read as a torn, jagged silhouette), a triangular notch cut out
+// of the artwork (nothing around the hole reacted), and two rigid halves
+// pivoting apart (flat plates with straight edges open as a hard V). See
+// opening.js for why its field can neither tear nor fold.
 //
-// This replaced a per-vertex spring push, and the reason is worth keeping.
-// That version gave each vertex its own radial shove away from the tip
-// with its own smoothstep falloff, so neighbours decided independently --
-// and on the coarse mesh an unbound layer gets, independent neighbours
-// read as a torn, jagged silhouette rather than a shape changing. It is a
-// technique mismatch rather than a tuning problem: nothing in it knew what
-// outline it was supposed to be producing, so no stiffness could have made
-// it produce one.
-//
-// Nothing about the dent is integrated over time. The wedge IS the depth,
-// so a given depth always looks the same, there is no state to fall out of
-// step with the drag, withdrawing runs the identical numbers backwards to
-// exactly zero, and the frame loop has nothing left to settle once the
-// piercer stops. The bones' own springs are untouched and go on reporting
-// for themselves.
+// Nothing about the opening is integrated over time. Its shape IS the
+// contact -- how deep, and where along the seam the tip is -- so a given
+// contact always looks the same, there is no state to fall out of step with
+// the drag, withdrawing runs the identical shapes backwards to exactly
+// closed, and the frame loop has nothing left to settle once the piercer
+// stops. The bones' own springs are untouched and go on reporting for
+// themselves.
 //
 // HOW DEEP IS DEEP
 //
@@ -91,15 +86,12 @@
 import { partsStore, PiercePhysics } from './parts.js';
 import { bonesStore } from './bones.js';
 import {
-  localToWorld, pinCarriageOffset, pinInfluence, generateMesh, defaultDensity,
+  localToWorld, pinCarriageOffset, generateMesh, defaultDensity, deformVertices,
 } from './mesh.js';
-import { pierceStateFor, peekPierceState } from './pierceState.js';
 import {
-  dentTriangleAt, dentCutMask, dentCutArea, writeBunch, resetDentCache,
-} from './dent.js';
+  openingFor, openingMarker, markerCoversArtwork, tipInTexels, resetOpeningCaches,
+} from './opening.js';
 import { haptic } from './haptics.js';
-
-export { pierceOffsets, resetPierceState } from './pierceState.js';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -285,9 +277,9 @@ const IN_PLAY_MARGIN = 4;
 export function resetPierceContainment() {
   containedTips.clear();
   motionState.clear();
-  dentCuts = new Map();
+  openings = new Map();
   placementIssues.clear();
-  resetDentCache();
+  resetOpeningCaches();
 }
 
 // The middle of a region, cached against the points array regionPoints
@@ -471,6 +463,16 @@ export function contactOf(piercer, pierced, transforms) {
   const tipMiddle = centroid(tip);
   const tipSpread = spread(tip, tipMiddle);
   const axis = pierceAxis(piercer, tipMiddle, transforms);
+  // Half the tip's width ACROSS its travel -- what an opening's edges rest
+  // against behind the tip. tipSpread is a radius in every direction, so on
+  // a long, narrow tip it would be the length, not the width.
+  let tipHalfWidth = 0;
+  if (axis) {
+    for (const p of tip) {
+      tipHalfWidth = Math.max(tipHalfWidth,
+        Math.abs((p.x - tipMiddle.x) * axis.y - (p.y - tipMiddle.y) * axis.x));
+    }
+  }
   const axial = axis ? axialGap(tip, flesh, tipMiddle, tipSpread, axis) : null;
   // Off the path, or a piercer with no readable direction: report the real
   // separation, but nothing engages off a measurement that has no sign.
@@ -637,10 +639,10 @@ export function contactOf(piercer, pierced, transforms) {
   if (!engaged || walls.length === 0) containedTips.delete(pair);
 
   return {
-    // How much of the configured dent is currently cut, 0 to 1. Measured on
-    // its OWN scale -- 0 at the Dent Trigger Distance, 1 at the End Point --
-    // which is the whole point of that setting: contact and the notch are
-    // two different events and the artist places them separately.
+    // How far open the seam is, 0 to 1. Measured on its OWN scale -- 0 at
+    // the Dent Trigger Distance, 1 at the End Point -- which is the whole
+    // point of that setting: contact and the opening are two different
+    // events and the artist places them separately.
     dentT: inPath
       ? Math.min(1, Math.max(0, (dentStartOf(piercer, enter, end) - gap) / dentSpan(piercer, enter, end)))
       : 0,
@@ -656,7 +658,11 @@ export function contactOf(piercer, pierced, transforms) {
     // their difference and so covers both constraints at once.
     rawTip: tipMiddle,
     tip: contained,
+    // The tip's own painted texels, where they were measured -- carried by
+    // (tip - rawTip) to where they are drawn. The opening wraps them.
+    tipPoints: tip,
     tipSpread,
+    tipHalfWidth,
     gap,
     inPath,
     depth,
@@ -728,7 +734,7 @@ function activeContacts(transforms) {
 // gives way or stay sunk a frame after it lets go.
 let occlusion = new Map(); // piercer id -> the pierced part to sink beneath
 let hold = new Map();      // piercer id -> how far to hold its artwork back
-let dentCuts = new Map();  // pierced id -> its draw mask, dent texels zeroed
+let openings = new Map(); // pierced id -> its opening this frame (opening.js)
 let occlusionStale = true;
 let readout = [];
 
@@ -893,28 +899,19 @@ function publishOcclusion(contacts) {
   hold = held;
   torqueChanged = publishForce(contacts);
 
-  // THE DENT, BOTH HALVES OF IT, IN ONE PASS
+  // THE OPENING, FROM THE SAME CONTACT
   //
   // Written here rather than in the frame loop so the renderer's own
   // re-measure keeps it current: a frame that re-measured the contact but
-  // drew last frame's shape would lag the drag by one frame at every
-  // depth.
-  //
-  // The wedge is built once and both halves come off the SAME object --
-  // the texels it takes out, and the push it gives the material around it.
-  // That is what stops them reading as two effects that happen to overlap:
-  // one depth fraction, one triangle, one rim.
-  const cuts = new Map();
+  // drew last frame's shape would lag the drag by one frame at every depth.
+  // One contact, one fraction, one tip position: the sinking of the tip and
+  // the parting of the seam cannot disagree about where the piercer is.
+  const opened = new Map();
   for (const { pierced, contact } of contacts) {
-    if (!pierced.mesh) continue;
-    const tri = dentFor(pierced, contact);
-    const entry = pierceStateFor(pierced.id, pierced.mesh.vertices.length);
-    const pins = pierced.pins.size > 0 ? pinInfluence(pierced.mesh, pierced) : null;
-    writeBunch(pierced.mesh, pierced, tri, entry.offsetX, entry.offsetY, pins);
-    const mask = dentCutMask(pierced, tri);
-    if (mask) cuts.set(pierced.id, mask);
+    const opening = openingOf(pierced, contact);
+    if (opening) opened.set(pierced.id, opening);
   }
-  dentCuts = cuts;
+  openings = opened;
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
   // second measurement that could disagree with it.
@@ -926,12 +923,13 @@ function publishOcclusion(contacts) {
     enter: contact ? contact.piercer.pierceEnter : null,
     end: contact ? contact.end : null,
     depth: contact ? contact.depth : 0,
-    // The dent fraction: 0 is no notch at all, 1 the full configured Depth
-    // and Width. Worth reporting because it IS the wedge's size rather than
-    // a scale factor on a push -- and because it runs on its own scale, so
-    // seeing it sit at 0 while the depth climbs is how the trigger distance
-    // proves it is doing something.
-    dent: contact ? contact.dentT : 0,
+    // How far open the seam is: 0 closed, 1 fully open (the swelling at the
+    // marker's whole Width). It runs on its own scale, so seeing it sit at 0
+    // while the depth climbs is how the trigger distance proves it is doing
+    // something.
+    open: contact ? contact.dentT : 0,
+    // Where along the seam the bulge is centred, in the layer's texels.
+    along: openings.has(pierced.id) ? openings.get(pierced.id).sTip : null,
     dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
     engaged: Boolean(contact && contact.engaged),
     sunk: Boolean(contact && next.has(contact.piercer.id)),
@@ -987,23 +985,18 @@ export function pierceHold() {
   return hold;
 }
 
-// The dent's cut, as a draw mask per pierced layer: one byte per source
-// texel, zero where the wedge has taken the artwork out. Empty for every
-// layer not currently dented, which is the normal case.
-export function pierceDentCuts() {
+// Each pierced layer's opening this frame, for the renderer: the seam, how
+// far open, and where along it the tip is. Empty for every layer whose seam
+// is closed, which is the normal case.
+export function pierceOpenings() {
   pierceOcclusion();
-  return dentCuts;
+  return openings;
 }
 
-// The wedge itself, for tests and for the on-canvas overlay -- the same
-// object the cut and the bunching are both built from.
-export function pierceDentOf(part) {
-  pierceOcclusion();
-  const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
-  for (const { pierced, contact } of activeContacts(transforms)) {
-    if (pierced.id === part.id) return dentFor(pierced, contact);
-  }
-  return null;
+// One layer's opening, for tests and the probe -- the same object the
+// renderer draws from.
+export function pierceOpeningOf(part) {
+  return pierceOpenings().get(part.id) || null;
 }
 
 // One byte per source texel, splitting a layer's artwork into its painted
@@ -1119,56 +1112,91 @@ export function pierceOverlayTexture(part) {
 // ---------------------------------------------------------------------------
 // The shape at this depth
 
-// A dent needs somewhere to be cut from. Everything else about the two
-// numbers is a legitimate setting -- a depth or a width of zero is simply
-// "this layer registers contact without giving way" -- so this reports the
-// one combination that is configured to do something and then cannot.
+// An opening needs a seam over some artwork, and a contact to drive it.
+// Everything else about the two numbers is a legitimate setting -- a depth
+// or a width of zero is simply "this layer registers contact without giving
+// way" -- so this reports the combinations that are configured to do
+// something and then cannot.
 const placementIssues = new Map();
 
 export function pierceDentIssue(part) {
   if (!part || !part.isPierced) return null;
   if (!(part.pierceDentDepth > 0) || !(part.pierceDentWidth > 0)) return null;
   if (part.pierceRegion.size === 0) {
-    return 'a dent is configured but no Pierceable area is painted, so there ' +
-      'is nothing for it to be cut out of';
+    return 'an opening is configured but no Pierceable area is painted, so ' +
+      'nothing can make contact to open it';
   }
-  // A placed dent can be dragged somewhere there is nothing to cut, which
-  // the numbers alone cannot show: Depth and Width would both read as set
-  // while the notch never appeared. Asked at FULL size, so a dent that only
-  // reaches the paint part-way through its growth still counts as working.
-  //
-  // Cached, because this is asked once per pierced layer per frame and the
-  // answer only moves when the paint or the placement does -- and the scan
-  // is the wedge's whole bounding box, which at the top of the size range
-  // is sixteen thousand texels.
-  const key = `${part.pierceRegionVersion || 0}:${part.pierceRegion.size}:` +
-    `${part.pierceDentDepth}:${part.pierceDentWidth}:${part.pierceDentPlaced}:` +
-    `${part.pierceDentX}:${part.pierceDentY}:${part.pierceDentAngle}`;
+  // A placed marker can be dragged somewhere there is no artwork, which the
+  // numbers alone cannot show: Depth and Width would both read as set while
+  // nothing ever opened. Cached, because this is asked once per pierced
+  // layer per frame and the answer only moves when the marker does.
+  const key = `${part.pierceDentDepth}:${part.pierceDentWidth}:${part.pierceDentPlaced}:` +
+    `${part.pierceDentX}:${part.pierceDentY}:${part.pierceDentAngle}:` +
+    `${part.pierceRegionVersion || 0}:${part.naturalWidth}x${part.naturalHeight}`;
   let cached = placementIssues.get(part.id);
   if (!cached || cached.key !== key) {
-    cached = { key, empty: dentCutArea(part, dentTriangleAt(part, 1)) === 0 };
+    cached = { key, empty: !markerCoversArtwork(part) };
     placementIssues.set(part.id, cached);
   }
   if (cached.empty) {
-    return 'the dent is placed where this layer has no Pierceable pixels, so ' +
-      'there is nothing for it to cut — drag it onto the painted area';
+    return 'the opening is placed where this layer has no artwork, so there ' +
+      'is no seam to part — drag the marker onto the artwork';
   }
   return null;
 }
 
-// What the dent currently is, for this layer, given its contact. Rebuilt
-// every frame from the live dent fraction -- the wedge IS that fraction, so
-// there is no state to hold and nothing to get out of step.
+// This frame's opening for a layer, given its contact. Rebuilt every frame
+// from the live contact -- the opening IS that contact -- so there is no
+// state to hold and nothing to get out of step.
 //
-// Gated on the DENT's fraction, not on contact.engaged. Enter and the
-// trigger distance are separate settings and have to be able to disagree:
-// a trigger set further out than Enter has to be able to start the notch
-// before contact, and one set closer has to be able to hold it back after
-// contact has begun. Reading engagement here would quietly overrule both.
-function dentFor(pierced, contact) {
-  if (!contact || !(contact.dentT > 0)) return null;
+// Gated on the opening's own fraction, not on contact.engaged. Enter and
+// the trigger distance are separate settings and have to be able to
+// disagree: a trigger set further out than Enter has to be able to start
+// the opening before contact, and one set closer has to be able to hold it
+// back after contact has begun.
+function openingOf(pierced, contact) {
+  if (!contact || !(contact.dentT > 0) || !pierced.mesh) return null;
   if (pierceDentIssue(pierced) !== null) return null;
-  return dentTriangleAt(pierced, contact.dentT);
+  const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
+  // Where the tip is, in the pierced layer's own texels -- through the
+  // layer as it is posed right now, so a moved or bent layer opens where
+  // the tip actually is on it.
+  const positions = deformVertices(pierced.mesh, pierced, transforms || {});
+  const shift = { x: contact.tip.x - contact.rawTip.x, y: contact.tip.y - contact.rawTip.y };
+  // The LEADING point is what goes into the seam first, so it is where the
+  // swelling is centred -- not the tip's middle, which on a long painted
+  // tip sits well behind it. The front edge's midpoint, as containment
+  // uses, so a flat tip and a pointed one mean the same thing.
+  const leading = leadingPoint(contact.tipPoints, contact.axis, contact.tip, shift);
+  const carried = tipInTexels(pierced, positions, leading, contact.tipPoints, shift);
+  if (!carried) return null;
+  return openingFor(pierced, {
+    fraction: contact.dentT,
+    tip: carried.tip,
+    tipHalfWidth: contact.tipHalfWidth / Math.max(1e-6, pierced.scale || 1),
+    tipPoints: carried.points,
+  });
+}
+
+function leadingPoint(points, axis, fallback, shift) {
+  if (!axis || !points || points.length === 0) return fallback;
+  let best = -Infinity;
+  for (const p of points) best = Math.max(best, p.x * axis.x + p.y * axis.y);
+  let x = 0;
+  let y = 0;
+  let n = 0;
+  for (const p of points) {
+    if (best - (p.x * axis.x + p.y * axis.y) > 0.5) continue;
+    x += p.x;
+    y += p.y;
+    n++;
+  }
+  return { x: x / n + shift.x, y: y / n + shift.y };
+}
+
+// The marker at full size, for the probe and tests.
+export function pierceMarkerOf(part) {
+  return openingMarker(part);
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,14 +1237,9 @@ export function stepPierce() {
 // at Enter, caps at End and returns to zero is the whole verification.
 export function pierceDebug() {
   const transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms();
+  const now = pierceOpenings();
   return activeContacts(transforms).map(({ pierced, contact }) => {
-    const entry = peekPierceState(pierced.id);
-    let worst = 0;
-    if (entry) {
-      for (let i = 0; i < entry.count; i++) {
-        worst = Math.max(worst, Math.hypot(entry.offsetX[i], entry.offsetY[i]));
-      }
-    }
+    const opening = now.get(pierced.id);
     return {
       pierced: pierced.name,
       // The measured separation is reported whether or not it is close
@@ -1228,7 +1251,8 @@ export function pierceDebug() {
       depth: contact ? contact.depth : 0,
       t: contact ? contact.t : 0,
       dentT: contact ? contact.dentT : 0,
-      maxOffset: worst,
+      // How far each edge of the seam stands off its centreline at the tip.
+      maxOffset: opening ? opening.peak : 0,
     };
   });
 }

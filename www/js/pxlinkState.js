@@ -1,6 +1,6 @@
 // The PxLink solver's hook into deformation.
 //
-// A leaf module, like pierceState.js, and for the same reason: mesh.js has
+// A leaf module, for one reason: mesh.js has
 // to ask "how is this layer corrected by its links this frame?" from inside
 // deformVertices, and the solver that answers it (pxlink.js) itself imports
 // mesh.js to deform the linked layers. Routing the question through a leaf

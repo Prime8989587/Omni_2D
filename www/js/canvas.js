@@ -24,9 +24,9 @@ import { outlineRing } from './contour.js';
 import { getSetting, shouldRenderFrame } from './settings.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture,
-  pierceDentCuts, pierceReadout, pierceHold,
+  pierceOpenings, pierceReadout, pierceHold,
 } from './pierce.js';
-import { pierceOffsets } from './pierceState.js';
+import { openingGeometry, openingSides } from './opening.js';
 import { effectiveDpr } from './pixelScale.js';
 import { debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
 import { PixelPen } from './pixelDraw.js';
@@ -141,17 +141,17 @@ function partGeometry(part, boneTransforms) {
 
   if (part.mesh && part.mesh.isBound && boneTransforms) return through(boneTransforms);
 
-  // A pierceable layer deforms whether or not it was ever bound to a
-  // skeleton -- the solver gives it a mesh precisely so it can -- so it is
-  // drawn through that mesh too. Skinning with no transforms is the
-  // identity (every weight finds no bone and the vertex falls back to its
-  // rest position), which leaves the pierce offsets as the only thing
-  // moving it. An EMPTY set rather than the null above, because a layer
-  // bound to bones that have since been deleted still reports isBound and
-  // would otherwise read a bone out of null. One SHARED empty set, so every
-  // layer this frame is asked about the same transforms and a PxLink solve
-  // covering several of them runs once.
-  if (part.mesh && pierceOffsets(part)) return through(boneTransforms || NO_BONES);
+  // A pierced layer opens whether or not it was ever bound to a skeleton --
+  // the solver gives it a mesh precisely so it can -- so it is drawn
+  // through that mesh too, and its opening is built on that geometry.
+  // Skinning with no transforms is the identity (every weight finds no bone
+  // and the vertex falls back to its rest position), so it is drawn exactly
+  // as its quad would be. An EMPTY set rather than the null above, because a
+  // layer bound to bones that have since been deleted still reports isBound
+  // and would otherwise read a bone out of null. One SHARED empty set, so
+  // every layer this frame is asked about the same transforms and a PxLink
+  // solve covering several of them runs once.
+  if (part.mesh && part.isPierced) return through(boneTransforms || NO_BONES);
   // A layer in a PxLink is drawn through a mesh, bound or not, even in a scene
   // with no bones left: its link is a local weld, and a weld needs vertices
   // to bend. An unbound one gets an unbound mesh, whose skinning is the
@@ -173,25 +173,33 @@ export function layerDrawGeometry(part, boneTransforms) {
 
 const NO_BONES = Object.freeze({});
 
-// The draw order, with any piercer currently inside a layer split in two:
-// its painted tip moved down beneath that layer, the rest of it left where
-// it was. Both halves keep the SAME geometry and differ only by which
-// texels they are allowed to touch, so the split cannot open a seam.
+// The draw order. Two things can draw one layer as two masked entries --
+// the SAME layer, each entry allowed to touch only its own texels, so every
+// texel is still drawn exactly once:
+//
+//   * a pierced layer whose seam is open: one entry per side of the seam,
+//     each through its own continuous displacement (opening.js), so the
+//     seam parts between them and nowhere else;
+//   * a piercer in contact: its painted tip moved down beneath the layer it
+//     is in, the rest of it left where it was, both with the SAME geometry,
+//     so that split cannot open a seam.
 function buildDrawList(boneTransforms) {
-  // The notch. A dented layer draws through a mask with the wedge's texels
-  // zeroed, which is the whole of the cut: the artwork is unchanged and the
-  // silhouette closes in around a triangle that is simply not drawn. It
-  // rides the same mask slot as the piercer split below, so the two can
-  // never disagree about how a masked entry is drawn -- and the two never
-  // land on the same layer, since a part cannot be both roles at once.
-  const cuts = pierceDentCuts();
-  const entries = partsStore.partsBottomFirst
-    .filter((part) => part.visible)
-    .map((part) => {
-      const geometry = partGeometry(part, boneTransforms);
-      const mask = cuts.get(part.id) || null;
-      return { part, geometry, mask, bounds: boundsOf(geometry.positions) };
-    });
+  const openings = pierceOpenings();
+  const entries = [];
+  for (const part of partsStore.partsBottomFirst) {
+    if (!part.visible) continue;
+    const geometry = partGeometry(part, boneTransforms);
+    const opening = part.mesh ? openings.get(part.id) : null;
+    if (opening) {
+      const sides = openingSides(part, opening);
+      for (const [side, mask] of [[-1, sides.a], [1, sides.b]]) {
+        const pass = openingGeometry(part, geometry, opening, side);
+        entries.push({ part, geometry: pass, mask, bounds: boundsOf(pass.positions) });
+      }
+      continue;
+    }
+    entries.push({ part, geometry, mask: null, bounds: boundsOf(geometry.positions) });
+  }
 
   for (const [piercerId, pierced] of pierceOcclusion()) {
     const from = entries.findIndex((entry) => entry.part.id === piercerId);
@@ -324,26 +332,33 @@ function contourRing(drawList) {
     return area ? outlineRing(sceneImage.data, sceneWidth, sceneHeight, { thickness, bounds: area }) : [];
   }
 
+  // EVERY entry the layer is drawn as: an open seam is two (one per side),
+  // a piercer in contact is two (its tip, and the rest), and outlining only
+  // the first would outline half the layer.
   const selected = partsStore.selected;
-  const entry = selected ? drawList.find((e) => e.part === selected) : null;
-  const area = entry && entry.bounds ? clampBounds(entry.bounds) : null;
+  const own = selected ? drawList.filter((e) => e.part === selected && e.bounds) : [];
+  let bounds = null;
+  for (const entry of own) bounds = unionBounds(bounds, entry.bounds);
+  const area = bounds ? clampBounds(bounds) : null;
   if (!area) return [];
   const scratch = contourScratchBuffer();
   const used = contourScratchUsed;
   if (used) clearRegion(scratch, sceneWidth, sceneHeight, used.x0, used.y0, used.x1, used.y1);
   clearRegion(scratch, sceneWidth, sceneHeight, area.x0, area.y0, area.x1, area.y1);
   contourScratchUsed = area;
-  const { positions, uvs, triangles } = entry.geometry;
-  for (let i = 0; i < triangles.length; i += 3) {
-    const a = triangles[i];
-    const b = triangles[i + 1];
-    const c = triangles[i + 2];
-    rasterizeTriangle(
-      scratch, sceneWidth, sceneHeight,
-      selected.pixels, selected.naturalWidth, selected.naturalHeight,
-      positions[a], positions[b], positions[c],
-      uvs[a], uvs[b], uvs[c], entry.mask
-    );
+  for (const entry of own) {
+    const { positions, uvs, triangles } = entry.geometry;
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = triangles[i];
+      const b = triangles[i + 1];
+      const c = triangles[i + 2];
+      rasterizeTriangle(
+        scratch, sceneWidth, sceneHeight,
+        selected.pixels, selected.naturalWidth, selected.naturalHeight,
+        positions[a], positions[b], positions[c],
+        uvs[a], uvs[b], uvs[c], entry.mask
+      );
+    }
   }
   return outlineRing(scratch, sceneWidth, sceneHeight, { thickness, bounds: area });
 }
@@ -852,11 +867,12 @@ function drawPierceProbe() {
     // line then because a press with nothing visibly reacting is a lever
     // problem rather than a missing force, and this is what says so.
     const press = r.press > 0.005 ? `  press ${(r.press * 100).toFixed(0)}%` : '';
-    // The dent's trigger is printed next to its percentage because the two
-    // together are the only way to tell "not denting yet" from "not working".
+    // The opening's trigger is printed next to its percentage because the
+    // two together are the only way to tell "not opening yet" from "not
+    // working".
     return `${r.piercer} -> ${r.pierced}\n` +
-      `  gap ${gap}  enter ${r.enter}  end ${r.end}  dent at ${r.dentStart}\n` +
-      `  depth ${r.depth.toFixed(1)}  dent ${(r.dent * 100).toFixed(0)}%${press}  ` +
+      `  gap ${gap}  enter ${r.enter}  end ${r.end}  opens at ${r.dentStart}\n` +
+      `  depth ${r.depth.toFixed(1)}  open ${(r.open * 100).toFixed(0)}%${press}  ` +
       `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';

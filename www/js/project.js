@@ -218,9 +218,9 @@ function deserializePart(data) {
   // window's sliders and the painter's Dent handles are then the whole setup.
   part.pierceDentDepth = clampDentSize(data.pierceDentDepth ?? DEFAULT_DENT_DEPTH);
   part.pierceDentWidth = clampDentSize(data.pierceDentWidth ?? DEFAULT_DENT_WIDTH);
-  // Where the dent sits. Absent in a project saved while the wedge still
+  // Where the seam sits. Absent in a project saved while the wedge still
   // followed the piercer's live contact point (or while there was a V), and
-  // left unplaced for one: there is no stored spot to recover, so dent.js
+  // left unplaced for one: there is no stored spot to recover, so opening.js
   // derives a starting position from the pierceable paint and the first drag
   // makes it real.
   part.pierceDentPlaced = Boolean(data.pierceDentPlaced);

@@ -33,6 +33,19 @@
 
 export const RELEASES = [
   {
+    version: '2.5.2',
+    date: '2026-10-02',
+    title: 'Pierce: a soft opening that follows the tip',
+    kind: 'patch',
+    notes: [
+      'A pierced layer no longer has a notch cut out of it. Its seam opens round the piercer: the edges wrap the tip as it goes in, and the material either side swells outward in one smooth, rounded curve — most round the tip’s head, easing back toward the surface, reaching further as it goes deeper.',
+      'The swelling follows the tip down the seam in step with the depth, from a small flare at the surface when the tip arrives to a full bulb at the End point, and backs out through exactly the same shapes.',
+      'Nothing tears: whatever shows between the parted edges is the piercer itself, never the background, at every depth, on a straight or a slanted seam.',
+      'Pins hold against it: Px Pin’d artwork stays put and the material bends round it. A painted Deformable region now limits the opening to itself; with none painted, the whole layer gives.',
+      'The triangle in the painter’s Dent target is the placement marker: its centre line is the seam, its depth how far the seam runs in, its width how far apart the edges bow at full depth. The Dent Trigger Distance still sets when the seam starts to open.',
+    ],
+  },
+  {
     version: '2.5.1',
     date: '2026-09-27',
     title: 'The dent returns, and every tool stays on the art',
