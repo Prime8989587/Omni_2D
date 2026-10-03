@@ -410,10 +410,11 @@ const TOPICS = {
       'turned by it; its own angle is set separately. Useful for something ' +
       'that should move with the body without inheriting its rotation.\n\n' +
       'Whichever you pick, it only ever runs one way: a child follows its ' +
-      'parent, never the reverse. Moving a bone never moves its parent ' +
-      'bone, nor a pixel of its parent’s artwork -- where two layers ' +
-      'meet at a joint, the skin bends on the child’s side, so the ' +
-      'parent stays exactly where it is.',
+      'parent, never the reverse. And a bone moves only the layer it ' +
+      'controls (Controls layer) -- all of that layer, turning about the ' +
+      'bone’s own head, and no other layer. Moving the forearm never ' +
+      'moves a pixel of the upper arm, and the upper arm never holds any ' +
+      'of the forearm back.',
   },
   'weight-tool': {
     title: 'Weight tool',

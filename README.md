@@ -8079,6 +8079,76 @@ With the seams one-sided, the child's first two bands bend instead. That is
 where the motion is, and the parent's artwork is now left exactly where it
 was. The "Follows parent" help says so.
 
+## 2.7.2: a bone moves the layer it controls, all of it, and nothing else
+
+Reported, with a screenshot from Free Move, Drag moves = LForearm: the
+forearm no longer stays on the shoulder. The elbow end stays where it was
+while the rest swings away, with no PxLink or Px Pin holding it. The rule
+the user stated is the rule the app now follows: *a bone attached to a layer
+moves only that layer*. That means all of the layer, and no other layer.
+
+### What held the elbow: 2.7.1's fix, and the seam under it
+
+The joint seam that 2.7.1 made one-sided is the cause. A seam handed every
+layer near a joint to *both* bones of that joint, to keep separately drawn
+layers from parting there. 2.7.1 stopped it reaching into the parent's layer,
+but on the child's side the Forearm layer was now 100% *upper arm* at the
+joint line, easing to its own bone only 16 px further in. Its elbow end
+stayed on the shoulder while the forearm swung, which is the screenshot.
+
+The same seam had already held back art drawn *past* the joint, like an
+elbow cap over the end of the upper arm, since 2.7.0.
+
+Reproduced in the real app with real touches. The Forearm layer had a
+rounded cap reaching past the elbow, and was swung 70° in Free Move:
+
+| Build | Worst lag of the Forearm layer behind its own bone | UpperArm moved |
+| --- | --- | --- |
+| 2.7.0 | 10.29 px (the cap) | 2.87 px |
+| 2.7.1 | 10.55 px (the cap and the elbow end) | 0 |
+| **2.7.2** | **0.58 px**, the half-pixel snap and nothing else | **0** |
+
+![Free Move, forearm swung 70 degrees: the cap and elbow stay on the shoulder in 2.7.0 and 2.7.1; the whole forearm turns with its bone in 2.7.2](docs/images/forearm-follows-its-bone.png)
+
+### Weight rule 3
+
+- **A layer with a Controls layer bone moves with that bone alone.** No seam
+  reaches into it from a neighbouring layer's bone. It turns rigidly about
+  its own bone's head, the elbow point it hangs from, so it stays on that
+  point. The parent's layer is never touched, so 2.7.1's fix holds.
+- **Between the bones that do drive a layer, nothing changes from 2.7.0.**
+  That covers a layer with several Controls bones, or every bone when none
+  is chosen: weight blends by distance with the bone a vertex sits on, its
+  parent and its children. Seams stay where both bones drive the layer, so
+  layers left to auto-weighting still stay joined where they meet. 2.7.1's
+  "parent only" blend inside a layer is undone with the rest of rule 2.
+- **Old rigs are updated as they open.** That covers both 2.7.0's rigs (no
+  stamp) and 2.7.1's (stamped 2). A vertex whose weights are still exactly
+  what its old rule gives takes rule 3. Anything painted by hand is kept
+  exactly, and each mesh is stamped `weightRule: 3`.
+
+The honest trade-off: two layers that each have their own bone now turn
+rigidly about the joint. Where they are cut flat, edge to edge, the outside
+of a hard bend can show a notch. Art drawn with an overlap, like the elbow
+cap in the user's rig and in the sheet above, covers it. One layer
+controlled by both bones bends smoothly instead.
+
+### Verified
+
+| | Result |
+| --- | --- |
+| Free Move forearm swing, cap drawn past the joint (real touches) | 2.7.2 lag 0.58 px (snap) vs 10.29 / 10.55 px; UpperArm 0 |
+| A rig saved by 2.7.0, opened in 2.7.2 | stamped `none` → 3; lag 0.58 px, UpperArm 0, the same as a fresh bind |
+| A rig saved by 2.7.1, opened in 2.7.2 | stamped 2 → 3; the same |
+| 2.7.1's six parent checks (forearm, hand, shin, neck, elbow head, Free Move) | every parent layer 0.000 px, with no links and with default-anchor PxLinks |
+| `tests/seams.mjs` (46 checks) | each controlled layer 100% its own bone, no cross-layer seams; Forearm and Hand follow their bones exactly over −150…150°; an elbow cap swings with its forearm (rules 1 and 2 held it back 14.4 / 15.0 px: the test is not blind); auto-weighted layers keep their seams with no gap at any angle; 2.7.0 and 2.7.1 rigs migrate, with painted weights kept |
+| All 16 Node suites | pass |
+
+A *meet halfway* PxLink between a forearm and its upper arm does pull the
+upper arm now, 9 px for a 40° swing. That is the link's own setting: both
+layers give way. Before, the forearm's held-back elbow end left it nothing
+to pull. A default (parent holds still) link leaves the upper arm at 0.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

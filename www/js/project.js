@@ -252,9 +252,10 @@ function deserializePart(data) {
   // Point and holding there.
   part.pierceWedgeLock = clampWedgeLock(data.pierceWedgeLock ?? DEFAULT_WEDGE_LOCK);
   part.mesh = refitLegacyMesh(part, deserializeMesh(data.mesh));
-  // Bound before a child was barred from moving its parent's skin: the
-  // weights auto-weighting made are brought up to the current rule, and
-  // anything painted by hand is kept exactly (mesh.js, migrateWeightRule).
+  // Bound by an older weight rule: the weights auto-weighting made are
+  // brought up to the current one -- a layer moved only by the bones that
+  // control it -- and anything painted by hand is kept exactly (mesh.js,
+  // migrateWeightRule).
   migrateWeightRule(part.mesh, part);
   return part;
 }

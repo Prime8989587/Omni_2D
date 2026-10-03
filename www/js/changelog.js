@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.7.2',
+    date: '2026-10-03',
+    title: 'A bone moves the layer it controls, all of it, and nothing else',
+    kind: 'patch',
+    notes: [
+      'Free Move, Drag moves = Forearm: the whole Forearm layer swings with its bone again, turning about the elbow point it hangs from. Since 2.7.1 its elbow end stayed behind on the upper arm while the rest swung away, and art drawn past the joint (an elbow cap) was held back even before that.',
+      'The rule is now simply: a layer with a Controls layer bone moves with that bone alone. No neighbouring bone reaches into it at a joint, so the upper arm never moves with the forearm either (2.7.1\u2019s fix holds).',
+      'Layers left without a Controls layer bone, and one layer controlled by several bones, blend between those bones as in 2.7.0, and still stay joined where they meet.',
+      'Rigs saved by 2.7.1 or earlier are brought up to date as they open; weights you painted by hand are kept exactly.',
+    ],
+  },
+  {
     version: '2.7.1',
     date: '2026-10-03',
     title: 'Moving a child bone never moves its parent\u2019s artwork',
