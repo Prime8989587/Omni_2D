@@ -33,6 +33,20 @@
 
 export const RELEASES = [
   {
+    version: '2.6.0',
+    date: '2026-10-03',
+    title: 'PxLink Brush mode, several links on one layer without tearing, Combine Layers',
+    kind: 'minor',
+    notes: [
+      'PxLink has a Brush mode beside Point: paint along where two layers overlap and every painted pixel becomes a pair held together — a strap, a string or an outline held along its whole length, not at one spot. 1×1 to 10×10, Paint and Erase, saved sizes; it only paints where every chosen layer has artwork.',
+      'A layer linked to several different layers no longer tears when one of them is moved far away. All its links are solved together as ONE smooth field: it turns and stretches between them, never folds, and lands every link point exactly. A string between two hands and the body now follows a hand round smoothly.',
+      'Layers that PxLink bends are drawn through a finer mesh, so long thin artwork curves smoothly instead of bending in straight pieces.',
+      'Combine Layers: select two layers in Scene Parts, then Combine — they are flattened into one new layer exactly as they look stacked, named by you, and the two originals are removed (Undo brings them back). The new layer starts clean: no bones, weights, pins, PxLinks or Pierce role.',
+      'Pierce: artwork on a separate layer linked onto a pierced layer — an outline of the very edge that opens — now opens with it, instead of staying shut over the opening. The opening’s own shape, its Lock Point, depth and retraction are exactly as before.',
+      'Half see-through artwork no longer shows a faint darker line along its triangles’ edges (those pixels were blended twice).',
+    ],
+  },
+  {
     version: '2.5.4',
     date: '2026-10-02',
     title: 'PxLink: a layer linked on at several points stays put; Px Pin shows the real scene',

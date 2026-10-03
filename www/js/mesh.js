@@ -1126,17 +1126,20 @@ export function deformVertices(mesh, part, boneTransforms) {
 // A PxLink correction applied to a layer's deformed vertices. A layer
 // ATTACHED to another (tied to it at two or more points) is first moved as a
 // whole -- one rotation and translation, every vertex -- onto the layer it is
-// attached to. Then each weld: a smooth local displacement that lands the
-// layer's link point EXACTLY on the link's meeting point, fading to nothing
-// a few cells away. Nothing else moves: a layer that is only jointed has
-// every vertex outside its welds exactly where its own bones, springs, pins
-// and pierce put them. (pxlink.js applies the same function when it reads a
+// attached to. A layer held at two or more points then takes its field: one
+// smooth as-rigid-as-possible bend through all its link points, a vertex at
+// a time. Then each weld: a smooth local displacement that lands the layer's
+// link point EXACTLY on the link's meeting point, fading to nothing a few
+// cells away. Nothing else moves: a layer that is only jointed has every
+// vertex outside its welds exactly where its own bones, springs, pins and
+// pierce put them. (pxlink.js applies the same function when it reads a
 // link point back.)
 export function applyLinkWelds(mesh, positions, link) {
   const own = link && link.mesh === mesh;
   const rigid = own ? link.rigid : null;
+  const offsets = own ? link.offsets || null : null;
   const welds = own ? link.welds : [];
-  if (!rigid && welds.length === 0) return positions;
+  if (!rigid && !offsets && welds.length === 0) return positions;
   return positions.map((p, i) => {
     let { x, y } = p;
     if (rigid) {
@@ -1144,6 +1147,10 @@ export function applyLinkWelds(mesh, positions, link) {
       const dy = y - rigid.ay;
       x = rigid.bx + rigid.cos * dx - rigid.sin * dy;
       y = rigid.by + rigid.sin * dx + rigid.cos * dy;
+    }
+    if (offsets) {
+      x += offsets[i].x;
+      y += offsets[i].y;
     }
     const vertex = mesh.vertices[i];
     for (const weld of welds) {

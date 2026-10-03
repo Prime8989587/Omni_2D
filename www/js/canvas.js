@@ -16,18 +16,18 @@ import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
 import { deformVerticesSnapped, partQuad } from './mesh.js';
-import { isLinked, ensureLinkMesh, linkPositions } from './pxlink.js';
-import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
+import { isLinked, ensureLinkMesh, linkPositions, linkOffsetAt, moveRigid, pxlinkStore, expandLinks } from './pxlink.js';
+import { pxlinkMove, applyPxLinkMove, pxlinkCorrection, locateTexel, landTexel } from './pxlinkState.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
-import { rasterizeTriangle, clearRegion } from './raster.js';
+import { rasterizeTriangle, clearRegion, layerClaims } from './raster.js';
 import { outlineRing } from './contour.js';
 import { getSetting, shouldRenderFrame } from './settings.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture,
   pierceOpenings, pierceReadout, pierceHold,
 } from './pierce.js';
-import { openingGeometry, openingSides } from './opening.js';
+import { openingGeometry, openingSides, refinedMesh } from './opening.js';
 import { effectiveDpr } from './pixelScale.js';
 import { debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
 import { PixelPen } from './pixelDraw.js';
@@ -123,7 +123,7 @@ function unionBounds(a, b) {
 // they carry, and the triangle list. Bound parts come from the mesh and
 // the skinning; unbound ones are a plain quad. Either way the positions
 // are already whole grid coordinates.
-function partGeometry(part, boneTransforms) {
+function partGeometry(part, boneTransforms, { refine = true } = {}) {
   // A piercer driven past its End Point is drawn short of where the drag
   // put it, by exactly the distance the depth refused to go (see
   // pierceHold). The whole sprite moves together -- a needle is rigid, and
@@ -134,11 +134,11 @@ function partGeometry(part, boneTransforms) {
     ? positions.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
     : positions);
 
-  const through = (transforms) => ({
+  const through = (transforms) => (refine && linkBent(part, transforms, place)) || {
     positions: place(deformVerticesSnapped(part.mesh, part, transforms)),
     uvs: part.mesh.vertices,
     triangles: part.mesh.triangles,
-  });
+  };
 
   if (part.mesh && part.mesh.isBound && boneTransforms) return through(boneTransforms);
 
@@ -166,13 +166,123 @@ function partGeometry(part, boneTransforms) {
   return back ? { ...quad, positions: place(quad.positions) } : quad;
 }
 
+// A layer that PxLink BENDS and carries -- held at several points that do
+// not agree on one rigid motion: a string between two hands and the body,
+// with no bones of its own -- is drawn
+// through the same finer copy of its mesh a pierce opening uses (about a
+// texel and a half apart), with the link's field worked out at every one of
+// its points rather than only at the layer's own vertices. A long, thin
+// layer then curves smoothly from one link point to the next, and a painted
+// brush region stays on what it was painted on, instead of the few large
+// triangles of its own mesh bending in straight pieces. Null for everything
+// else, which is drawn exactly as before.
+function linkBent(part, transforms, place) {
+  const link = pxlinkCorrection(part, transforms);
+  // Only a layer the links CARRY (no bones of its own, or attached): one
+  // with bones keeps its own mesh, where its link points land exactly.
+  if (!link || !link.field || link.field.reach || link.mesh !== part.mesh || !link.uncorrected) return null;
+  const refined = refinedMesh(part.mesh, part);
+  const P = link.uncorrected;
+  const positions = refined.blends.map(({ ids, ws }, i) => {
+    let p = { x: 0, y: 0 };
+    for (let c = 0; c < ids.length; c++) { p.x += P[ids[c]].x * ws[c]; p.y += P[ids[c]].y * ws[c]; }
+    if (link.rigid) p = moveRigid(link.rigid, p);
+    const { u, v } = refined.uvs[i];
+    const d = linkOffsetAt(link, u, v, p.x, p.y);
+    // Not rounded to whole pixels: points a pixel and a half apart, each
+    // rounded its own way, would pinch triangles to slivers -- the pierce
+    // opening's finer drawing is left unrounded for the same reason. (Only
+    // a layer the links are bending is drawn this way; at rest, and on any
+    // layer they only move rigidly, nothing changes.)
+    return { x: p.x + d.x, y: p.y + d.y };
+  });
+  return { positions: place(positions), uvs: refined.uvs, triangles: refined.triangles };
+}
+
+// A LAYER LINKED ONTO A PIERCED LAYER OPENS WITH IT
+//
+// A pierce's opening is drawn on top of the pierced layer's shape, and
+// nothing that measures a layer sees it -- PxLink included. So artwork on a
+// separate layer linked onto the pierced one -- an outline of the very edge
+// that opens, a strap across it -- used to stay shut while the flesh beneath
+// it parted: the drawn boundary of the opening was then the overlay's, still
+// closed. Now, at draw time, each such layer's link pairs with the opened
+// layer are moved exactly as the opening moves the pierced layer's own
+// texels there (the drawn pass, minus the shape before the opening), and
+// the layer follows them smoothly round each pair: an inverse-distance blend
+// of their moves, so it never pushes harder than the opening does, faded
+// out a few texels past them. Drawing only, exactly like the opening itself.
+const FOLLOW_PAIRS = 64;
+
+function followOpening(part, geometry, opened) {
+  if (opened.size === 0 || !isLinked(part)) return geometry;
+  const moves = [];
+  for (const [pid, open] of opened) {
+    const pairs = expandLinks(pxlinkStore.links.filter((link) => link.members.some((m) => m.partId === part.id)
+      && link.members.some((m) => m.partId === pid)));
+    const step = Math.max(1, Math.ceil(pairs.length / FOLLOW_PAIRS));
+    for (let k = 0; k < pairs.length; k += step) {
+      const mine = pairs[k].members.find((m) => m.partId === part.id);
+      const theirs = pairs[k].members.find((m) => m.partId === pid);
+      const { opening: o, coarse, passes } = open;
+      const t = (theirs.u - o.base.x) * o.across.x + (theirs.v - o.base.y) * o.across.y;
+      const pass = passes.get(t < 0 ? -1 : 1);
+      const before = locateTexel(coarse.uvs, coarse.triangles, theirs.u, theirs.v);
+      const after = locateTexel(pass.uvs, pass.triangles, theirs.u, theirs.v);
+      if (!before || !after) continue;
+      const a = landTexel(coarse.positions, before);
+      const b = landTexel(pass.positions, after);
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      if (Math.hypot(dx, dy) < 1e-6) continue;
+      moves.push({ u: mine.u, v: mine.v, dx, dy, reach: Math.max(4, 2.5 * Math.hypot(dx, dy) / Math.max(1e-6, part.scale || 1)) });
+    }
+  }
+  if (moves.length === 0) return geometry;
+  // Through the finer copy of the layer's mesh, so a thin outline bends in
+  // a smooth curve, not a few straight pieces.
+  if (part.mesh && geometry.uvs === part.mesh.vertices) {
+    const refined = refinedMesh(part.mesh, part);
+    const P = geometry.positions;
+    geometry = {
+      positions: refined.blends.map(({ ids, ws }) => {
+        let x = 0; let y = 0;
+        for (let c = 0; c < ids.length; c++) { x += P[ids[c]].x * ws[c]; y += P[ids[c]].y * ws[c]; }
+        return { x, y };
+      }),
+      uvs: refined.uvs,
+      triangles: refined.triangles,
+    };
+  }
+  const smooth = (x) => { const k = Math.max(0, Math.min(1, x)); return k * k * (3 - 2 * k); };
+  const positions = geometry.positions.map((p, i) => {
+    const { u, v } = geometry.uvs[i];
+    let W = 0; let x = 0; let y = 0; let keep = 1;
+    for (const m of moves) {
+      const d = Math.hypot(u - m.u, v - m.v);
+      if (d >= m.reach) continue;
+      const w = 1 / (d * d + 0.25);
+      W += w; x += w * m.dx; y += w * m.dy;
+      keep *= 1 - smooth(1 - d / m.reach);
+    }
+    if (W === 0) return p;
+    const k = 1 - keep;
+    return { x: p.x + (x / W) * k, y: p.y + (y / W) * k };
+  });
+  return { ...geometry, positions };
+}
+
 // The same geometry, for a tool window that draws layers exactly as the scene
 // does (the PxLink window) -- one function, so the two can never disagree.
-export function layerDrawGeometry(part, boneTransforms) {
-  return partGeometry(part, boneTransforms);
+//
+// { refine: false } gives the layer's own mesh even where PxLink bends it
+// (the geometry a pierce opening is built on).
+export function layerDrawGeometry(part, boneTransforms, options) {
+  return partGeometry(part, boneTransforms, options);
 }
 
 const NO_BONES = Object.freeze({});
+const sceneClaims = layerClaims();
 
 // The draw order. Two things can draw one layer as two masked entries --
 // the SAME layer, each entry allowed to touch only its own texels, so every
@@ -187,18 +297,28 @@ const NO_BONES = Object.freeze({});
 function buildDrawList(boneTransforms) {
   const openings = pierceOpenings();
   const entries = [];
-  for (const part of partsStore.partsBottomFirst) {
-    if (!part.visible) continue;
-    const geometry = partGeometry(part, boneTransforms);
+  const opened = new Map(); // partId -> { coarse, passes }, for followOpening
+  const visible = partsStore.partsBottomFirst.filter((part) => part.visible);
+  for (const part of visible) {
     const opening = part.mesh ? openings.get(part.id) : null;
-    if (opening) {
-      const sides = openingSides(part, opening);
+    if (!opening) continue;
+    // An opening is built on the layer's own mesh, so a layer being opened
+    // is never handed the finer link drawing.
+    const coarse = partGeometry(part, boneTransforms, { refine: false });
+    const passes = new Map([-1, 1].map((side) => [side, openingGeometry(part, coarse, opening, side)]));
+    opened.set(part.id, { part, opening, coarse, passes });
+  }
+  for (const part of visible) {
+    const open = opened.get(part.id);
+    if (open) {
+      const sides = openingSides(part, open.opening);
       for (const [side, mask] of [[-1, sides.a], [1, sides.b]]) {
-        const pass = openingGeometry(part, geometry, opening, side);
+        const pass = open.passes.get(side);
         entries.push({ part, geometry: pass, mask, bounds: boundsOf(pass.positions) });
       }
       continue;
     }
+    const geometry = followOpening(part, partGeometry(part, boneTransforms), opened);
     entries.push({ part, geometry, mask: null, bounds: boundsOf(geometry.positions) });
   }
 
@@ -246,6 +366,8 @@ function renderScene(boneTransforms) {
     // pixel the artwork did not.
     const tint = overlay && part.hasPierceRole ? pierceOverlayTexture(part) : null;
     for (const source of tint ? [part.pixels, tint] : [part.pixels]) {
+      // Each layer (each pass) decides each pixel once -- see layerClaims.
+      const claims = sceneClaims.begin(sceneWidth, sceneHeight);
       for (let i = 0; i < triangles.length; i += 3) {
         const a = triangles[i];
         const b = triangles[i + 1];
@@ -254,7 +376,7 @@ function renderScene(boneTransforms) {
           buffer, sceneWidth, sceneHeight,
           source, part.naturalWidth, part.naturalHeight,
           positions[a], positions[b], positions[c],
-          uvs[a], uvs[b], uvs[c], mask
+          uvs[a], uvs[b], uvs[c], mask, claims
         );
       }
     }
@@ -839,6 +961,13 @@ function drawPxLinkMarkers(pen, boneTransforms) {
   const links = linkPositions(boneTransforms || NO_BONES);
   for (const link of links) {
     if (link.members.length === 0) continue;
+    // A brush link: a dot on every painted pair, as well as the ring at its
+    // middle, so the region it holds is visible.
+    for (const pair of link.pairs || []) {
+      if (!pair.length) continue;
+      const q = toDevice(pair[0].x, pair[0].y);
+      pen.square(q.x, q.y, 0, PXLINK_RING);
+    }
     const at = link.members[0];
     const p = toDevice(at.x, at.y);
     pen.ring(p.x, p.y, 7 * dpr + pen.u, '#000000');

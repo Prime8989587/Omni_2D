@@ -39,7 +39,7 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { layerDrawGeometry } from './canvas.js';
-import { rasterizeTriangle } from './raster.js';
+import { rasterizeTriangle, layerClaims } from './raster.js';
 import { texelNearest } from './artwork.js';
 import { locateTexel, landTexel } from './pxlinkState.js';
 import { getSetting } from './settings.js';
@@ -137,10 +137,11 @@ function captureLayer(part) {
   const height = Math.max(1, Math.ceil(y1) - y0);
   const buffer = new Uint8ClampedArray(width * height * 4);
   const local = positions.map((p) => ({ x: p.x - x0, y: p.y - y0 }));
+  const claim = layerClaims().begin(width, height);
   for (let t = 0; t < triangles.length; t += 3) {
     const a = triangles[t]; const b = triangles[t + 1]; const c = triangles[t + 2];
     rasterizeTriangle(buffer, width, height, part.pixels, part.naturalWidth, part.naturalHeight,
-      local[a], local[b], local[c], uvs[a], uvs[b], uvs[c]);
+      local[a], local[b], local[c], uvs[a], uvs[b], uvs[c], null, claim);
   }
   const canvas = document.createElement('canvas');
   canvas.width = width;

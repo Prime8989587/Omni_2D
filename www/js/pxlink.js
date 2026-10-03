@@ -108,6 +108,59 @@ function freshId() {
   return id;
 }
 
+// A link's members, checked: distinct layers, finite texel points, and for a
+// brush link the same number of points on every member (at least one). Null
+// when fewer than two layers survive.
+function cleanMembers(members, kind) {
+  const brush = kind === 'brush';
+  const seen = new Set();
+  const clean = [];
+  for (const member of members || []) {
+    if (!member || seen.has(member.partId)) continue;
+    if (brush) {
+      if (!Array.isArray(member.points) || member.points.length === 0) continue;
+      if (!member.points.every((p) => p && Number.isFinite(p.u) && Number.isFinite(p.v))) continue;
+      const points = member.points.map((p) => ({ u: p.u, v: p.v }));
+      const u = points.reduce((sum, p) => sum + p.u, 0) / points.length;
+      const v = points.reduce((sum, p) => sum + p.v, 0) / points.length;
+      seen.add(member.partId);
+      clean.push({ partId: member.partId, u, v, points });
+      continue;
+    }
+    if (!Number.isFinite(member.u) || !Number.isFinite(member.v)) continue;
+    seen.add(member.partId);
+    clean.push({ partId: member.partId, u: member.u, v: member.v });
+  }
+  if (clean.length < 2) return null;
+  if (brush && clean.some((m) => m.points.length !== clean[0].points.length)) return null;
+  return clean;
+}
+
+// The solver's view of the links: a brush link is one point pair per painted
+// spot, every pair a link of its own with the brush link's anchor. So all the
+// rules for points -- who gives way, two or more to the same layer attach --
+// hold for a painted region exactly as for points placed one by one.
+export function expandLinks(links) {
+  const out = [];
+  for (const link of links) {
+    if (link.kind !== 'brush' || !link.members.every((m) => m.points)) {
+      out.push(link);
+      continue;
+    }
+    const n = Math.min(...link.members.map((m) => m.points.length));
+    for (let i = 0; i < n; i++) {
+      out.push({
+        id: `${link.id}#${i}`,
+        parent: link.id,
+        brush: true,
+        anchorId: link.anchorId,
+        members: link.members.map((m) => ({ partId: m.partId, u: m.points[i].u, v: m.points[i].v })),
+      });
+    }
+  }
+  return out;
+}
+
 class PxLinkStore {
   constructor() {
     this._links = [];
@@ -140,18 +193,19 @@ class PxLinkStore {
   // members: [{ partId, u, v }] -- the link point in each layer's own texel
   // space. At least two distinct layers. anchorId: a member's partId, or
   // null for a shared link.
-  add({ members, anchorId = null }) {
-    const seen = new Set();
-    const clean = [];
-    for (const member of members || []) {
-      if (!member || seen.has(member.partId)) continue;
-      if (!Number.isFinite(member.u) || !Number.isFinite(member.v)) continue;
-      seen.add(member.partId);
-      clean.push({ partId: member.partId, u: member.u, v: member.v });
-    }
-    if (clean.length < 2) return null;
+  //
+  // A BRUSH link (kind 'brush') is a painted region instead of one point:
+  // every member carries `points`, the same number on each, the i-th point of
+  // every member being one pair -- the texels of each layer that were drawn
+  // on the same spot when it was painted. Its u, v are the region's middle,
+  // for the list and the markers.
+  add({ members, anchorId = null, kind = 'point' }) {
+    const clean = cleanMembers(members, kind);
+    if (!clean) return null;
+    const seen = new Set(clean.map((m) => m.partId));
     const link = {
       id: freshId(),
+      kind: clean[0].points ? 'brush' : 'point',
       members: clean,
       anchorId: seen.has(anchorId) ? anchorId : null,
     };
@@ -209,6 +263,7 @@ class PxLinkStore {
         if (member.partId !== partId) continue;
         member.u += du;
         member.v += dv;
+        if (member.points) member.points = member.points.map((p) => ({ u: p.u + du, v: p.v + dv }));
         changed = true;
       }
     }
@@ -218,8 +273,11 @@ class PxLinkStore {
   replaceAll(links) {
     this._links = (links || []).map((link) => ({
       id: link.id,
+      kind: link.kind === 'brush' ? 'brush' : 'point',
       anchorId: link.anchorId ?? null,
-      members: link.members.map((m) => ({ partId: m.partId, u: m.u, v: m.v })),
+      members: link.members.map((m) => (m.points
+        ? { partId: m.partId, u: m.u, v: m.v, points: m.points.map((p) => ({ u: p.u, v: p.v })) }
+        : { partId: m.partId, u: m.u, v: m.v })),
     }));
     for (const link of this._links) {
       const n = Number(String(link.id).replace(/^pxlink_/, ''));
@@ -236,11 +294,18 @@ export const pxlinkStore = new PxLinkStore();
 // and undo all carry links without any of them knowing.
 
 export function serializePxLinks() {
-  return pxlinkStore.links.map((link) => ({
-    id: link.id,
-    anchorId: link.anchorId,
-    members: link.members.map((m) => ({ partId: m.partId, u: m.u, v: m.v })),
-  }));
+  return pxlinkStore.links.map((link) => (link.kind === 'brush'
+    ? {
+      id: link.id,
+      kind: 'brush',
+      anchorId: link.anchorId,
+      members: link.members.map((m) => ({ partId: m.partId, u: m.u, v: m.v, points: m.points.map((p) => [p.u, p.v]) })),
+    }
+    : {
+      id: link.id,
+      anchorId: link.anchorId,
+      members: link.members.map((m) => ({ partId: m.partId, u: m.u, v: m.v })),
+    }));
 }
 
 // Projects saved before the tool was named PxLink carry their links under its
@@ -258,12 +323,16 @@ export function deserializePxLinks(data, partIds) {
   const links = [];
   for (const raw of Array.isArray(data) ? data : []) {
     if (!raw || typeof raw.id !== 'string' || !Array.isArray(raw.members)) continue;
+    const brush = raw.kind === 'brush';
     const members = raw.members.filter((m) => m && typeof m.partId === 'string' && live.has(m.partId)
-      && Number.isFinite(m.u) && Number.isFinite(m.v));
-    const unique = [...new Map(members.map((m) => [m.partId, m])).values()];
-    if (unique.length < 2) continue;
+      && Number.isFinite(m.u) && Number.isFinite(m.v))
+      .map((m) => (brush
+        ? { partId: m.partId, points: (Array.isArray(m.points) ? m.points : []).map((p) => (Array.isArray(p) ? { u: p[0], v: p[1] } : p)) }
+        : { partId: m.partId, u: m.u, v: m.v }));
+    const unique = cleanMembers([...new Map(members.map((m) => [m.partId, m])).values()], brush ? 'brush' : 'point');
+    if (!unique) continue;
     const anchorId = unique.some((m) => m.partId === raw.anchorId) ? raw.anchorId : null;
-    links.push({ id: raw.id.replace(LEGACY_ID, 'pxlink_'), anchorId, members: unique });
+    links.push({ id: raw.id.replace(LEGACY_ID, 'pxlink_'), kind: brush ? 'brush' : 'point', anchorId, members: unique });
   }
   return links;
 }
@@ -417,6 +486,235 @@ function solveWelds(mesh, sites) {
   return welds;
 }
 
+// SEVERAL LINKS ON ONE LAYER
+//
+// A layer held at two or more points -- a string between two hands and the
+// body, a strap painted on with the brush, a hand at the wrist and the
+// knuckle -- is corrected by ONE field, solved from all of its link points
+// together. (It used to be a weld per point, their sizes solved jointly, and
+// each weld only able to TRANSLATE: a point hauled far away, beside one that
+// had to stay, needed a tiny weld pushing the other way almost as hard as
+// the big one pulled, across a few texels -- the mesh folded and tore.)
+//
+// The field is an as-rigid-as-possible blend (moving least squares, rigid):
+// every vertex takes the one rotation and translation that best carries the
+// link points onto their meeting points, each point weighted by how close it
+// is to that vertex, in the layer's own texels. Next to a point the layer
+// goes exactly where that point goes; between points it bends and stretches
+// smoothly from one to the next, turning rather than shearing; where all
+// the points agree on one rigid motion, every vertex gets exactly that
+// motion, so an attached layer is never bent at all.
+//
+// A layer with bones of its own keeps them away from its links: the field
+// fades to nothing over at least WELD_SPREAD times the furthest it moves
+// anything, as a single weld does. A layer the links carry -- attached, or
+// with no bones of its own -- takes the field everywhere.
+//
+// Then, as before, every placed link point is landed EXACTLY (its triangle's
+// three corners interpolate the field only approximately): small residual
+// welds, a hold's width each. Painted brush points, dozens side by side, are
+// not landed one by one -- the field already goes through them.
+
+// The most link points one field is solved from: all placed points, and an
+// even spread of a brush region's points beyond that (they are side by side,
+// and past a few dozen each adds little the others have not said).
+const FIELD_POINTS = 160;
+// A weight never runs to infinity on a vertex sitting on a link point.
+const FIELD_SOFTEN = 0.04;
+// How far, in texels, a painted pair's last correction reaches round it.
+const PAINT_REACH = 3;
+
+function smooth01(x) {
+  const t = Math.max(0, Math.min(1, x));
+  return t * t * (3 - 2 * t);
+}
+
+// The link points the field is built from: every placed point, then brush
+// points by farthest-first sampling in texels, up to FIELD_POINTS.
+function fieldPoints(sites) {
+  const placed = sites.filter((site) => !site.brush);
+  const painted = sites.filter((site) => site.brush);
+  if (placed.length + painted.length <= FIELD_POINTS) return sites;
+  const chosen = placed.slice();
+  const room = Math.max(1, FIELD_POINTS - chosen.length);
+  const dist = painted.map(() => Infinity);
+  const near = (a, b) => Math.hypot(a.member.u - b.member.u, a.member.v - b.member.v);
+  for (const c of chosen) painted.forEach((p, i) => { dist[i] = Math.min(dist[i], near(p, c)); });
+  let next = chosen.length ? dist.indexOf(Math.max(...dist)) : 0;
+  for (let k = 0; k < room && next >= 0; k++) {
+    const pick = painted[next];
+    chosen.push(pick);
+    let best = -1;
+    let far = -1;
+    painted.forEach((p, i) => {
+      dist[i] = Math.min(dist[i], near(p, pick));
+      if (dist[i] > far) { far = dist[i]; best = i; }
+    });
+    next = far > 0 ? best : -1;
+  }
+  return chosen;
+}
+
+// The field's own description -- its points and how far it reaches -- so it
+// can be read at ANY texel, not only at the mesh's vertices: the renderer
+// draws a layer the field bends through a finer copy of its mesh (canvas.js),
+// so a long thin layer curves smoothly instead of bending in a few straight
+// pieces.
+function fieldMove(field, u, v, x, y, w) {
+  const { ctrl } = field;
+  const n = ctrl.length;
+  let W = 0; let px = 0; let py = 0; let qx = 0; let qy = 0;
+  for (let j = 0; j < n; j++) {
+    const c = ctrl[j];
+    const du = u - c.u; const dv = v - c.v;
+    const wj = 1 / (du * du + dv * dv + FIELD_SOFTEN);
+    w[j] = wj; W += wj;
+    px += wj * c.px; py += wj * c.py; qx += wj * c.qx; qy += wj * c.qy;
+  }
+  px /= W; py /= W; qx /= W; qy /= W;
+  let cc = 0; let ss = 0;
+  for (let j = 0; j < n; j++) {
+    const c = ctrl[j];
+    const ax = c.px - px; const ay = c.py - py;
+    const bx = c.qx - qx; const by = c.qy - qy;
+    cc += w[j] * (ax * bx + ay * by);
+    ss += w[j] * (ax * by - ay * bx);
+  }
+  const norm = Math.hypot(cc, ss);
+  const cos = norm > 1e-12 ? cc / norm : 1;
+  const sin = norm > 1e-12 ? ss / norm : 0;
+  const rx = x - px; const ry = y - py;
+  return { x: qx + cos * rx - sin * ry - x, y: qy + sin * rx + cos * ry - y };
+}
+
+// The field's push at a texel, `d` being the full field there: all of it on
+// a layer the links carry; else faded out round the link points and never
+// more than a weld of that reach could push (reach / WELD_SPREAD), so the
+// fade can never fold the layer however the field turns.
+function fieldPush(field, u, v, d) {
+  if (!field.reach) return d;
+  let keep = 1;
+  let cap = 0;
+  for (let j = 0; j < field.ctrl.length; j++) {
+    const c = field.ctrl[j];
+    const f = smooth01(1 - Math.hypot(u - c.u, v - c.v) / field.reach[j]);
+    if (f <= 0) continue;
+    keep *= 1 - f;
+    cap = Math.max(cap, field.reach[j] / WELD_SPREAD);
+  }
+  const k = 1 - keep;
+  if (k <= 0) return { x: 0, y: 0 };
+  const size = Math.hypot(d.x, d.y);
+  const limit = size > cap ? cap / size : 1;
+  return { x: d.x * k * limit, y: d.y * k * limit };
+}
+
+// The whole correction past the rigid move, at any texel (u, v) of a layer
+// whose own position there (after the rigid move) is (x, y), for the finer
+// drawing of a layer the field bends: the field, and what it leaves over at
+// every link point, carried to the texels round it. (The residual welds are
+// for the layer's own coarse vertices, which can sit far from a link point;
+// at the finer drawing's spacing the leftovers alone land every point.)
+export function linkOffsetAt(link, u, v, x, y) {
+  let dx = 0;
+  let dy = 0;
+  if (link.field) {
+    const w = link.field.scratch;
+    const d = fieldPush(link.field, u, v, fieldMove(link.field, u, v, x, y, w));
+    const r = paintedRest(link.field, u, v);
+    return { x: d.x + r.x, y: d.y + r.y };
+  }
+  for (const weld of link.welds || []) {
+    const k = smooth01(1 - Math.hypot(u - weld.u, v - weld.v) / weld.radius);
+    if (k <= 0) continue;
+    dx += weld.dx * k;
+    dy += weld.dy * k;
+  }
+  return { x: dx, y: dy };
+}
+
+// What the field leaves over at the link points (a brush link's painted
+// pairs among them), carried to every texel within PAINT_REACH of them: an
+// inverse-distance blend of those leftovers (so it never pushes harder than
+// the largest of them, and meets each one exactly at its own point), faded
+// out past them. Dozens of pairs side by side are no harder for it than one
+// -- there is nothing to solve, so nothing to blow up.
+function paintedRest(field, u, v) {
+  const rest = field.rest;
+  if (!rest || rest.length === 0) return { x: 0, y: 0 };
+  let W = 0; let x = 0; let y = 0; let keep = 1;
+  for (const r of rest) {
+    const du = u - r.u; const dv = v - r.v;
+    const d2 = du * du + dv * dv;
+    if (d2 >= PAINT_REACH * PAINT_REACH) continue;
+    const w = 1 / (d2 + 1e-6);
+    W += w; x += w * r.dx; y += w * r.dy;
+    keep *= 1 - smooth01(1 - Math.sqrt(d2) / PAINT_REACH);
+  }
+  if (W === 0) return { x: 0, y: 0 };
+  const k = 1 - keep;
+  return { x: (x / W) * k, y: (y / W) * k };
+}
+
+
+function solveField(part, g, sites, carried) {
+  const scale = Math.max(1e-6, part.scale || 1);
+  if (sites.every((site) => Math.hypot(site.dx, site.dy) < 1e-12)) return { offsets: null, welds: [], field: null };
+  const ctrl = fieldPoints(sites).map((site) => ({
+    u: site.member.u, v: site.member.v,
+    px: site.at.x, py: site.at.y,
+    qx: site.at.x + site.dx, qy: site.at.y + site.dy,
+    hold: site.hold,
+  }));
+  const field = { ctrl, reach: null, scratch: new Float64Array(ctrl.length) };
+  const V = g.mesh.vertices;
+  const P = g.positions;
+  const moves = V.map((t, i) => fieldMove(field, t.u, t.v, P[i].x, P[i].y, field.scratch));
+  if (!carried) {
+    // A layer with bones of its own keeps them away from its links: the
+    // field only round each link point, over exactly the reach a weld there
+    // would have -- WELD_SPREAD times that point's own travel -- so a pull
+    // at the wrist bends the wrist and leaves the fingertips on their own
+    // bone and spring, as a single weld always did.
+    field.reach = ctrl.map((c) => Math.max(c.hold, (WELD_SPREAD * Math.hypot(c.qx - c.px, c.qy - c.py)) / scale));
+  }
+  const shaped = moves.map((d, i) => fieldPush(field, V[i].u, V[i].v, d));
+  // What the field leaves over at each link point, measured at the point
+  // itself and carried to the texels round it (paintedRest): a brush link's
+  // painted pairs land on what they were painted on, and the finer drawing
+  // lands every placed point too.
+  field.rest = sites.map((site) => {
+    const { u, v } = site.member;
+    const d = fieldPush(field, u, v, fieldMove(field, u, v, site.at.x, site.at.y, field.scratch));
+    return { u, v, dx: site.dx - d.x, dy: site.dy - d.y };
+  });
+  const offsets = shaped.map((d, i) => {
+    const r = paintedRest(field, V[i].u, V[i].v);
+    return { x: d.x + r.x, y: d.y + r.y };
+  });
+  // The layer's own vertices can sit far from a placed point -- its
+  // triangle's corners are what land it -- so on them each placed point is
+  // landed EXACTLY by a residual weld, as before.
+  const moved = P.map((p, i) => ({ x: p.x + offsets[i].x, y: p.y + offsets[i].y }));
+  const residual = [];
+  let worst = 0;
+  for (const site of sites) {
+    if (site.brush) continue;
+    const landed = landTexel(moved, site.located);
+    const dx = site.at.x + site.dx - landed.x;
+    const dy = site.at.y + site.dy - landed.y;
+    worst = Math.max(worst, Math.hypot(dx, dy));
+    // Sized like any weld: at least WELD_SPREAD times what it closes, so it
+    // bends the layer's own mesh rather than folding it.
+    residual.push({ member: site.member, located: site.located, radius: Math.max(site.hold, (WELD_SPREAD * Math.hypot(dx, dy)) / scale), dx, dy });
+  }
+  let welds = solveWelds(g.mesh, residual);
+  // Two placed points almost on top of each other can ask the residual welds
+  // for far more than they are closing; the field alone is then the answer.
+  if (welds.some((weld) => Math.hypot(weld.dx, weld.dy) > 4 * worst + 0.5)) welds = [];
+  return { offsets, welds, field };
+}
+
 // The default anchor for a new link: the member on the bone nearest the
 // skeleton's root. A layer with no bone at all never anchors while one with a
 // bone is present -- unbound artwork is what gets brought to the rig, not the
@@ -472,9 +770,9 @@ function solveFor(transforms) {
 export function solve(transforms) {
   const result = new Map();
   const partsById = new Map(partsStore.parts.map((part) => [part.id, part]));
-  const links = pxlinkStore.links
+  const links = expandLinks(pxlinkStore.links
     .map((link) => ({ ...link, members: link.members.filter((m) => partsById.has(m.partId)) }))
-    .filter((link) => link.members.length >= 2);
+    .filter((link) => link.members.length >= 2));
   if (links.length === 0) return result;
 
   // 1. Each linked layer exactly as its own systems put it this frame, and
@@ -541,9 +839,20 @@ export function solve(transforms) {
       // times the distance, in this layer's texels -- so it bends, never
       // folds.
       const reach = Math.max(hold, WELD_SPREAD * Math.hypot(dx, dy) / scale);
-      sites.push({ member, located, radius: reach, hold, dx, dy });
+      sites.push({ member, located, at, radius: reach, hold, dx, dy, brush: Boolean(link.brush) });
     });
-    const welds = solveWelds(g.mesh, sites);
+    // One link point: its weld, exactly as it always was. Two or more: ONE
+    // field for the whole layer, solved from all of them together (see
+    // SEVERAL LINKS ON ONE LAYER).
+    let welds;
+    let offsets = null;
+    let field = null;
+    if (sites.length <= 1) {
+      welds = solveWelds(g.mesh, sites);
+    } else {
+      const carried = rigid.has(id) || !(part.mesh && part.mesh.isBound);
+      ({ offsets, welds, field } = solveField(part, g, sites, carried));
+    }
     // The vertices left unsnapped, so the members' link points land on the
     // very same spot rather than each rounded its own way: the fixed
     // neighbourhood of each point, NOT the whole reach. The wider bend steps
@@ -551,7 +860,7 @@ export function solve(transforms) {
     // shrank with the gap would flip vertices between rounded and unrounded
     // mid-drag, a half-pixel shimmer at its edge.
     const nearLink = g.mesh.vertices.map((t) => sites.some(({ member: a, hold }) => Math.hypot(t.u - a.u, t.v - a.v) <= hold));
-    result.set(id, { rigid: rigid.get(id) || null, welds, nearLink, uncorrected: uncorrected.get(id), mesh: g.mesh });
+    result.set(id, { rigid: rigid.get(id) || null, offsets, field, welds, nearLink, uncorrected: uncorrected.get(id), mesh: g.mesh });
   }
   return result;
 }
@@ -584,13 +893,15 @@ function pairGroups(links) {
 // The members of `link` that are ATTACHED (tied to the same other layer by
 // this link and at least one more) -- for the PxLink window's list.
 export function attachedMembers(link, links = pxlinkStore.links) {
-  const groups = pairGroups(links);
-  const k = links.indexOf(link);
+  const expanded = expandLinks(links);
+  const groups = pairGroups(expanded);
+  const mine = new Set();
+  expanded.forEach((entry, k) => { if (entry === link || entry.parent === link.id) mine.add(k); });
   const out = [];
   for (const member of link.members) {
     if (member.partId === link.anchorId) continue;
     for (const [key, group] of groups) {
-      if (key.startsWith(`${member.partId}|`) && group.length >= 2 && group.some((e) => e.k === k)) {
+      if (key.startsWith(`${member.partId}|`) && group.length >= 2 && group.some((e) => mine.has(e.k))) {
         out.push(member.partId);
         break;
       }
@@ -721,23 +1032,37 @@ export function isLinked(part) {
 
 // Where every link point is right now, per member, after the solve -- for the
 // tool's markers and for tests that want to know the constraint held.
+// A brush link also reports `pairs`: every painted pair, each member where it
+// is drawn, in the same shape as `members`.
 export function linkPositions(transforms = currentTransforms()) {
   const out = [];
   const partsById = new Map(partsStore.parts.map((part) => [part.id, part]));
   const solved = solveFor(transforms);
-  for (const link of pxlinkStore.links) {
-    const members = [];
-    for (const member of link.members) {
-      const part = partsById.get(member.partId);
-      if (!part) continue;
+  const drawn = new Map(); // partId -> { g, positions }, once per layer
+  const drawnOf = (part) => {
+    if (!drawn.has(part.id)) {
       const g = layerGeometry(part, transforms);
-      const located = locate(g, member.u, member.v);
-      if (!located) continue;
-      // Where the point is drawn: its triangle's corners with the welds on.
-      const p = landing({ positions: welded(g, solved.get(part.id) || null) }, located);
-      members.push({ partId: part.id, x: p.x, y: p.y });
+      drawn.set(part.id, { g, positions: welded(g, solved.get(part.id) || null) });
     }
-    out.push({ id: link.id, anchorId: link.anchorId, members });
+    return drawn.get(part.id);
+  };
+  // Where a point is drawn: its triangle's corners with the correction on.
+  const at = (member) => {
+    const part = partsById.get(member.partId);
+    if (!part) return null;
+    const { g, positions } = drawnOf(part);
+    const located = locate(g, member.u, member.v);
+    if (!located) return null;
+    const p = landing({ positions }, located);
+    return { partId: part.id, x: p.x, y: p.y };
+  };
+  for (const link of pxlinkStore.links) {
+    const members = link.members.map(at).filter(Boolean);
+    const entry = { id: link.id, anchorId: link.anchorId, kind: link.kind || 'point', members };
+    if (link.kind === 'brush') {
+      entry.pairs = expandLinks([link]).map((pair) => pair.members.map(at).filter(Boolean));
+    }
+    out.push(entry);
   }
   return out;
 }

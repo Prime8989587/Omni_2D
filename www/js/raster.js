@@ -37,10 +37,18 @@ function edge(ax, ay, bx, by, px, py) {
 // entered while the rest of it stays on top. Splitting by texel rather
 // than by geometry keeps both passes on the SAME vertices, so the two
 // halves cannot drift apart or leave a seam between them.
+//
+// `claims`, when given (see layerClaims), makes the triangles of one layer
+// decide each pixel EXACTLY once. A pixel centre lying exactly on the edge
+// two triangles share counts as inside both -- harmless for an opaque
+// texel, which is simply written twice, but a part-transparent one would be
+// blended over itself, and every see-through layer would carry a faint
+// darker line along its triangles' shared edges. With claims, the first
+// triangle of the layer to draw a pixel keeps it.
 export function rasterizeTriangle(
   target, targetWidth, targetHeight,
   source, sourceWidth, sourceHeight,
-  p0, p1, p2, uv0, uv1, uv2, mask = null
+  p0, p1, p2, uv0, uv1, uv2, mask = null, claims = null
 ) {
   let area = edge(p0.x, p0.y, p1.x, p1.y, p2.x, p2.y);
   if (area === 0) return; // degenerate: no pixels have their centre inside
@@ -87,6 +95,11 @@ export function rasterizeTriangle(
       if (alpha === 0) continue;
 
       const t = (y * targetWidth + x) * 4;
+      if (claims) {
+        const at = y * targetWidth + x;
+        if (claims.stamps[at] === claims.id) continue;
+        claims.stamps[at] = claims.id;
+      }
       if (alpha === 255) {
         target[t] = source[s];
         target[t + 1] = source[s + 1];
@@ -122,4 +135,21 @@ export function clearRegion(target, targetWidth, targetHeight, x0, y0, x1, y1) {
     const offset = (y * targetWidth + startX) * 4;
     target.fill(0, offset, offset + rowBytes);
   }
+}
+
+// One layer's claim on the pixels it draws: begin() before each layer (or
+// each pass of one), and hand the result to every rasterizeTriangle call for
+// it. A stamp per target pixel, compared against a per-layer id, so nothing
+// has to be cleared between layers.
+export function layerClaims() {
+  let stamps = null;
+  let id = 0;
+  return {
+    begin(width, height) {
+      if (!stamps || stamps.length !== width * height) { stamps = new Uint32Array(width * height); id = 0; }
+      id += 1;
+      if (id >= 0xffffffff) { stamps.fill(0); id = 1; }
+      return { stamps, id };
+    },
+  };
 }

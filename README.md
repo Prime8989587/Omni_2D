@@ -6500,6 +6500,12 @@ all twelve browser suites pass.
 > other is thrown. One link, or links to different layers, are still joints,
 > exactly as described below. See "2.5.4: a layer linked on at several points
 > stays put; Px Pin shows the real scene" near the end of this file.
+>
+> **Since 2.6.0**, a link can also be *painted* (Brush mode: a pair per
+> painted pixel). A layer linked to several different layers is bent by one
+> smooth field solved from all its links together, rather than by welds that
+> could tear it. See "2.6.0: PxLink Brush mode, several links on one layer,
+> Combine Layers, and the wedge's outline".
 
 A hand and an arm imported as two separate layers share no mesh, no
 weights and no vertices. Give each its own bone and nothing in the rig
@@ -7622,6 +7628,165 @@ three links:
 The PxLink verification (c1–c7) gives the same numbers as 2.5.3. The PxLink
 browser suite, the twelve browser regression suites and `npm test` all
 pass.
+
+## 2.6.0: PxLink Brush mode, several links on one layer, Combine Layers, and the wedge's outline
+
+A minor release: two new tools (Brush mode in PxLink, Combine Layers) and
+two fixes.
+
+### 1. A layer linked to several layers tore when one of them moved far
+
+**The report.** A string runs from each hand to a small piece on the
+body and is held by PxLinks to the left hand, the right hand and the body.
+Dragging the character, or one hand, tore it into jagged spikes, a dotted
+line and gaps.
+
+**Reproduced** in the real app with real touches (`b12/string/string.mjs`).
+The string is linked to the left hand, the right hand and the body, and the
+left hand is hauled round through Free Move. The line to the *right* hand,
+which never moved, broke into dots, and the piece sheared in half.
+
+**Why.** The links on one layer *were* solved together: one small linear
+system sized every weld so each link point landed exactly. But each weld
+could only translate, and each weld's reach was set by how far its *own*
+point had to go.
+- The hauled hand's point got a huge weld reaching over most of the string.
+- The points that had to stay put got tiny ones.
+- To cancel the big pull at those points, the solve gave the tiny welds an
+  almost equal push the other way, across a few texels.
+
+A huge push over a few texels folds the mesh: the tear. Moving one point
+far while holding another still takes a *turn and a stretch*, which
+translations alone cannot express.
+
+**The fix** (`pxlink.js`, *SEVERAL LINKS ON ONE LAYER*). A layer held at two
+or more points is now corrected by **one field solved from all of its link
+points together**. It is an as-rigid-as-possible blend (moving least
+squares, rigid): every vertex takes the one rotation and translation that
+best carries the link points onto their meeting points, each point weighted
+by its closeness in the layer's own texels.
+- **Behaviour.** Next to a point, the layer goes exactly where that point
+  goes. Between points it turns and stretches smoothly instead of shearing.
+  Where all the points agree on one rigid motion, every vertex gets exactly
+  that motion, so a 2.5.4 attachment is never bent.
+- **Exact landing.** Whatever the field leaves over at each link point is
+  closed by a short-range, overshoot-free blend. Placed points are also
+  landed exactly on the layer's own mesh by small welds, now sized by what
+  they close, so they cannot fold it.
+- **Layers with their own bones.** The field fades out round each link
+  point, sized point by point, so a pull at one corner leaves the rest of
+  the layer on its own bones, as before.
+- **Unchanged.** One link point is still exactly the old weld.
+
+A layer the links bend is **drawn through a finer copy of its mesh** (the
+one a Pierce opening uses, about 1.5 texels apart), with the field worked
+out at every point of it. A long, thin string then curves instead of
+bending in a few straight pieces.
+
+![Before (2.5.4): the hauled hand tears the string -- the line to the other hand breaks into dots and the piece shears. After: it follows the hand round smoothly, whole](docs/images/pxlink-several-links.png)
+
+### 2. PxLink Brush mode
+
+A point holds two layers together at **one** spot. That is right for a
+hinge, but it cannot keep something long and thin in shape along its whole
+length. The PxLink window now has **Link by: Point | Brush**:
+- **Paint** along where the chosen layers overlap. Every painted scene pixel
+  becomes a **pair**: the texel of each layer drawn on that pixel.
+- **Only on the artwork.** The brush paints only where *every* chosen layer
+  has artwork as drawn, so a stroke that wanders off one of them stops
+  there.
+- **Erase** takes painted pixels back out before you Link.
+- **Brush sizes** run from 1×1 to 10×10, with saved favourites like every
+  other brush.
+- **The result** is one link (`kind: 'brush'`) with a list of pairs. It is
+  saved with the project (older files load unchanged) and listed as
+  *brush, N px*. Its pairs are dotted in the window and on the Rig/Bind
+  canvas.
+
+For the solver, a brush link is simply that many point pairs with one
+anchor. Everything about points holds for it: two or more pairs to the same
+layer *attach*, so a strap painted onto the body moves with the body as a
+whole. Linked anywhere else as well (a hand holding its end), it bends
+smoothly between the two through the field above.
+
+![The PxLink window in Brush mode: the string painted onto the body where they overlap (teal), then linked -- 97 pairs](docs/images/pxlink-brush.png)
+
+### 3. Combine Layers
+
+In Scene Parts, **Select** two layers, then **Combine 2 layers…**. A
+confirmation (the same pattern as Delete) says the originals will be removed
+and asks for the new layer's name.
+- **Compositing.** The two are flattened into one new layer exactly as they
+  look stacked. Each is drawn at rest through the renderer's own rasterizer,
+  the lower first and the upper over it with standard alpha compositing
+  (`combine.js`).
+- **Placement.** The picture is cropped to its artwork, at scale 1, and goes
+  where the upper one was in the stack.
+- **The originals** are removed. Undo brings them back with everything they
+  had.
+- **A clean layer.** The new one carries no bones, weights, mesh, pins,
+  PxLinks or Pierce role. Bones that pointed at the originals stay in the
+  skeleton, unassigned.
+
+**Fixed along the way.** A pixel centre lying exactly on the edge two
+triangles share was drawn by *both*. That is harmless for an opaque texel,
+but a half see-through one was blended over itself, a faint darker line along
+the diagonal of every see-through layer. The rasterizer can now be told
+which layer is drawing (`layerClaims`), and each layer decides each pixel
+exactly once, as its header always promised. This applies to the scene, Px
+Pin and Combine.
+
+![Combine: a disc and a half see-through square, before (two layers) and after (one), pixel for pixel the same; the confirmation](docs/images/combine-layers.png)
+
+### 4. The wedge's shape
+
+**First, what did not change.** The opening's shape code is byte for byte
+the 2.5.2 version you confirmed as correct. The same pierce was run on the
+2.5.2, 2.5.3 and 2.5.4 builds. Below the Lock Point every vertex of both
+passes is identical (0.0000 px). From the Lock on, 2.5.3 and later hold the
+Lock's shape, as intended.
+
+**What made the outline wrong.** The outline of the opening in your project
+is artwork on a *separate* layer, PxLinked onto the pierced layer. The
+opening is drawn on top of the pierced layer only, and nothing that measures
+a layer sees it, PxLink included. So the flesh parted while the outline
+linked onto it stayed shut. That outline is the wedge's visible boundary, so
+it looked as if the wedge's shape had broken. (Before you linked it, the
+outline was part of the layer being opened, which is why it used to look
+right.)
+
+**The fix** (`canvas.js`, *A LAYER LINKED ONTO A PIERCED LAYER OPENS WITH
+IT*).
+- At draw time, each link pair between a layer and an opened layer is moved
+  exactly as the opening moves the pierced layer's own texel there.
+- The layer follows smoothly round those pairs, never pushed further than
+  the opening goes.
+
+Nothing about the opening itself was touched: its shape, depth sync, Lock
+Point and retraction are exactly as before. The Lock sweep from 2.5.3
+(`b10/lock_sweep.mjs`, real touches, 89 frames) passes 11/11 on this build.
+Also fixed with item 1: a pierced layer held by links to more than one layer
+was folded by the same failing welds, right where the notch opens.
+
+![The wedge with its outline on a linked layer, driven past the Lock: 2.5.4 (the outline stays shut over the opening) and now (it opens with the flesh, symmetric round the tip, frozen from the Lock on)](docs/images/wedge-outline.png)
+
+### Verified
+
+Checked in the real app: phone-sized Chromium with real touches and taps.
+
+| | Result |
+| --- | --- |
+| String jointed to two hands and the body, left hand hauled round (3 and 5 links) | **0 folded triangles**, every link point exact (0.0000 px), worst stretch 1.1× |
+| Brush: string painted onto the body in the window, then linked | 97 px painted, only where both layers have artwork. Erase removes and repaint restores. One brush link of 97 pairs; listed as *brush, 97 px · String attached*; saved with the project |
+| …then the left hand hauled 31 px away | painted pairs stay on the body within **0.06 px** as drawn; the ends stay exactly on the hands; no visible fold |
+| Combine: disc + half see-through square | **0 of 1882** opaque-or-empty pixels differ from the two stacked. Half see-through over the disc is blended 50/50 ([140,115,125]); over nothing it stays at 50% (230 of 230 pixels). Originals gone, no mesh, pins, links or bones; Undo restores both with their pins and link |
+| Wedge with a linked outline, driven past the Lock | the outline opens with the flesh, symmetric round the tip; identical from the Lock to past End |
+| Lock sweep (2.5.3) on this build | 11/11 |
+
+`tests/pxlink.mjs` has 83 checks (10 new: several links, brush links,
+saving them). The new `tests/combine.mjs` (7) covers compositing, the
+store, and the rasterizer's once-per-layer claims. The twelve browser
+regression suites, the PxLink browser suites and `npm test` all pass.
 
 ## What's next
 

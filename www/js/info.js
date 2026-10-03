@@ -59,7 +59,12 @@ const TOPICS = {
       'exactly where you linked it and keeps its own shape. Its own bones ' +
       'and springs no longer pull it away. Use one link for a joint that ' +
       'bends (a wrist), two or more for something that sits on top (a ' +
-      'badge, a strap, an outline).\n\n' +
+      'badge, a strap, an outline) -- or paint it on with Brush (see ' +
+      'Point or Brush).\n\n' +
+      'A layer linked to SEVERAL different layers -- a string held by both ' +
+      'hands and the body -- is bent by all of its links together, as one ' +
+      'smooth shape: haul one hand far away and the string turns and ' +
+      'stretches toward it from the others, without tearing or folding.\n\n' +
       '• Pick two or more layers, tap where they meet (drag the marker to ' +
       'adjust), then Link. Three or more layers can share one point.\n' +
       '• The point goes on the artwork: a tap on empty space places ' +
@@ -71,6 +76,40 @@ const TOPICS = {
       'middle.\n' +
       '• You can have as many links as you like. Delete one and nothing ' +
       'else changes.',
+  },
+  'combine-layers': {
+    title: 'Combine Layers',
+    body: 'Flattens two layers into ONE new layer -- a picture of the two ' +
+      'exactly as they look stacked right now: the upper one drawn over the ' +
+      'lower, part-transparent pixels blended the usual way, each where its ' +
+      'own position, size and turn put it.\n\n' +
+      '• Tap Select, choose exactly two layers, then Combine. You name the ' +
+      'new layer before anything happens.\n' +
+      '• The two originals are REMOVED, and the new layer takes the upper ' +
+      'one\u2019s place in the stack.\n' +
+      '• It starts clean: no bones, weights, pins, PxLinks or Pierce role ' +
+      'come with it, so rig it fresh. Bones that were assigned to the ' +
+      'originals stay in the skeleton, unassigned.\n' +
+      '• Undo brings the two originals back, exactly as they were.',
+  },
+  'pxlink-brush': {
+    title: 'Point or Brush',
+    body: 'Two ways to say where layers meet.\n\n' +
+      '• Point -- one spot, a hinge. Right for two solid pieces that meet in ' +
+      'one place and turn there: a hand at the wrist, a finger at a knuckle.\n' +
+      '• Brush -- a painted region. Paint along where the layers overlap and ' +
+      'EVERY pixel you paint becomes a point the two are held together at: ' +
+      'the texel of each layer drawn on that pixel. Right for anything long or ' +
+      'thin that lies along another layer -- a strap, a string, a seam, a ' +
+      'belt -- which one point cannot hold in shape along its length.\n\n' +
+      'The brush only paints where every chosen layer has artwork, so a ' +
+      'stroke that wanders off one of them simply stops there. Erase takes ' +
+      'painted pixels back out before you Link. Sizes go from 1×1 to ' +
+      '10×10, with saved favourites like the other brushes.\n\n' +
+      'A brush link is held like several points: the layer that gives way ' +
+      'moves and turns as a whole to keep every painted pair together. If it ' +
+      'is also linked somewhere else -- a string held by a hand at its end -- ' +
+      'it bends smoothly between the two, rather than tearing.',
   },
   'mesh-trim': {
     title: 'Mesh Trim',

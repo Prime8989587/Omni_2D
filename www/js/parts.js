@@ -524,6 +524,36 @@ class PartsStore {
     return this.add(copy);
   }
 
+  // Two layers replaced by ONE: a new layer of the given artwork, placed in
+  // the stack where the upper of the two was, the two originals removed and
+  // the new one selected. It carries nothing of theirs but the picture -- no
+  // mesh, pins or pierce role (combine.js builds the picture; the caller
+  // deals with bones and links, which live in their own stores).
+  combine(lowerId, upperId, { name, pixels, width, height, x, y }) {
+    const lower = this._parts.find((candidate) => candidate.id === lowerId);
+    const upper = this._parts.find((candidate) => candidate.id === upperId);
+    if (!lower || !upper || lower === upper || !pixels) return null;
+    const z = Math.max(lower.zIndex, upper.zIndex);
+    this._parts = this._parts.filter((candidate) => candidate.id !== lowerId && candidate.id !== upperId);
+    const part = new Part({
+      name: this._uniqueName(String(name || '').trim() || `${upper.name} + ${lower.name}`),
+      image: null,
+      pixels,
+      width,
+      height,
+      objectUrl: null,
+      x,
+      y,
+      scale: 1,
+      placement: 'manual',
+    });
+    part.zIndex = z;
+    this._parts.push(part);
+    this._selectedId = part.id;
+    this._emit('structure');
+    return part;
+  }
+
   _uniqueName(base) {
     const taken = new Set(this._parts.map((part) => part.name));
     if (!taken.has(base)) return base;

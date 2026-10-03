@@ -39,7 +39,8 @@ import { fitBackingStore as fitCanvasBox, watchCanvasBox as watchBox } from './p
 import { PixelPen } from './pixelDraw.js';
 import { initMeshTrim, openMeshTrim, isMeshTrimOpen } from './meshtrim.js';
 import { initDebugOverlay, debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
-import { initPxLink } from './pxlink.js';
+import { initPxLink, pxlinkStore } from './pxlink.js';
+import { combinedArtwork, stackOrder } from './combine.js';
 import { initPxLinkTool, openPxLink } from './pxlinkTool.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
 import { initClayer, openClayer } from './clayer.js';
@@ -133,6 +134,12 @@ function cacheElements() {
   els.partBatchShowBtn = document.getElementById('partBatchShowBtn');
   els.partBatchHideBtn = document.getElementById('partBatchHideBtn');
   els.partBatchLockBtn = document.getElementById('partBatchLockBtn');
+  els.partBatchCombineBtn = document.getElementById('partBatchCombineBtn');
+  els.combinePartsModal = document.getElementById('combinePartsModal');
+  els.combinePartsMessage = document.getElementById('combinePartsMessage');
+  els.combinePartsName = document.getElementById('combinePartsName');
+  els.combinePartsConfirmBtn = document.getElementById('combinePartsConfirmBtn');
+  els.combinePartsCancelBtn = document.getElementById('combinePartsCancelBtn');
   els.partBatchUnlockBtn = document.getElementById('partBatchUnlockBtn');
   els.boneFilterInput = document.getElementById('boneFilterInput');
   els.boneFilterEmpty = document.getElementById('boneFilterEmpty');
@@ -1296,6 +1303,66 @@ function renderPartBatchBar() {
     els.partBatchLockBtn, els.partBatchUnlockBtn]) {
     btn.disabled = n === 0;
   }
+  els.partBatchCombineBtn.disabled = n !== 2;
+}
+
+// Combine Layers: the two selected layers flattened into one new layer, the
+// way they look stacked (combine.js), the originals removed. Asked first --
+// it is destructive, like Delete -- and named on the way.
+let pendingCombine = null;
+
+function openCombineParts() {
+  const ids = partSelection.ids;
+  if (ids.length !== 2) return;
+  const parts = ids.map((id) => partsStore.parts.find((part) => part.id === id)).filter(Boolean);
+  if (parts.length !== 2) return;
+  const [lower, upper] = stackOrder(parts[0], parts[1]);
+  pendingCombine = { lowerId: lower.id, upperId: upper.id };
+  const notes = [];
+  const bones = [lower, upper].flatMap((part) => bonesStore.bonesAttachedTo(part.id));
+  if (bones.length) notes.push(`Their ${bones.length} bone(s) stay in the skeleton, no longer assigned to a layer.`);
+  const links = [lower, upper].reduce((n, part) => n + pxlinkStore.linksFor(part.id).length, 0);
+  if (links) notes.push(`Their ${links} PxLink(s) go with them.`);
+  if (lower.hasPierceRole || upper.hasPierceRole) notes.push('Their Pierce role goes with them.');
+  els.combinePartsMessage.textContent =
+    `"${upper.name}" is drawn over "${lower.name}", exactly as they look stacked now, and the two ` +
+    'become ONE new layer. The two originals are removed. The new layer is a clean picture — ' +
+    'no bones, weights, pins, PxLinks or Pierce role — ready to rig fresh.' +
+    (notes.length ? ` ${notes.join(' ')}` : '') + ' Undo brings the two back.';
+  els.combinePartsName.value = `${upper.name} + ${lower.name}`;
+  els.combinePartsModal.hidden = false;
+}
+
+function confirmCombineParts() {
+  const pending = pendingCombine;
+  pendingCombine = null;
+  els.combinePartsModal.hidden = true;
+  if (!pending) return;
+  const lower = partsStore.parts.find((part) => part.id === pending.lowerId);
+  const upper = partsStore.parts.find((part) => part.id === pending.upperId);
+  if (!lower || !upper) return;
+  const art = combinedArtwork(lower, upper);
+  if (!art) { showToast('Nothing to combine — neither layer has any artwork.'); return; }
+  let made = null;
+  history.run('Combine layers', () => {
+    for (const part of [lower, upper]) bonesStore.detachPart(part.id);
+    made = partsStore.combine(lower.id, upper.id, { ...art, name: els.combinePartsName.value });
+    // A pierce cannot exist with only one side present (as on Delete).
+    if (partsStore.piercers.length === 0) for (const other of partsStore.piercedLayers) partsStore.setPierceRole(other.id, PierceRole.NONE);
+    if (partsStore.piercedLayers.length === 0) for (const other of partsStore.piercers) partsStore.setPierceRole(other.id, PierceRole.NONE);
+  });
+  if (!made) return;
+  autoSaveNow('combine-layers');
+  partSelection.clear();
+  partSelection.setActive(false);
+  renderPartsList();
+  renderPartBatchBar();
+  showToast(`Combined into "${made.name}" — ${art.width}×${art.height} px.`);
+}
+
+function cancelCombineParts() {
+  pendingCombine = null;
+  els.combinePartsModal.hidden = true;
 }
 
 function runPartBatch(label, apply) {
@@ -3310,6 +3377,9 @@ function bindEvents() {
     runPartBatch('Lock layers', (ids) => partsStore.batchSetLocked(ids, true)));
   els.partBatchUnlockBtn.addEventListener('click', () =>
     runPartBatch('Unlock layers', (ids) => partsStore.batchSetLocked(ids, false)));
+  els.partBatchCombineBtn.addEventListener('click', openCombineParts);
+  els.combinePartsConfirmBtn.addEventListener('click', confirmCombineParts);
+  els.combinePartsCancelBtn.addEventListener('click', cancelCombineParts);
 
   // ---- Batch: bones ------------------------------------------------------
   els.boneBatchRigidBtn.addEventListener('click', () =>

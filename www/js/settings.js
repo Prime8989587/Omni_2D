@@ -247,6 +247,14 @@ export const SCHEMA = [
     default: [1, 4, 8],
   },
   {
+    key: 'pxLinkBrushPresets',
+    kind: 'presets',
+    slots: 3,
+    min: 1,
+    max: 10,
+    default: [1, 2, 4],
+  },
+  {
     key: 'pierceBrushPresets',
     kind: 'presets',
     slots: 3,

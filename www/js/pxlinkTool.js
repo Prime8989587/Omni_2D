@@ -11,6 +11,13 @@
 // grip, grabbed from a fingertip's distance away. Tap to drop it, drag to
 // adjust it -- one gesture, so a tap that lands a pixel off can be walked
 // onto the joint without lifting.
+//
+// BRUSH MODE paints a region instead: every scene pixel the brush covers
+// where ALL the chosen layers have artwork, as drawn, becomes a point pair --
+// the texel of each layer drawn on that pixel. For a strap or a string, that
+// is its whole length where it lies on the layer beneath, not one spot. The
+// brush is the app's square one (1x1 to 10x10, saved sizes), and like every
+// other brush it only paints on the artwork.
 
 import { PixelPen } from './pixelDraw.js';
 import { partsStore } from './parts.js';
@@ -27,6 +34,7 @@ import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred
 import { setIcon } from './pixelIcons.js';
 import { noteToolUsed } from './recentTools.js';
 import { showToast } from './toast.js';
+import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 
 const TEAL = '#2EE6C8';
 const HANDLE_RADIUS = 9;
@@ -35,6 +43,10 @@ const MAX_ZOOM = 64;
 const DIM_ALPHA = 0.28;
 // How far from a layer's artwork a link point may be before the tool says so.
 const FAR_FROM_ART_TEXELS = 2;
+const MAX_BRUSH = 10;
+const DEFAULT_BRUSH = 2;
+const PAINT_FILL = 'rgba(46, 230, 200, 0.55)';
+const LINKED_FILL = 'rgba(46, 230, 200, 0.28)';
 
 const els = {};
 let session = null;
@@ -47,6 +59,8 @@ function cacheElements() {
     'pxlinkAnchorSelect', 'pxlinkClearBtn', 'pxlinkCreateBtn', 'pxlinkHint', 'pxlinkList',
     'pxlinkListEmpty', 'pxlinkCount', 'pxlinkOpenBtn', 'pxlinkDeleteModal', 'pxlinkDeleteMessage',
     'pxlinkDeleteConfirmBtn', 'pxlinkDeleteCancelBtn',
+    'pxlinkModePointBtn', 'pxlinkModeBrushBtn', 'pxlinkBrushTools', 'pxlinkPaintBtn', 'pxlinkEraseBtn',
+    'pxlinkBrushBtn', 'pxlinkBrushMenu', 'pxlinkBrushPresets',
   ]) els[id] = document.getElementById(id);
 }
 
@@ -92,6 +106,34 @@ function redrawScene() {
   session.dimBitmap = rasterize(visible, transforms);
   session.litBitmap = rasterize(lit, transforms);
   session.links = linkPositions(transforms);
+  // Where each chosen layer has artwork, scene pixel by scene pixel, as
+  // drawn: the brush paints only where all of them do.
+  session.masks = session.selected.map((id) => artworkMask(partById(id), transforms)).filter(Boolean);
+  for (const key of [...session.painted]) if (!onAllArtwork(key)) session.painted.delete(key);
+}
+
+// Which scene pixels a layer covers with artwork, as the renderer draws it.
+function artworkMask(part, transforms) {
+  if (!part) return null;
+  const W = sceneStore.width;
+  const H = sceneStore.height;
+  const target = new Uint8ClampedArray(W * H * 4);
+  const { positions, uvs, triangles } = layerDrawGeometry(part, transforms);
+  for (let i = 0; i < triangles.length; i += 3) {
+    const a = triangles[i], b = triangles[i + 1], c = triangles[i + 2];
+    rasterizeTriangle(target, W, H, part.pixels, part.naturalWidth, part.naturalHeight,
+      positions[a], positions[b], positions[c], uvs[a], uvs[b], uvs[c]);
+  }
+  const mask = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) mask[i] = target[i * 4 + 3] > 0 ? 1 : 0;
+  return mask;
+}
+
+const cellKey = (x, y) => y * sceneStore.width + x;
+
+function onAllArtwork(key) {
+  if (!session.masks || session.masks.length < 2) return false;
+  return session.masks.every((mask) => mask[key] === 1);
 }
 
 function focusedMembers() {
@@ -164,6 +206,28 @@ function render() {
   // The canvas border, one cell wide, just outside the scene.
   pen.box((panX - cell / 2) * dpr, (panY - cell / 2) * dpr, (panX + W + cell / 2) * dpr, (panY + H + cell / 2) * dpr, 'rgba(255, 255, 255, 0.12)');
 
+  // Painted, not yet linked: the region the brush link will hold. (The pen
+  // draws in device pixels, so these do too.)
+  const cellPx = zoom * dpr;
+  if (session.painted.size) {
+    ctx.fillStyle = PAINT_FILL;
+    const Wc = sceneStore.width;
+    for (const key of session.painted) {
+      const d = dev(key % Wc, Math.floor(key / Wc));
+      ctx.fillRect(d.x, d.y, cellPx, cellPx);
+    }
+  }
+  // Brush links already made: every pair, where it is drawn now.
+  for (const link of session.links) {
+    if (!link.pairs) continue;
+    ctx.fillStyle = link.id === session.focusId ? PAINT_FILL : LINKED_FILL;
+    for (const pair of link.pairs) {
+      if (!pair.length) continue;
+      const d = dev(pair[0].x - 0.5, pair[0].y - 0.5);
+      ctx.fillRect(d.x, d.y, cellPx, cellPx);
+    }
+  }
+
   // Existing links, at their solved positions -- where every member meets.
   for (const link of session.links) {
     if (link.members.length === 0) continue;
@@ -200,14 +264,60 @@ function renderChrome() {
   els.pxlinkStatus.textContent = `${count} link${count === 1 ? '' : 's'} · ${Math.round(session.cam.zoom * 100)}%`;
   els.pxlinkCount.textContent = String(count);
 
-  const ready = session.selected.length >= 2 && session.point;
+  const brush = session.mode === 'brush';
+  const ready = session.selected.length >= 2 && (brush ? session.painted.size > 0 : session.point);
   els.pxlinkCreateBtn.disabled = !ready;
-  els.pxlinkClearBtn.disabled = session.selected.length === 0 && !session.point;
+  els.pxlinkClearBtn.disabled = session.selected.length === 0 && !session.point && session.painted.size === 0;
   els.pxlinkHint.textContent = session.selected.length < 2
     ? 'Pick two or more layers to join.'
-    : !session.point
-      ? 'Tap where they meet, on the artwork. Two fingers pan, pinch to zoom.'
-      : 'Drag the marker onto the joint, then Link.';
+    : brush
+      ? (session.painted.size === 0
+        ? 'Paint along where they overlap — it only paints where every chosen layer has artwork. Two fingers pan, pinch to zoom.'
+        : `${session.painted.size} pixel${session.painted.size === 1 ? '' : 's'} painted. Paint more, or Link.`)
+      : !session.point
+        ? 'Tap where they meet, on the artwork. Two fingers pan, pinch to zoom.'
+        : 'Drag the marker onto the joint, then Link.';
+  renderTools();
+}
+
+function renderTools() {
+  const brush = session.mode === 'brush';
+  els.pxlinkModePointBtn.setAttribute('aria-pressed', String(!brush));
+  els.pxlinkModeBrushBtn.setAttribute('aria-pressed', String(brush));
+  els.pxlinkBrushTools.hidden = !brush;
+  if (!brush) return;
+  els.pxlinkPaintBtn.setAttribute('aria-pressed', String(session.brushTool === 'paint'));
+  els.pxlinkEraseBtn.setAttribute('aria-pressed', String(session.brushTool === 'erase'));
+  renderBrushButton(els.pxlinkBrushBtn, session.brush);
+  els.pxlinkBrushBtn.setAttribute('aria-expanded', String(session.brushMenuOpen));
+  els.pxlinkBrushMenu.hidden = !session.brushMenuOpen;
+  els.pxlinkBrushMenu.replaceChildren();
+  for (let size = 1; size <= MAX_BRUSH; size++) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'px-pin__brush';
+    button.textContent = `${size}×${size}`;
+    button.setAttribute('aria-pressed', String(session.brush === size));
+    button.addEventListener('click', () => {
+      session.brush = size;
+      session.brushMenuOpen = false;
+      renderTools();
+    });
+    els.pxlinkBrushMenu.appendChild(button);
+  }
+  renderBrushPresets(els.pxlinkBrushPresets, {
+    key: 'pxLinkBrushPresets',
+    current: () => session.brush,
+    apply: (size) => { session.brush = size; session.brushMenuOpen = false; renderTools(); },
+    format: SQUARE_FORMAT,
+  });
+}
+
+function setMode(mode) {
+  if (!session || session.mode === mode) return;
+  session.mode = mode;
+  session.brushMenuOpen = false;
+  render();
 }
 
 function renderChips() {
@@ -263,7 +373,8 @@ function renderList() {
     show.textContent = linkName(link);
     const sub = document.createElement('small');
     const attached = attachedMembers(link);
-    sub.textContent = (link.anchorId ? `${nameOf(link.anchorId)} holds still` : 'shared — all give way') +
+    const painted = link.kind === 'brush' ? `brush, ${link.members[0].points.length} px · ` : '';
+    sub.textContent = painted + (link.anchorId ? `${nameOf(link.anchorId)} holds still` : 'shared — all give way') +
       (attached.length ? ` · ${attached.map(nameOf).join(', ')} attached` : '');
     show.appendChild(sub);
     show.addEventListener('click', () => focusLink(link.id));
@@ -328,11 +439,45 @@ function focusLink(id) {
 function clearDraft() {
   session.selected = [];
   session.point = null;
+  session.painted.clear();
   session.anchor = 'auto';
   renderAll();
 }
 
+function anchorFor(memberIds) {
+  return session.anchor === 'shared' ? null
+    : session.anchor === 'auto' ? defaultAnchor(memberIds)
+      : session.anchor;
+}
+
+// A brush link: every painted pixel's centre, as a texel of each chosen
+// layer -- the pairs, in one link.
+function createBrushLink() {
+  const transforms = currentTransforms();
+  const ids = session.selected.filter((id) => partById(id));
+  const Wc = sceneStore.width;
+  const points = ids.map(() => []);
+  for (const key of [...session.painted].sort((a, b) => a - b)) {
+    const centre = { x: (key % Wc) + 0.5, y: Math.floor(key / Wc) + 0.5 };
+    const texels = ids.map((id) => sceneToTexel(partById(id), centre, transforms));
+    if (texels.some((t) => !t)) continue;
+    texels.forEach((t, k) => points[k].push({ u: tidy(t.u), v: tidy(t.v) }));
+  }
+  if (ids.length < 2 || points[0].length === 0) { showToast('Paint where the chosen layers overlap first.'); return; }
+  const members = ids.map((partId, k) => ({ partId, points: points[k] }));
+  let link = null;
+  history.run('Add PxLink (brush)', () => { link = pxlinkStore.add({ members, anchorId: anchorFor(ids), kind: 'brush' }); });
+  if (!link) { showToast('Those layers could not be linked.'); return; }
+  session.focusId = link.id;
+  session.selected = [];
+  session.painted.clear();
+  session.anchor = 'auto';
+  renderAll();
+  showToast(`Linked ${linkName(link)} along ${points[0].length} painted pixel${points[0].length === 1 ? '' : 's'}.`);
+}
+
 function createLink() {
+  if (session && session.mode === 'brush') { if (session.selected.length >= 2) createBrushLink(); return; }
   if (!session || session.selected.length < 2 || !session.point) return;
   const transforms = currentTransforms();
   const members = [];
@@ -350,9 +495,7 @@ function createLink() {
     if (gap > FAR_FROM_ART_TEXELS) far.push(`${part.name} (${Math.round(gap)} px away)`);
   }
   if (members.length < 2) { showToast('Those layers could not be linked.'); return; }
-  const anchorId = session.anchor === 'shared' ? null
-    : session.anchor === 'auto' ? defaultAnchor(members.map((m) => m.partId))
-      : session.anchor;
+  const anchorId = anchorFor(members.map((m) => m.partId));
   let link = null;
   history.run('Add PxLink', () => { link = pxlinkStore.add({ members, anchorId }); });
   if (!link) { showToast('Those layers could not be linked.'); return; }
@@ -420,6 +563,43 @@ function onArtwork(scene) {
   return false;
 }
 
+// The brush's square of scene pixels round a window point: painted where
+// every chosen layer has artwork, or erased.
+function paintAt(point) {
+  const scene = toScene(point);
+  const n = session.brush;
+  const x0 = Math.floor(scene.x) - Math.floor((n - 1) / 2);
+  const y0 = Math.floor(scene.y) - Math.floor((n - 1) / 2);
+  let changed = false;
+  for (let y = y0; y < y0 + n; y++) {
+    for (let x = x0; x < x0 + n; x++) {
+      if (x < 0 || y < 0 || x >= sceneStore.width || y >= sceneStore.height) continue;
+      const key = cellKey(x, y);
+      if (session.brushTool === 'erase') {
+        if (session.painted.delete(key)) changed = true;
+      } else if (!session.painted.has(key) && onAllArtwork(key)) {
+        session.painted.add(key);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+// A stroke paints every point along the finger's path, not just where each
+// move event happened to land: a quick swipe leaves no gaps.
+function strokeTo(point) {
+  const from = session.lastPaint || point;
+  const steps = Math.max(1, Math.ceil(Math.hypot(point.x - from.x, point.y - from.y) / Math.max(1, session.cam.zoom * 0.5)));
+  let changed = false;
+  for (let k = 1; k <= steps; k++) {
+    const t = k / steps;
+    if (paintAt({ x: from.x + (point.x - from.x) * t, y: from.y + (point.y - from.y) * t })) changed = true;
+  }
+  session.lastPaint = point;
+  if (changed) render();
+}
+
 function placeAt(point) {
   const scene = toScene(point);
   const snapped = { x: snapHalf(scene.x), y: snapHalf(scene.y) };
@@ -436,6 +616,7 @@ function onPointerDown(event) {
   session.pointers.set(event.pointerId, point);
   if (session.pointers.size === 2) {
     session.dragging = false;
+    session.lastPaint = null;
     const [a, b] = [...session.pointers.values()];
     session.pinch = {
       distance: Math.hypot(b.x - a.x, b.y - a.y),
@@ -448,6 +629,13 @@ function onPointerDown(event) {
   }
   if (session.pointers.size !== 1) return;
   session.pinch = null;
+  if (session.mode === 'brush') {
+    session.dragging = true;
+    session.lastPaint = null;
+    if (session.selected.length < 2) { renderChrome(); return; }
+    strokeTo(point);
+    return;
+  }
   // Grab the grip if the finger is on it -- the offset keeps it from jumping
   // to the fingertip -- otherwise drop it where the finger is.
   if (session.point) {
@@ -482,6 +670,10 @@ function onPointerMove(event) {
     return;
   }
   if (session.pointers.size === 1 && session.dragging) {
+    if (session.mode === 'brush') {
+      if (session.selected.length >= 2) strokeTo(point);
+      return;
+    }
     placeAt({ x: point.x + session.grabOffset.x, y: point.y + session.grabOffset.y });
   }
 }
@@ -498,7 +690,7 @@ function onPointerUp(event) {
     }
     session.pinch = null;
   }
-  if (session.pointers.size === 0) session.dragging = false;
+  if (session.pointers.size === 0) { session.dragging = false; session.lastPaint = null; }
   renderChrome();
 }
 
@@ -525,6 +717,13 @@ export function openPxLink() {
     dragging: false,
     grabOffset: { x: 0, y: 0 },
     links: [],
+    mode: 'point',
+    brushTool: 'paint',
+    brush: DEFAULT_BRUSH,
+    brushMenuOpen: false,
+    painted: new Set(),
+    masks: [],
+    lastPaint: null,
   };
   els.pxlinkScreen.hidden = false;
   playEnter(els.pxlinkScreen);
@@ -556,6 +755,15 @@ export function initPxLinkTool() {
   els.pxlinkAnchorSelect.addEventListener('change', () => {
     if (session) session.anchor = els.pxlinkAnchorSelect.value;
   });
+  els.pxlinkModePointBtn.addEventListener('click', () => setMode('point'));
+  els.pxlinkModeBrushBtn.addEventListener('click', () => setMode('brush'));
+  els.pxlinkPaintBtn.addEventListener('click', () => { if (session) { session.brushTool = 'paint'; renderTools(); } });
+  els.pxlinkEraseBtn.addEventListener('click', () => { if (session) { session.brushTool = 'erase'; renderTools(); } });
+  els.pxlinkBrushBtn.addEventListener('click', () => {
+    if (!session) return;
+    session.brushMenuOpen = !session.brushMenuOpen;
+    renderTools();
+  });
   els.pxlinkDeleteConfirmBtn.addEventListener('click', confirmDelete);
   els.pxlinkDeleteCancelBtn.addEventListener('click', cancelDelete);
   if (els.pxlinkOpenBtn) els.pxlinkOpenBtn.addEventListener('click', openPxLink);
@@ -583,6 +791,10 @@ export function pxlinkToolDebug() {
     focusId: session.focusId,
     zoom: session.cam.zoom,
     links: pxlinkStore.links.length,
+    mode: session.mode,
+    brushTool: session.brushTool,
+    brush: session.brush,
+    painted: session.painted.size,
   };
 }
 

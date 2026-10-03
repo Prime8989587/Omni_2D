@@ -23,8 +23,9 @@ import { bonesStore, JointType } from '../www/js/bones.js';
 import { bindPart, deformVertices, deformVerticesSnapped, deformVerticesUncorrected } from '../www/js/mesh.js';
 import {
   pxlinkStore, initPxLink, sceneToTexel, defaultAnchor, linkPositions,
-  serializePxLinks, deserializePxLinks, solve, attachedMembers,
+  serializePxLinks, deserializePxLinks, solve, attachedMembers, linkOffsetAt, moveRigid,
 } from '../www/js/pxlink.js';
+import { refinedMesh } from '../www/js/opening.js';
 import { serializeProject, applyProject } from '../www/js/project.js';
 import { history } from '../www/js/history.js';
 import { setTargetLayer, beginPoseDrag, updatePoseDrag, endPoseDrag, targetBone } from '../www/js/poseTool.js';
@@ -691,6 +692,143 @@ console.log('\nTwo or more points ATTACH a layer: it moves as a whole, onto the 
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+console.log('\nSeveral links on one layer: one field, solved together -- and painted (brush) links');
+
+// A strap: a thin unbound layer from the left hand, across the torso, to the
+// right hand. Each hand on its own bone under the torso.
+function strapScene() {
+  pxlinkStore.replaceAll([]);
+  partsStore.replaceAll([], null);
+  bonesStore.replaceAll([], null);
+  const torso = layer('Torso', 40, 60, 40, 30, [60, 90, 200]); // x 40..80, y 30..90
+  const lh = layer('LH', 10, 10, 20, 34, [240, 190, 160]); // x 20..30
+  const rh = layer('RH', 10, 10, 90, 34, [240, 190, 160]); // x 90..100
+  const strap = layer('Strap', 76, 6, 22, 36, [30, 20, 20]); // x 22..98, y 36..42 -- thin, like a string
+  bonesStore.addBone({ head: { x: 60.5, y: 30.5 }, tail: { x: 60.5, y: 89.5 }, name: 'torso' });
+  const t = bone('torso').id;
+  bonesStore.addBone({ parentId: t, head: { x: 40.5, y: 38.5 }, tail: { x: 25.5, y: 39.5 }, name: 'lh' });
+  bonesStore.addBone({ parentId: t, head: { x: 80.5, y: 38.5 }, tail: { x: 95.5, y: 39.5 }, name: 'rh' });
+  bonesStore.setAttachedPart(t, torso.id);
+  bonesStore.setAttachedPart(bone('lh').id, lh.id);
+  bonesStore.setAttachedPart(bone('rh').id, rh.id);
+  for (const part of [torso, lh, rh]) bindPart(part, bonesStore);
+  return { torso, lh, rh, strap };
+}
+
+function overlapOf(geometry) {
+  const { positions: P, uvs: U, triangles: T } = geometry;
+  let worst = 0;
+  for (let t = 0; t < T.length; t += 3) {
+    const [a, b, c] = [T[t], T[t + 1], T[t + 2]];
+    const ar = (U[b].u - U[a].u) * (U[c].v - U[a].v) - (U[c].u - U[a].u) * (U[b].v - U[a].v);
+    const ad = (P[b].x - P[a].x) * (P[c].y - P[a].y) - (P[c].x - P[a].x) * (P[b].y - P[a].y);
+    if (Math.abs(ar) > 1e-9 && ad * Math.sign(ar) < 0) worst = Math.max(worst, -ad * Math.sign(ar) / 2);
+  }
+  return worst;
+}
+
+// The finer drawing a bent linked layer gets (canvas.js, linkBent).
+function bentDrawing(part, transforms) {
+  const correction = solve(transforms).get(part.id);
+  if (!correction || !correction.field) return drawn(part, transforms);
+  const refined = refinedMesh(part.mesh, part);
+  const P = correction.uncorrected;
+  return {
+    positions: refined.blends.map(({ ids, ws }, i) => {
+      let p = { x: 0, y: 0 };
+      for (let c = 0; c < ids.length; c++) { p.x += P[ids[c]].x * ws[c]; p.y += P[ids[c]].y * ws[c]; }
+      if (correction.rigid) p = moveRigid(correction.rigid, p);
+      const d = linkOffsetAt(correction, refined.uvs[i].u, refined.uvs[i].v, p.x, p.y);
+      return { x: p.x + d.x, y: p.y + d.y };
+    }),
+    uvs: refined.uvs,
+    triangles: refined.triangles,
+  };
+}
+
+{
+  // Linked at one end to each hand and in the middle to the torso: three
+  // single joints, three DIFFERENT layers. The left hand swung 120 degrees.
+  const { torso, lh, rh, strap } = strapScene();
+  const L1 = link([lh, strap], { x: 25, y: 39 }, lh.id);
+  const L2 = link([rh, strap], { x: 95, y: 39 }, rh.id);
+  const L3 = link([torso, strap], { x: 60, y: 39 }, torso.id);
+  let worstGap = 0;
+  let worstFold = 0;
+  let worstBent = 0;
+  const r0 = bone('lh').rotation;
+  for (const deg of [30, 60, 90, 120]) {
+    bone('lh').rotation = r0 - rad(deg);
+    const T = snapshot();
+    worstGap = Math.max(worstGap, gap(L1, T), gap(L2, T), gap(L3, T));
+    worstFold = Math.max(worstFold, overlapOf(drawn(strap, T)));
+    worstBent = Math.max(worstBent, overlapOf(bentDrawing(strap, T)));
+  }
+  say(worstGap < EXACT, 'a layer jointed to three different layers, one swung 120 degrees away: every link point exact',
+    `worst ${worstGap.toExponential(2)} px`);
+  say(worstBent < 0.5, 'and nothing of it, as drawn, folds over by even half a pixel (the old welds tore it)',
+    `worst overlap ${worstBent.toFixed(3)} px² drawn (its own coarse mesh, which is not drawn: ${worstFold.toFixed(3)} px²)`);
+  bone('lh').rotation = r0;
+  const atRest = solve(snapshot()).get(strap.id);
+  say(!atRest || (!atRest.field && atRest.welds.length === 0), 'at rest there is nothing to correct: no field, no welds');
+}
+{
+  // The strap PAINTED onto the torso along its middle (a brush link: a pair
+  // per painted pixel), its ends jointed to the hands.
+  const { torso, lh, rh, strap } = strapScene();
+  const T0 = snapshot();
+  const pts = [];
+  for (let x = 42; x <= 78; x++) pts.push({ x: x + 0.5, y: 39.5 });
+  const brush = pxlinkStore.add({
+    kind: 'brush',
+    anchorId: torso.id,
+    members: [strap, torso].map((part) => ({ partId: part.id, points: pts.map((p) => sceneToTexel(part, p, T0)) })),
+  });
+  say(brush && brush.kind === 'brush' && brush.members.every((m) => m.points.length === pts.length),
+    'a brush link holds a point pair per painted pixel', `${brush.members[0].points.length} pairs`);
+  say(attachedMembers(brush).includes(strap.id), 'painted onto the torso, the strap is ATTACHED to it (two or more pairs)');
+  link([lh, strap], { x: 25, y: 39 }, lh.id);
+  link([rh, strap], { x: 95, y: 39 }, rh.id);
+  // The torso turned: everything agrees on one rigid motion, so the strap
+  // goes with it exactly, every pair.
+  bone('torso').rotation += rad(25);
+  let T = snapshot();
+  const pairGap = (transforms, geometryOf) => {
+    let worst = 0;
+    const gs = new Map([strap, torso].map((part) => [part.id, geometryOf(part, transforms)]));
+    for (let i = 0; i < pts.length; i++) {
+      const [a, b] = brush.members.map((m) => pointOn(gs.get(m.partId), m.points[i].u, m.points[i].v));
+      worst = Math.max(worst, Math.hypot(a.x - b.x, a.y - b.y));
+    }
+    return worst;
+  };
+  say(pairGap(T, (p, t) => (p === strap ? bentDrawing(p, t) : drawn(p, t))) < 0.6,
+    'the torso turned 25 degrees: every painted pair still together, as drawn', `worst ${pairGap(T, (p, t) => (p === strap ? bentDrawing(p, t) : drawn(p, t))).toFixed(3)} px`);
+  // Now one hand hauled far round: the strap's end follows the hand, its
+  // painted middle stays on the torso, and it bends between without folding.
+  bone('torso').rotation -= rad(25);
+  bone('lh').rotation -= rad(110);
+  T = snapshot();
+  const stays = pairGap(T, (p, t) => (p === strap ? bentDrawing(p, t) : drawn(p, t)));
+  const end = linkPositions(T).find((l) => l.members.some((m) => m.partId === lh.id));
+  const endGap = Math.hypot(end.members[0].x - end.members[1].x, end.members[0].y - end.members[1].y);
+  say(stays < 0.6 && endGap < EXACT, 'a hand hauled 110 degrees away: the painted pairs stay on the torso, the end stays on the hand',
+    `pairs within ${stays.toFixed(3)} px, end ${endGap.toExponential(2)} px`);
+  say(overlapOf(bentDrawing(strap, T)) < 1, 'and the strap bends between them without folding over -- not by so much as one pixel',
+    `worst overlap ${overlapOf(bentDrawing(strap, T)).toFixed(3)} px²`);
+  // Saved and loaded, every pair.
+  const saved = JSON.parse(JSON.stringify(serializePxLinks()));
+  const restored = deserializePxLinks(saved, partsStore.parts.map((p) => p.id));
+  const back = restored.find((l) => l.kind === 'brush');
+  say(back && back.members[0].points.length === pts.length && Math.abs(back.members[1].points[7].u - brush.members[1].points[7].u) < 1e-9,
+    'a brush link saves and loads with every pair', `${back ? back.members[0].points.length : 0} pairs back`);
+  // Older files (no kind) still load as point links.
+  const old = deserializePxLinks([{ id: 'pxlink_9', anchorId: null, members: [{ partId: strap.id, u: 1, v: 1 }, { partId: torso.id, u: 2, v: 2 }] }], partsStore.parts.map((p) => p.id));
+  say(old.length === 1 && old[0].kind === 'point', 'a link saved before brushes existed loads as a point link');
+}
+
 console.log('\nSave, load, undo, delete, crop');
 {
   const { torso, arm, hand, cuff } = scene();

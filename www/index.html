@@ -137,6 +137,10 @@
             <button id="partBatchUnlockBtn" class="btn btn--sm" type="button">Unlock</button>
             <button id="partBatchLockBtn" class="btn btn--sm" type="button">Lock</button>
           </div>
+          <div class="batch-bar__row">
+            <button id="partBatchCombineBtn" class="btn btn--sm" type="button">Combine 2 layers…</button>
+            <button class="info-btn" type="button" data-info="combine-layers" aria-haspopup="true" aria-expanded="false" aria-label="What does Combine do?"><span data-icon="info"></span></button>
+          </div>
         </div>
 
         <ul id="scenePartsList" class="scene-parts"></ul>
@@ -416,6 +420,19 @@
           <button id="deletePartKeepBonesBtn" class="btn btn--flourish" type="button">Delete layer, keep bones</button>
           <button id="deletePartWithBonesBtn" class="btn btn--danger" type="button">Delete layer and its bones</button>
           <button id="deletePartCancelBtn" class="btn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="combinePartsModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="combinePartsTitle">
+        <h2 id="combinePartsTitle" class="modal__title">Combine 2 layers?</h2>
+        <p id="combinePartsMessage" class="modal__text"></p>
+        <label for="combinePartsName" class="field-label">New layer's name</label>
+        <input id="combinePartsName" class="text-input" type="text" maxlength="60" autocomplete="off" />
+        <div class="modal__actions modal__actions--stack">
+          <button id="combinePartsConfirmBtn" class="btn btn--danger" type="button">Combine — remove the two originals</button>
+          <button id="combinePartsCancelBtn" class="btn" type="button">Cancel</button>
         </div>
       </div>
     </div>
@@ -1173,6 +1190,24 @@
       </div>
       <div id="pxlinkLayerChips" class="pxlink__chips" role="group" aria-label="Layers to join"></div>
 
+      <div class="px-pin__row-label">
+        <span>Link by</span>
+        <button class="info-btn" type="button" data-info="pxlink-brush" aria-haspopup="true" aria-expanded="false" aria-label="Point or brush?"><span data-icon="info"></span></button>
+      </div>
+      <div class="segmented" role="group" aria-label="Link by">
+        <button id="pxlinkModePointBtn" class="segmented__btn" type="button" aria-pressed="true"><span class="px-icon--lead" data-icon="link"></span>Point</button>
+        <button id="pxlinkModeBrushBtn" class="segmented__btn" type="button" aria-pressed="false"><span class="px-icon--lead" data-icon="brush"></span>Brush</button>
+      </div>
+      <div id="pxlinkBrushTools" class="pxlink__brush" hidden>
+        <div class="segmented">
+          <button id="pxlinkPaintBtn" class="segmented__btn" type="button" aria-pressed="true"><span class="px-icon--lead" data-icon="brush"></span>Paint</button>
+          <button id="pxlinkEraseBtn" class="segmented__btn" type="button" aria-pressed="false"><span class="px-icon--lead" data-icon="eraser"></span>Erase</button>
+          <button id="pxlinkBrushBtn" class="segmented__btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="pxlinkBrushMenu"><span>2 × 2</span><span class="px-icon--trail" data-icon="chevron-down"></span></button>
+        </div>
+        <div id="pxlinkBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
+        <div id="pxlinkBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
+      </div>
+
       <label class="pxlink__anchor">
         <span>Holds still</span>
         <select id="pxlinkAnchorSelect" class="select-input"></select>
@@ -1188,7 +1223,7 @@
         <span>Links in this project <b id="pxlinkCount">0</b></span>
       </div>
       <ul id="pxlinkList" class="scene-parts pxlink__list"></ul>
-      <p id="pxlinkListEmpty" class="list-tools__empty">No links yet — pick two or more layers, tap where they meet, then Link.</p>
+      <p id="pxlinkListEmpty" class="list-tools__empty">No links yet — pick two or more layers, tap where they meet (or paint where they overlap, in Brush), then Link.</p>
     </footer>
   </section>
 
