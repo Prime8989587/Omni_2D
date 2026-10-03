@@ -7956,6 +7956,129 @@ the drag.
 | Opening width | as in the table; `tests/opening.mjs` 49 checks (9 new) |
 | Lock sweep (2.5.3), the 12 browser suites, PxLink suites, features, scan | Lock 11/11; all 12 suites; PxLink c1–c7 gap 0 and UI 34/34; features 17/17 + 40/40; scan 24/24; a linked piercer still pierces |
 
+## 2.7.1: moving a child bone never moves its parent's artwork
+
+Reported: in Rig mode, moving Bone_16 (it controls LForearm) visibly moved and
+turned its parent, the upper arm and shoulder. Screenshots before and after
+were attached, and there was no PxLink or IK on that arm.
+
+### Investigated in the order asked
+
+**1. PxLink scoping: not the cause.** The test character was built with no
+PxLinks at all, and every case below was reproduced on it. It was then run
+again with two elbow links (default anchor) plus a string held by the hand,
+and again with the elbow links set to *meet halfway*. The parent's numbers
+were the same in every run. A link only reaches the layers it names, so it
+cannot reach the skeleton above them.
+
+**2. Base forward kinematics: not the cause.** In every drag, only the
+dragged bone's own fields changed (rotation, length, local head). Every other
+bone's fields were unchanged. The skeleton is computed top-down from those
+fields, so the parent's world position could not change either. It was also
+measured directly in the two-finger run below, to the hundredth of a pixel.
+Nothing feeds back from a child to its parent.
+
+**3. What it actually was: the parent's *skin*.** Each layer's drawn geometry
+was measured before and after a real touch drag. The parent's artwork moved
+with no PxLink and no change to any parent bone:
+
+| Drag (Rig mode unless noted) | Parent layer | Moved (drawn geometry) | Scene pixels of it that changed |
+| --- | --- | --- | --- |
+| forearm tail | UpperArm | 1.69 px | 10 |
+| hand tail | Forearm | 4.68 px | 24 |
+| shin tail | Thigh | 2.41 px | 16 |
+| forearm head (the elbow) | UpperArm | 1.86 px | 17 |
+| Free Move, Drag moves = Forearm | UpperArm | 1.99 px | 13 |
+| neck tail (child of the root) | Torso | 0 | 0 |
+
+The cause is in auto-weighting, in two places.
+
+- **Joint seams.** Where a layer meets its child's layer at a joint (elbow,
+  wrist, knee), the blend that keeps the two joined was centred on the joint
+  line. It was 50/50 there and eased to all-parent a band (up to 8 px) back
+  into the parent. So the last few pixels of an upper arm answered up to half
+  to the forearm. Swing the forearm and the end of the upper arm swung too,
+  while the upper arm bone stayed exactly still.
+- **Distance weights.** A layer weighted by distance (no Controls layer, or
+  several bones) let a vertex blend with its bone's *children* as well as its
+  parent, so a parent's skin near the joint followed the child too.
+
+Neither was a bone moving. Both were the parent's artwork being weighted to
+its child. The torso did not move in the neck case because that joint has no
+seam: the neck starts at the torso bone's head, not at its tail.
+
+### The fix: weight flows one way (weight rule 2)
+
+- **The bend is on the child's side.** The seam's ease now starts at the
+  joint line, which is 100% parent, and runs two bands into the child. That is
+  the same width and gradient as before, moved onto the child's side, so the
+  joint still bends smoothly and still cannot open.
+- **A layer on the parent's side of a joint carries no seam at all.** Before,
+  even its outermost vertices, half a texel past the joint line, took a sliver
+  of the child (0.04–0.16 px). Now they take none. The child's layer eases from
+  100% parent at the joint line, which is where the parent's layer already is,
+  so the two still meet.
+- **Distance weights blend only up the hierarchy.** A vertex blends its own
+  bone with that bone's parent, never its children. The share is "how much
+  more this bone claims the point than its parent does", which falls to zero
+  where the two are equally near, so the field stays continuous.
+- **Rigs bound before 2.7.1 are migrated as they load.** For each vertex the
+  loader asks one question: are its weights still exactly what the old rule
+  gives at that spot? If so, nobody has touched it, and it takes what the new
+  rule gives. Anything painted or erased by hand differs from the old rule and
+  is kept exactly. Each mesh is stamped with the rule (`weightRule: 2`), so
+  this happens once.
+
+### And the shift in the screenshots: the camera
+
+The two screenshots also differ by a uniform shift of the whole picture: about
+(−32, +66) px, the same for the shoulder, the body and the bone's own head
+dot. The readout under the canvas shows Bone_16's head at the same world
+position in both (x 259, y 181), so the skeleton did not move. The *view* did.
+
+That is what a second finger does in Rig mode: it turns the gesture into a
+pan. It was reproduced with real touches. One finger dragged the forearm
+tail, a second landed part-way through, and the two moved together. The
+forearm swung, every other bone kept identical numbers, and the camera panned
+(−32, +64) px, which looks like the whole arm moved.
+
+That run also turned up a real bug. The bone move made before the second
+finger landed was **dropped from history**: no undo step, so the next Undo
+silently took it back together with the action before it. It is now committed
+as its own *Move bone*, the way Bind mode already ends a stroke when a second
+finger lands.
+
+![Rig mode, a second finger landing mid-drag: the forearm swings and the whole figure slides, because the camera panned](docs/images/child-parent-two-finger-pan.png)
+
+### Verified, with real touches, on the old build and on 2.7.1
+
+Each sheet shows the scene before and after the drag, then the parent layer
+rendered *alone* through the renderer's own geometry and rasterizer, with
+every scene pixel it changed in red, then the joint magnified.
+
+![Forearm tail drag: the UpperArm's lower end bends with it before the fix; untouched after](docs/images/child-parent-forearm.png)
+
+![Hand tail drag: the Forearm's cuff bends with the hand before the fix; untouched after](docs/images/child-parent-hand.png)
+
+![Shin tail drag: the Thigh's knee corner bends with the shin before the fix; untouched after](docs/images/child-parent-shin.png)
+
+![Free Move, Drag moves = Forearm: the UpperArm bends before the fix; untouched after](docs/images/child-parent-freemove.png)
+
+| | Before the fix | 2.7.1 |
+| --- | --- | --- |
+| Parent layer moved (drawn geometry): forearm / hand / shin / elbow / Free Move | 1.69 / 4.68 / 2.41 / 1.86 / 1.99 px | **0.000 px in every case** |
+| Parent-layer scene pixels changed, same five | 10 / 24 / 16 / 17 / 13 | **0 in every case** |
+| …with two elbow PxLinks (default anchor) | 10 / 24 / 16 / 17 / 13 | **0** |
+| …with the elbow PxLinks set to meet halfway | 26 / 24 / 16 / 21 / 33 | **0** |
+| A project saved by the old build, opened in 2.7.1 | (stamped `none`) | stamped 2 on load; every parent 0.000 px; the child moves exactly as a fresh bind does |
+| A second finger mid-drag | bone moved, **no undo step** | bone moved, one *Move bone* |
+| Joint seams (`tests/seams.mjs`, 41 checks, 14 new) | | no gap at any angle −150…150° at wrist or elbow; a child swung through its whole range moves its parent's layer 0 px; bound by the old rule the same swing moves it 5.9 px (the test is not blind); painted weights survive the migration exactly |
+| All 16 Node suites | | pass |
+
+With the seams one-sided, the child's first two bands bend instead. That is
+where the motion is, and the parent's artwork is now left exactly where it
+was. The "Follows parent" help says so.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

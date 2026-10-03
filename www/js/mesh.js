@@ -94,6 +94,7 @@ export class PartMesh {
     this.triangles = triangles; // flat list of vertex-index triples
     this.bindPose = {}; // { boneId: { head: {x,y}, rotation } } at bind time
     this.joints = []; // joint seams this layer's artwork sits on (withSeams)
+    this.weightRule = 0; // the auto-weight rule its weights were made by (WEIGHT_RULE)
   }
 
   get isBound() {
@@ -266,7 +267,32 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
 // by an older build, whose bind pose never recorded the hierarchy -- there is
 // no topology to go on and the rule falls back to plain distance, exactly as
 // it always was, rather than guessing at a skeleton it cannot see.
-function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUENCES) {
+//
+// A CHILD NEVER MOVES ITS PARENT'S SKIN (weight rule 2)
+//
+// Rule 1 let a vertex blend with its bone's CHILDREN as well as its parent,
+// by plain inverse-square distance. So the upper arm's own skin near the
+// elbow carried a share of the forearm, and swinging the forearm -- with the
+// upper arm bone dead still -- visibly bent the upper arm. Measured in the
+// real app, every bone's numbers exact, only the child's fields changed:
+// 1.7px of the upper arm moved with a 40-degree forearm swing, and 4.7px of
+// the forearm with a hand swing. Bones fixed, parent's ARTWORK not.
+//
+// Rule 2 lets weight flow only UP the hierarchy: a vertex blends its own
+// (nearest) bone with that bone's parent, never with its children. The
+// child's share is what it claims over its parent --
+//
+//   own  ~  1/d_own^2 - 1/d_parent^2        parent  ~  1/d_parent^2
+//
+// -- which is 0 where the two are equally near. So the field is still
+// continuous across the boundary between a bone and its child (the child's
+// side arrives there at 100% parent, the parent's side is 100% parent
+// already), and a joint still bends smoothly. It just bends on the CHILD's
+// side, where the motion is: nothing the parent's skin is weighted to can be
+// moved by a child.
+export const WEIGHT_RULE = 2;
+
+function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUENCES, rule = WEIGHT_RULE) {
   const measured = segments
     .map((segment) => ({
       id: segment.id,
@@ -278,18 +304,28 @@ function weightsFromSegments(world, segments, maxInfluences = DEFAULT_MAX_INFLUE
     .sort((a, b) => a.distance - b.distance);
   if (measured.length === 0) return {};
 
-  let candidates = measured;
-  if (segments.some((segment) => 'parentId' in segment)) {
+  const pull = (entry) => 1 / entry.distance ** FALLOFF_EXPONENT;
+  let raw;
+  if (!segments.some((segment) => 'parentId' in segment)) {
+    raw = measured.slice(0, maxInfluences).map((entry) => ({ id: entry.id, weight: pull(entry) }));
+  } else if (rule >= 2) {
+    const home = measured[0];
+    const homeSegment = segments.find((segment) => segment.id === home.id);
+    const parent = homeSegment && homeSegment.parentId
+      ? measured.find((entry) => entry.id === homeSegment.parentId) : null;
+    raw = parent && maxInfluences > 1
+      ? [{ id: home.id, weight: pull(home) - pull(parent) }, { id: parent.id, weight: pull(parent) }]
+      : [{ id: home.id, weight: 1 }];
+  } else {
+    // Rule 1, kept only so migrateWeightRule can recognise weights it wrote.
     const home = measured[0].id;
     const homeSegment = segments.find((segment) => segment.id === home);
     const jointed = new Set([home]);
     if (homeSegment && homeSegment.parentId) jointed.add(homeSegment.parentId);
     for (const segment of segments) if (segment.parentId === home) jointed.add(segment.id);
-    candidates = measured.filter((entry) => jointed.has(entry.id));
+    raw = measured.filter((entry) => jointed.has(entry.id)).slice(0, maxInfluences)
+      .map((entry) => ({ id: entry.id, weight: pull(entry) }));
   }
-  const ranked = candidates.slice(0, maxInfluences);
-
-  const raw = ranked.map((entry) => ({ id: entry.id, weight: 1 / entry.distance ** FALLOFF_EXPONENT }));
   const total = raw.reduce((sum, entry) => sum + entry.weight, 0);
 
   const weights = {};
@@ -404,6 +440,27 @@ function serialJoints(bonesStore, boneIds) {
   return joints;
 }
 
+// The seams a layer driven by `boneIds` takes part in under rule 2: those
+// where it is on the CHILD's side, or spans both. A layer whose bones include
+// a joint's parent but not its child -- an UpperArm layer at the elbow -- is
+// the parent's side of that joint, and the child gets no say over it at all.
+// Not even its outermost vertices, which sit half a texel past the joint
+// line and, given the seam, took a sliver of the forearm (0.04-0.16px). The
+// child's own layer still eases from 100% parent at the joint line, which is
+// where the parent's layer is too, so the two still meet.
+function ownSerialJoints(bonesStore, boneIds) {
+  return serialJoints(bonesStore, boneIds).filter((joint) => boneIds.has(joint.childId));
+}
+
+// Rule 2's view of a stored mesh's seams: a seam whose child drives this
+// layer ONLY through the seam is the parent's side of that joint (above).
+function ownSeams(mesh) {
+  return (mesh.joints || []).filter((joint) => {
+    const pose = mesh.bindPose && mesh.bindPose[joint.childId];
+    return !(pose && pose.jointOnly);
+  });
+}
+
 // A point in the joint's frame: s along the limb (negative on the parent's
 // side), t across it.
 function seamFrame(joint, point) {
@@ -413,6 +470,14 @@ function seamFrame(joint, point) {
     s: dx * joint.normal.x + dy * joint.normal.y,
     t: -dx * joint.normal.y + dy * joint.normal.x,
   };
+}
+
+// Where along the limb a seam eases from all-parent to all-child. Rule 1:
+// a band either side of the joint line. Rule 2: the same width (two bands,
+// so the same gradient, which the mesh density is chosen to hold), starting
+// AT the joint line and running into the child -- nothing of the parent's.
+function seamSpan(joint, rule = WEIGHT_RULE) {
+  return rule >= 2 ? { from: 0, to: 2 * joint.band } : { from: -joint.band, to: joint.band };
 }
 
 function homeBone(weights) {
@@ -428,7 +493,7 @@ function homeBone(weights) {
 // is `home`. A vertex on the child's side keeps the seam rule all the way
 // back across the parent's length (a hand drawn tucked into its sleeve moves
 // with the sleeve), and one on the parent's side likewise into the child's.
-function seamAt(world, home, joints) {
+function seamAt(world, home, joints, rule = WEIGHT_RULE) {
   let chosen = null;
   let chosenScore = Infinity;
   for (const joint of joints) {
@@ -437,7 +502,8 @@ function seamAt(world, home, joints) {
     if (!(joint.reach > 0)) continue;
     const { s, t } = seamFrame(joint, world);
     if (Math.abs(t) > joint.reach) continue;
-    if (isChild ? (s >= joint.band || s < -joint.parentLength) : (s <= -joint.band || s > joint.childLength)) {
+    const { to } = seamSpan(joint, rule);
+    if (isChild ? (s >= to || s < -joint.parentLength) : (s <= -joint.band || s > joint.childLength)) {
       continue;
     }
     const score = Math.abs(s) / joint.band;
@@ -449,12 +515,26 @@ function seamAt(world, home, joints) {
 // Weights for a point, with any joint seam it lies on taking over. The
 // seam's weights depend on nothing but the point's position, which is the
 // whole guarantee: every layer computes the same ones.
-function withSeams(world, weights, joints) {
+//
+// THE BEND IS ON THE CHILD'S SIDE (weight rule 2)
+//
+// Rule 1 centred the blend on the joint line: 50/50 there, easing to all
+// parent a band's width back INTO THE PARENT. So the parent's own artwork
+// within that band -- the last 8px of an upper arm -- answered up to half to
+// the child, and swinging the forearm bent the upper arm with the upper arm
+// bone never moving: the parent visibly dragged by its child. Rule 2 starts
+// the blend at the joint line: everything on the parent's side is 100%
+// parent, and the ease to all-child happens across the band on the child's
+// side. Still a function of position alone, so the two layers still agree at
+// every point of the seam and it still cannot open; the child's first few
+// pixels bend instead, which is where the motion actually is.
+function withSeams(world, weights, joints, rule = WEIGHT_RULE) {
   if (!joints || joints.length === 0) return weights;
-  const seam = seamAt(world, homeBone(weights), joints);
+  const seam = seamAt(world, homeBone(weights), joints, rule);
   if (!seam) return weights;
   const { joint, s } = seam;
-  const child = smoothstep01((s + joint.band) / (2 * joint.band));
+  const { from, to } = seamSpan(joint, rule);
+  const child = smoothstep01((s - from) / (to - from));
   const out = {};
   if (1 - child > WEIGHT_EPSILON) out[joint.parentId] = 1 - child;
   if (child > WEIGHT_EPSILON) out[joint.childId] = child;
@@ -468,7 +548,7 @@ function withSeams(world, weights, joints) {
 // plus `margin` -- one mesh cell, so every triangle holding seam artwork has
 // all three corners on the seam rule. Zero when the layer has no artwork
 // there, which leaves that joint out of this layer entirely.
-function seamReach(part, joint, segments, margin) {
+function seamReach(part, joint, segments, margin, rule = WEIGHT_RULE) {
   const width = part.naturalWidth;
   const height = part.naturalHeight;
   let widest = -1;
@@ -477,8 +557,8 @@ function seamReach(part, joint, segments, margin) {
       if (part.pixels[(v * width + u) * 4 + 3] === 0) continue;
       const world = localToWorld(part, { x: u + 0.5 - width / 2, y: v + 0.5 - height / 2 });
       const { s, t } = seamFrame(joint, world);
-      if (Math.abs(s) > joint.band || Math.abs(t) <= widest) continue;
-      const home = homeBone(weightsFromSegments(world, segments));
+      if (s < -joint.band || s > seamSpan(joint, rule).to || Math.abs(t) <= widest) continue;
+      const home = homeBone(weightsFromSegments(world, segments, DEFAULT_MAX_INFLUENCES, rule));
       if (home !== joint.parentId && home !== joint.childId) continue;
       widest = Math.abs(t);
     }
@@ -520,11 +600,21 @@ function bindingSegments(part, bonesStore) {
   return { candidateIds, segments };
 }
 
+function bindPoseSegments(mesh) {
+  return Object.entries(mesh.bindPose || {})
+    .filter(([, pose]) => !pose.jointOnly)
+    .map(([id, pose]) => {
+      const segment = { id, head: pose.head, tail: pose.tail || pose.head, rotation: pose.rotation };
+      if ('parentId' in pose) segment.parentId = pose.parentId;
+      return segment;
+    });
+}
+
 // The same rule, reachable from outside, for a vertex added to a mesh that
 // is already bound: it reads the bind pose the mesh was bound against, so
 // the new vertex agrees with the ones around it rather than with wherever
 // the bones happen to be swinging now.
-export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAULT_MAX_INFLUENCES) {
+export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAULT_MAX_INFLUENCES, rule = WEIGHT_RULE) {
   // The SAME segments autoWeightMesh measured against, read back from the
   // bind pose: head AND tail, and the hierarchy.
   //
@@ -541,29 +631,64 @@ export function autoWeightOneVertex(mesh, part, restLocal, maxInfluences = DEFAU
   // Bones the bind pose holds only for a joint seam are not candidates for
   // the ordinary rule -- they were never chosen to drive this layer -- and
   // come back in through the seam rule, exactly as they did at bind time.
-  const segments = Object.entries(mesh.bindPose || {})
-    .filter(([, pose]) => !pose.jointOnly)
-    .map(([id, pose]) => {
-      const segment = { id, head: pose.head, tail: pose.tail || pose.head, rotation: pose.rotation };
-      if ('parentId' in pose) segment.parentId = pose.parentId;
-      return segment;
-    });
+  const segments = bindPoseSegments(mesh);
   if (segments.length === 0) return {};
   const world = localToWorld(part, restLocal);
-  return withSeams(world, weightsFromSegments(world, segments, maxInfluences), mesh.joints);
+  return withSeams(world, weightsFromSegments(world, segments, maxInfluences, rule), mesh.joints, rule);
+}
+
+// A RIG BOUND UNDER RULE 1 GETS RULE 2 WITHOUT LOSING ANYONE'S PAINTING
+//
+// Weights are stored, not recomputed, so a project bound before rule 2 would
+// keep letting its children move its parents until someone re-ran
+// Auto-weight -- which would also throw away every weight they had painted.
+// So on load, each vertex is asked one question: are its weights still
+// EXACTLY what rule 1 gives at that spot (same bind pose, same seams)? Then
+// nobody has touched it since binding, and it takes what rule 2 gives there.
+// Anything painted, erased or otherwise changed by hand differs from rule 1
+// and is left precisely as it is. The mesh is stamped so this happens once.
+// Returns how many vertices changed.
+export function migrateWeightRule(mesh, part) {
+  if (!mesh || !part || mesh.weightRule === WEIGHT_RULE) return 0;
+  mesh.weightRule = WEIGHT_RULE;
+  if (!mesh.isBound) return 0;
+  const untouched = mesh.vertices.map((vertex) => sameWeights(
+    autoWeightOneVertex(mesh, part, vertex.restLocal, DEFAULT_MAX_INFLUENCES, 1), vertex.weights));
+  // Rule 1 kept seams on the parent's side of a joint too; rule 2 drops them
+  // (ownSerialJoints). Only after rule 1's weights have been recognised.
+  mesh.joints = ownSeams(mesh);
+  let changed = 0;
+  mesh.vertices.forEach((vertex, i) => {
+    if (!untouched[i]) return;
+    const after = autoWeightOneVertex(mesh, part, vertex.restLocal);
+    if (sameWeights(after, vertex.weights)) return;
+    vertex.weights = after;
+    changed++;
+  });
+  return changed;
+}
+
+function sameWeights(a, b) {
+  const ids = new Set([...Object.keys(a), ...Object.keys(b || {})]);
+  for (const id of ids) if (Math.abs((a[id] || 0) - ((b && b[id]) || 0)) > 1e-9) return false;
+  return true;
 }
 
 // Auto-weighting: every vertex is bound to its nearest few bones by
 // inverse squared distance to the bone segment, normalized to sum to 1.
 // Capping the influence count keeps deformation crisp -- letting every
 // bone touch every vertex produces mush.
-export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_MAX_INFLUENCES) {
+//
+// `rule` is the current WEIGHT_RULE everywhere in the app; rule 1 is kept
+// reproducible so a test can build a rig exactly as it was bound before.
+export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_MAX_INFLUENCES, rule = WEIGHT_RULE) {
   // Which bones may drive this layer: see bindingSegments. Note that a
   // SPRING bone may well win a share of a layer it was never meant to
   // drive; deformRaw is what stops that share from jiggling.
   const { candidateIds, segments } = bindingSegments(part, bonesStore);
   mesh.bindPose = {};
   mesh.joints = [];
+  mesh.weightRule = rule;
   if (segments.length === 0) {
     for (const vertex of mesh.vertices) vertex.weights = {};
     return mesh;
@@ -586,8 +711,8 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
   // weight by the same seams the layer was bound with.
   const cellSize = meshCellSize(mesh, part);
   const cell = Math.hypot(cellSize.w, cellSize.h) * (part.scale || 1);
-  const joints = serialJoints(bonesStore, candidateIds);
-  for (const joint of joints) joint.reach = seamReach(part, joint, segments, cell);
+  const joints = rule >= 2 ? ownSerialJoints(bonesStore, candidateIds) : serialJoints(bonesStore, candidateIds);
+  for (const joint of joints) joint.reach = seamReach(part, joint, segments, cell, rule);
   mesh.joints = joints.filter((joint) => joint.reach > 0);
   // A seam may bring in the one bone jointed to this layer's own -- the
   // forearm, for a Hand layer. Its bind transform is needed to skin by it;
@@ -610,7 +735,7 @@ export function autoWeightMesh(mesh, part, bonesStore, maxInfluences = DEFAULT_M
 
   for (const vertex of mesh.vertices) {
     const world = localToWorld(part, vertex.restLocal);
-    vertex.weights = withSeams(world, weightsFromSegments(world, segments, maxInfluences), mesh.joints);
+    vertex.weights = withSeams(world, weightsFromSegments(world, segments, maxInfluences, rule), mesh.joints, rule);
   }
 
   return mesh;
@@ -675,23 +800,23 @@ function carryBoneOffsetIntoOrigin(part, bonesStore) {
 // narrowest seam needs -- one cell per band -- and never coarser than asked.
 // Capped at the density slider's own maximum. A layer with no seam artwork
 // is untouched.
-export function seamDensity(part, bonesStore) {
+export function seamDensity(part, bonesStore, rule = WEIGHT_RULE) {
   const { candidateIds, segments } = bindingSegments(part, bonesStore);
   if (segments.length === 0) return 0;
   const box = artworkBounds(part) || { width: part.naturalWidth, height: part.naturalHeight };
   const longest = Math.max(box.width, box.height) * (part.scale || 1);
   let needed = 0;
-  for (const joint of serialJoints(bonesStore, candidateIds)) {
-    if (seamReach(part, joint, segments, 0) <= 0) continue;
+  for (const joint of rule >= 2 ? ownSerialJoints(bonesStore, candidateIds) : serialJoints(bonesStore, candidateIds)) {
+    if (seamReach(part, joint, segments, 0, rule) <= 0) continue;
     needed = Math.max(needed, Math.ceil(longest / (2 * joint.band)));
   }
   return Math.min(MAX_DENSITY, needed);
 }
 
-export function bindPart(part, bonesStore, density) {
+export function bindPart(part, bonesStore, density, rule = WEIGHT_RULE) {
   carryBoneOffsetIntoOrigin(part, bonesStore);
-  const resolved = Math.max(density || defaultDensity(part), seamDensity(part, bonesStore));
-  part.mesh = autoWeightMesh(generateMesh(part, resolved), part, bonesStore);
+  const resolved = Math.max(density || defaultDensity(part), seamDensity(part, bonesStore, rule));
+  part.mesh = autoWeightMesh(generateMesh(part, resolved), part, bonesStore, DEFAULT_MAX_INFLUENCES, rule);
   return part.mesh;
 }
 
@@ -927,7 +1052,7 @@ export function deformVerticesSnapped(mesh, part, boneTransforms) {
 function seamVertices(mesh, part) {
   const joints = mesh.joints || [];
   if (joints.length === 0) return [];
-  const key = `${vertexSignature(mesh)}|${part.x}|${part.y}|${part.scale}|${part.rotation}`;
+  const key = `${vertexSignature(mesh)}|${part.x}|${part.y}|${part.scale}|${part.rotation}|${mesh.weightRule}`;
   if (mesh._seamVertices && mesh._seamVerticesKey === key && mesh._seamVerticesJoints === joints) {
     return mesh._seamVertices;
   }
@@ -935,7 +1060,7 @@ function seamVertices(mesh, part) {
     const world = localToWorld(part, vertex.restLocal);
     return joints.some((joint) => {
       const { s, t } = seamFrame(joint, world);
-      return Math.abs(s) < joint.band && Math.abs(t) <= joint.reach;
+      return s > -joint.band && s < seamSpan(joint, mesh.weightRule >= 2 ? 2 : 1).to && Math.abs(t) <= joint.reach;
     });
   });
   mesh._seamVertices = flags;

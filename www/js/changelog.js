@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.7.1',
+    date: '2026-10-03',
+    title: 'Moving a child bone never moves its parent\u2019s artwork',
+    kind: 'patch',
+    notes: [
+      'Swinging a forearm, hand, shin or any other child bone no longer bends its parent\u2019s artwork. The bones were always exact; the skin was not: the parent layer\u2019s last few pixels at the joint answered half to the child, so the end of an upper arm swung with its forearm. Now a parent\u2019s artwork answers to the parent alone, and the bend at a joint happens on the child\u2019s side, the same smooth width as before, still with no gap.',
+      'The same for a layer weighted to several bones by distance (one arm layer for upper arm and forearm, or no Controls layer): its skin can follow its own bone\u2019s parent, never its children.',
+      'Rigs bound before this update are brought up to date as they open: every weight Auto-weight made is redone by the new rule, and every weight you painted by hand is kept exactly.',
+      'Rig mode: a second finger landing while you drag a bone handle pans the view, as before, but the bone move made so far is now its own Move bone in Undo. It used to be dropped, so the next Undo took it back together with the step before it.',
+    ],
+  },
+  {
     version: '2.7.0',
     date: '2026-10-03',
     title: 'Pierce: the wedge previewed live as you place it, its width a share of the piercer; paint opacity; PxLink select and delete',

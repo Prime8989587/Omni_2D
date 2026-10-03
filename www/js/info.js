@@ -408,7 +408,12 @@ const TOPICS = {
       'like hair or loose cloth reacting to motion.\n' +
       '• Pivot -- carried along by its parent’s position, but never ' +
       'turned by it; its own angle is set separately. Useful for something ' +
-      'that should move with the body without inheriting its rotation.',
+      'that should move with the body without inheriting its rotation.\n\n' +
+      'Whichever you pick, it only ever runs one way: a child follows its ' +
+      'parent, never the reverse. Moving a bone never moves its parent ' +
+      'bone, nor a pixel of its parent’s artwork -- where two layers ' +
+      'meet at a joint, the skin bends on the child’s side, so the ' +
+      'parent stays exactly where it is.',
   },
   'weight-tool': {
     title: 'Weight tool',

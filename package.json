@@ -1,6 +1,6 @@
 {
   "name": "omni_2d",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "description": "Capacitor-wrapped HTML/JS/Canvas app for Android.",
   "main": "index.js",
   "scripts": {

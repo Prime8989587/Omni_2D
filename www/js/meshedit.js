@@ -600,6 +600,7 @@ export function transferWeights(oldMesh, newMesh, { offsetU = 0, offsetV = 0 } =
   // The joint seams travel with the bind pose they were measured against --
   // a trimmed layer is still joined to its neighbours where it was.
   newMesh.joints = (oldMesh.joints || []).map((joint) => ({ ...joint }));
+  newMesh.weightRule = oldMesh.weightRule;
   return { carried, orphaned, total: newMesh.vertices.length };
 }
 

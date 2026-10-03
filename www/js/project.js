@@ -23,7 +23,7 @@ import {
   PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
-import { MeshVertex, PartMesh, sanitizeWeights, generateMesh } from './mesh.js';
+import { MeshVertex, PartMesh, sanitizeWeights, generateMesh, migrateWeightRule } from './mesh.js';
 import { transferWeights } from './meshedit.js';
 import { sceneStore } from './scene.js';
 import { resetPierceContainment } from './pierce.js';
@@ -65,6 +65,9 @@ function serializeMesh(mesh) {
     // same function serves undo, so dropping them here would quietly unbind
     // the seams on the first undo, not just on the next load.
     joints: (mesh.joints || []).map(copyJoint),
+    // Which auto-weight rule made these weights (mesh.js, WEIGHT_RULE): a
+    // mesh without it is migrated once on load (migrateWeightRule).
+    weightRule: mesh.weightRule || 0,
   };
 }
 
@@ -124,6 +127,7 @@ function deserializeMesh(data) {
   // A mesh bound before seams existed has none, and behaves exactly as it
   // did -- re-running Auto-weight is what gives it seams.
   mesh.joints = (Array.isArray(data.joints) ? data.joints : []).filter(validJoint).map(copyJoint);
+  mesh.weightRule = Number.isInteger(data.weightRule) ? data.weightRule : 0;
   return mesh;
 }
 
@@ -248,6 +252,10 @@ function deserializePart(data) {
   // Point and holding there.
   part.pierceWedgeLock = clampWedgeLock(data.pierceWedgeLock ?? DEFAULT_WEDGE_LOCK);
   part.mesh = refitLegacyMesh(part, deserializeMesh(data.mesh));
+  // Bound before a child was barred from moving its parent's skin: the
+  // weights auto-weighting made are brought up to the current rule, and
+  // anything painted by hand is kept exactly (mesh.js, migrateWeightRule).
+  migrateWeightRule(part.mesh, part);
   return part;
 }
 
@@ -268,6 +276,7 @@ function refitLegacyMesh(part, mesh) {
     transferWeights(mesh, fitted);
     fitted.bindPose = mesh.bindPose;
     fitted.joints = mesh.joints;
+    fitted.weightRule = mesh.weightRule;
   }
   return fitted;
 }

@@ -49,7 +49,7 @@ function layer(name, width, height, x, y, rgb) {
   return part;
 }
 
-function buildArm() {
+function buildArm(rule) {
   partsStore.replaceAll([], null);
   bonesStore.replaceAll([], null);
   const torso = layer('Torso', 28, 38, 50, 30, [44, 96, 206]);
@@ -68,7 +68,7 @@ function buildArm() {
   bonesStore.setAttachedPart(bone('upper').id, upper.id);
   bonesStore.setAttachedPart(bone('fore').id, fore.id);
   bonesStore.setAttachedPart(bone('hand').id, hand.id);
-  for (const part of [torso, upper, fore, hand]) bindPart(part, bonesStore);
+  for (const part of [torso, upper, fore, hand]) bindPart(part, bonesStore, undefined, rule);
   return { torso, upper, fore, hand, bone };
 }
 
@@ -225,15 +225,16 @@ console.log('Joint seams: the arm stays joined where its layers meet');
 
 {
   const { upper, fore, hand, bone } = buildArm();
-  say(fore.mesh.joints.length === 2 && hand.mesh.joints.length === 1,
-    'the forearm layer sits on two seams (elbow, wrist); the hand on one (wrist)',
-    `forearm ${fore.mesh.joints.length}, hand ${hand.mesh.joints.length}`);
+  say(upper.mesh.joints.length === 0 && fore.mesh.joints.length === 1 && hand.mesh.joints.length === 1,
+    'each layer carries only the seam on its child side: forearm the elbow, hand the wrist, upper arm none',
+    `upper ${upper.mesh.joints.length}, forearm ${fore.mesh.joints.length}, hand ${hand.mesh.joints.length}`);
 
-  // ONE RULE: the weights at a point on the seam do not depend on whose
-  // artwork is there.
+  // ONE RULE: the weights at a point where both layers' artwork can meet --
+  // the parent's side of the wrist line, and the line itself -- do not
+  // depend on whose artwork is there.
   let worstDiff = 0;
   for (let x = 42.5; x <= 51.5; x += 1) {
-    for (const y of [76.5, 77.5, 78.5, 79.5]) {
+    for (const y of [74.5, 75.5, 76.5, 77.5]) {
       const w = { x, y };
       const inHand = autoWeightOneVertex(hand.mesh, hand, { x: w.x - hand.centerX, y: w.y - hand.centerY });
       const inFore = autoWeightOneVertex(fore.mesh, fore, { x: w.x - fore.centerX, y: w.y - fore.centerY });
@@ -242,23 +243,31 @@ console.log('Joint seams: the arm stays joined where its layers meet');
       }
     }
   }
-  say(worstDiff < 1e-12, 'every point on the wrist seam is weighted identically by the Hand and Forearm layers',
+  say(worstDiff < 1e-12, 'every point up to the wrist line is weighted identically by the Hand and Forearm layers',
     `worst difference ${worstDiff.toExponential(2)}`);
 
-  // The weights at the joint line itself are an even split.
+  // On the joint line itself the child has no say: the bend starts there
+  // and runs into the child, so the parent's side is all parent (rule 2).
   const onLine = autoWeightOneVertex(hand.mesh, hand, { x: 46.5 - hand.centerX, y: 77.5 - hand.centerY });
   const handShare = onLine[bone('hand').id] || 0;
-  say(Math.abs(handShare - 0.5) < 1e-9, 'on the joint line itself the split is exactly 50/50',
+  say(handShare === 0 && Math.abs((onLine[bone('fore').id] || 0) - 1) < 1e-12,
+    'on the joint line itself the point is 100% parent: the child\'s share starts there',
     `hand ${handShare.toFixed(6)}`);
+  const halfway = autoWeightOneVertex(hand.mesh, hand, { x: 46.5 - hand.centerX, y: 77.5 + hand.mesh.joints[0].band - hand.centerY });
+  say(Math.abs((halfway[bone('hand').id] || 0) - 0.5) < 1e-9,
+    'one band into the child the split is exactly 50/50 -- the old gradient, moved onto the child\'s side',
+    `hand ${(halfway[bone('hand').id] || 0).toFixed(6)}`);
 
-  // Beyond the band, each layer is exactly its own bone -- rigid.
+  // Beyond the seam's span (two bands into the child), each layer is exactly
+  // its own bone -- rigid.
   const band = hand.mesh.joints[0].band;
-  const handFar = hand.mesh.vertices.filter((v) => localToWorld(hand, v.restLocal).y > 77.5 + band + 1e-9);
+  const elbowBand = fore.mesh.joints.find((j) => j.childId === bone('fore').id).band;
+  const handFar = hand.mesh.vertices.filter((v) => localToWorld(hand, v.restLocal).y > 77.5 + 2 * band + 1e-9);
   say(handFar.length > 0 && handFar.every((v) => names(v.weights) === 'hand'),
-    'hand vertices beyond the seam band are 100% hand bone', `${handFar.length} vertices`);
+    'hand vertices beyond the seam are 100% hand bone', `${handFar.length} vertices`);
   const foreMid = fore.mesh.vertices.filter((v) => {
     const y = localToWorld(fore, v.restLocal).y;
-    return y > 55.5 + fore.mesh.joints[0].band + 1e-9 && y < 77.5 - band - 1e-9;
+    return y > 55.5 + 2 * elbowBand + 1e-9 && y < 77.5 - band - 1e-9;
   });
   say(foreMid.length > 0 && foreMid.every((v) => names(v.weights) === 'fore'),
     'forearm vertices between its two seams are 100% forearm bone', `${foreMid.length} vertices`);
@@ -329,6 +338,163 @@ console.log('Joint seams: the arm stays joined where its layers meet');
 }
 
 // ---------------------------------------------------------------------------
+console.log('A child never moves its parent');
+
+// How far a layer's DRAWN geometry (snapped, exactly as rendered) has moved
+// from where it is drawn at rest.
+function travel(part, transforms, rest) {
+  const now = deformVerticesSnapped(part.mesh, part, transforms);
+  return Math.max(0, ...now.map((p, i) => Math.hypot(p.x - rest[i].x, p.y - rest[i].y)));
+}
+
+function swingWorst(child, parents, bone) {
+  const rest = parents.map((p) => deformVerticesSnapped(p.mesh, p, bonesStore.snapshotTransforms()));
+  let worst = 0;
+  for (let deg = -150; deg <= 150; deg += 10) {
+    setAngle(bone(child), deg);
+    const transforms = bonesStore.snapshotTransforms();
+    parents.forEach((p, k) => { worst = Math.max(worst, travel(p, transforms, rest[k])); });
+  }
+  setAngle(bone(child), 0);
+  return worst;
+}
+
+{
+  // The reported bug: swing a forearm with the upper arm bone dead still,
+  // and the upper arm's own artwork near the elbow went with it. Every
+  // child, swung through its whole range: its parent's layer and every
+  // ancestor's must not move by so much as a pixel.
+  const { torso, upper, fore, hand, bone } = buildArm();
+  const cases = [
+    ['fore', [upper, torso], 'swinging the forearm moves neither the UpperArm nor the Torso layer'],
+    ['hand', [fore, upper, torso], 'swinging the hand moves neither the Forearm, UpperArm nor Torso layer'],
+    ['upper', [torso], 'swinging the upper arm leaves the Torso layer where it is'],
+  ];
+  for (const [child, parents, label] of cases) {
+    const worst = swingWorst(child, parents, bone);
+    say(worst === 0, label, `worst ${worst.toFixed(3)}px over -150..150 degrees`);
+  }
+
+  // The parent's side of each seam is 100% parent, in every layer.
+  let leaked = 0;
+  for (const part of [upper, fore, hand]) {
+    for (const v of part.mesh.vertices) {
+      const world = localToWorld(part, v.restLocal);
+      for (const joint of part.mesh.joints) {
+        const s = (world.x - joint.head.x) * joint.normal.x + (world.y - joint.head.y) * joint.normal.y;
+        if (s <= 0 && (v.weights[joint.childId] || 0) > 0) leaked++;
+      }
+    }
+  }
+  say(leaked === 0, 'no vertex on the parent\'s side of any joint carries the child\'s weight', `${leaked} vertices`);
+
+}
+
+{
+  // THE GUARD CAN SEE IT: the same arm bound by rule 1 (the blend centred on
+  // the joint line, a seam on both layers) drags the upper arm with the
+  // forearm -- the reported bug, measured by the same function.
+  const { upper, fore, bone } = buildArm(1);
+  const before = swingWorst('fore', [upper], bone);
+  say(before > 1, 'bound by the old rule, the same swing visibly moves the UpperArm layer (the test is not blind)',
+    `${before.toFixed(3)}px`);
+  const handBefore = swingWorst('hand', [fore], bone);
+  say(handBefore > 1, 'and the hand swing moves the Forearm layer', `${handBefore.toFixed(3)}px`);
+}
+
+{
+  // Layers with NO "Controls layer" bone are weighted by distance. Rule 1
+  // let a vertex blend with its bone's children; rule 2 only with its
+  // parent, so the same promise holds there too.
+  partsStore.replaceAll([], null);
+  bonesStore.replaceAll([], null);
+  const arm = layer('Arm', 10, 56, 42, 33, [82, 132, 236]);
+  const add = (name, parent, head, tail) => bonesStore.addBone({
+    parentId: parent ? bonesStore.bones.find((b) => b.name === parent).id : null, head, tail, name,
+  });
+  add('upper', null, { x: 46.5, y: 34.5 }, { x: 46.5, y: 55.5 });
+  add('fore', 'upper', { x: 46.5, y: 55.5 }, { x: 46.5, y: 77.5 });
+  add('hand', 'fore', { x: 46.5, y: 77.5 }, { x: 46.5, y: 87.5 });
+  const bone = (n) => bonesStore.bones.find((b) => b.name === n);
+  bindPart(arm, bonesStore);
+  // Vertices nearer the upper arm than the forearm: the upper arm's skin.
+  const own = arm.mesh.vertices.map((v) => localToWorld(arm, v.restLocal).y < 55.5);
+  const rest = deformVerticesSnapped(arm.mesh, arm, bonesStore.snapshotTransforms());
+  let worst = 0;
+  for (let deg = -150; deg <= 150; deg += 10) {
+    setAngle(bone('fore'), deg);
+    const now = deformVerticesSnapped(arm.mesh, arm, bonesStore.snapshotTransforms());
+    now.forEach((p, i) => { if (own[i]) worst = Math.max(worst, Math.hypot(p.x - rest[i].x, p.y - rest[i].y)); });
+  }
+  setAngle(bone('fore'), 0);
+  say(worst === 0, 'one arm layer weighted by distance: swinging the forearm never moves the upper arm\'s part of it',
+    `worst ${worst.toFixed(3)}px`);
+  // And the layer still bends smoothly at the elbow rather than tearing.
+  setAngle(bone('fore'), 90);
+  const bent = deformVertices(arm.mesh, arm, bonesStore.snapshotTransforms());
+  setAngle(bone('fore'), 0);
+  let longest = 0;
+  const T = arm.mesh.triangles;
+  for (let t = 0; t < T.length; t += 3) {
+    for (const [a, b] of [[T[t], T[t + 1]], [T[t + 1], T[t + 2]], [T[t + 2], T[t]]]) {
+      const restLen = Math.hypot(arm.mesh.vertices[a].restLocal.x - arm.mesh.vertices[b].restLocal.x,
+        arm.mesh.vertices[a].restLocal.y - arm.mesh.vertices[b].restLocal.y);
+      longest = Math.max(longest, Math.hypot(bent[a].x - bent[b].x, bent[a].y - bent[b].y) / restLen);
+    }
+  }
+  say(longest < 2.5, 'bent 90 degrees, no triangle edge stretches past 2.5x -- the elbow bends, it does not shear',
+    `worst stretch ${longest.toFixed(2)}x`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('A rig bound under the old rule is brought up to date on load');
+
+{
+  // A rig from before: bound by rule 1, saved without a rule stamp, and one
+  // vertex someone painted by hand near the elbow.
+  const { upper, bone } = buildArm(1);
+  const painted = upper.mesh.vertices.reduce((best, v, i) => {
+    const y = localToWorld(upper, v.restLocal).y;
+    return y > localToWorld(upper, upper.mesh.vertices[best].restLocal).y ? i : best;
+  }, 0);
+  const upperId = bone('upper').id, foreId = bone('fore').id;
+  upper.mesh.vertices[painted].weights = { [upperId]: 0.7, [foreId]: 0.3 };
+  const data = JSON.parse(JSON.stringify(serializeProject()));
+  for (const p of data.parts) if (p.mesh) delete p.mesh.weightRule;
+  applyProject(data);
+  const U = partsStore.parts.find((p) => p.name === 'UpperArm');
+  const F = partsStore.parts.find((p) => p.name === 'Forearm');
+  const H = partsStore.parts.find((p) => p.name === 'Hand');
+  say([U, F, H].every((p) => p.mesh.weightRule === 2), 'every mesh is stamped with the current rule once loaded');
+  const kept = U.mesh.vertices[painted].weights;
+  say(Math.abs(kept[upperId] - 0.7) < 1e-12 && Math.abs(kept[foreId] - 0.3) < 1e-12,
+    'the hand-painted vertex is kept exactly as painted', JSON.stringify(Object.values(kept).map((w) => +w.toFixed(3))));
+  let off = 0;
+  for (const part of [U, F, H]) {
+    part.mesh.vertices.forEach((v, i) => {
+      if (part === U && i === painted) return;
+      const fresh = autoWeightOneVertex(part.mesh, part, v.restLocal);
+      for (const id of new Set([...Object.keys(fresh), ...Object.keys(v.weights)])) {
+        off = Math.max(off, Math.abs((fresh[id] || 0) - (v.weights[id] || 0)));
+      }
+    });
+  }
+  say(off < 1e-12, 'every untouched vertex now carries exactly what a fresh bind gives', `worst ${off.toExponential(2)}`);
+  // Swing the forearm: the upper arm moves only at the one vertex its owner
+  // chose to give the forearm a share of.
+  const rest = deformVerticesSnapped(U.mesh, U, bonesStore.snapshotTransforms());
+  let worstOther = 0;
+  setAngle(bone('fore'), 60);
+  const now = deformVerticesSnapped(U.mesh, U, bonesStore.snapshotTransforms());
+  setAngle(bone('fore'), 0);
+  now.forEach((p, i) => { if (i !== painted) worstOther = Math.max(worstOther, Math.hypot(p.x - rest[i].x, p.y - rest[i].y)); });
+  say(worstOther === 0, 'after loading, the forearm no longer moves the upper arm (bar the vertex painted to follow it)',
+    `worst ${worstOther.toFixed(3)}px`);
+  const again = JSON.parse(JSON.stringify(serializeProject()));
+  say(again.parts.every((p) => !p.mesh || p.mesh.weightRule === 2), 'and it saves with the stamp, so it is migrated only once');
+}
+
+// ---------------------------------------------------------------------------
 console.log('Where seams deliberately do not apply');
 
 {
@@ -339,14 +505,14 @@ console.log('Where seams deliberately do not apply');
   say(!shoulder, 'no seam at a side-attached joint (arm on the torso), where "which side" has no answer');
   say(torso.mesh.joints.length === 0 && Object.values(torso.mesh.vertices).every((v) => names(v.weights) === 'torso'),
     'so the torso layer stays 100% torso, exactly as it was');
-  say(upper.mesh.joints.length === 1 && bonesStore.byId(upper.mesh.joints[0].parentId).name === 'upper',
-    'the upper arm carries only its elbow seam');
+  say(upper.mesh.joints.length === 0 && Object.values(upper.mesh.vertices).every((v) => names(v.weights) === 'upper'),
+    'the upper arm, the parent\'s side of its only seam, carries none: 100% upper arm');
 
   // A layer with no artwork near any of its joints gets none.
-  const patch = layer('Patch', 6, 6, 44, 63, [200, 40, 40]);
-  bonesStore.setAttachedPart(bonesStore.bones.find((b) => b.name === 'fore').id, patch.id);
+  const patch = layer('Patch', 6, 6, 44, 38, [200, 40, 40]);
+  bonesStore.setAttachedPart(bonesStore.bones.find((b) => b.name === 'upper').id, patch.id);
   bindPart(patch, bonesStore);
-  say(patch.mesh.joints.length === 0, 'a patch in the middle of the forearm, far from both joints, has no seam',
+  say(patch.mesh.joints.length === 0, 'a patch in the middle of the upper arm, far from the elbow, has no seam',
     `${patch.mesh.joints.length} seams`);
 }
 

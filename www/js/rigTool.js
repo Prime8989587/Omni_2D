@@ -197,8 +197,16 @@ function handleTap(screenPoint) {
 export function initRigTool(canvasEl) {
   canvasEl.addEventListener('pointerdown', (event) => {
     if (appState.state !== AppState.RIG) return;
-    // A second finger means a pinch, which viewGestures owns.
+    // A second finger means a pinch, which viewGestures owns. A handle drag
+    // already under way ends here, and what it moved is committed as its own
+    // "Move bone" -- it used to be dropped, so the move had no undo step and
+    // the next Undo silently took it back along with the action before it.
     if (view.activePointerCount > 1) {
+      if (drag) {
+        history.commitCapture(dragHistory, true);
+        emit();
+      }
+      dragHistory = null;
       drag = null;
       pan = null;
       pointerDownScreen = null;
