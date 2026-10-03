@@ -8,7 +8,7 @@ import { createIcon, setIcon } from './pixelIcons.js';
 import { initCheckpoints, openCheckpoints } from './checkpoints.js';
 import { initRecentTools, registerToolLauncher } from './recentTools.js';
 import {
-  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics, clampWedgeLock,
+  partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics, clampWedgeLock, WedgeWidthMode,
 } from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
@@ -24,7 +24,7 @@ import {
 } from './bindTool.js';
 import {
   initPoseTool, initMovePad, PoseTarget, getPoseTarget, setPoseTarget, hasPiercerTarget,
-  getTargetLayer, setTargetLayer, targetLayerStatus, layerBone,
+  getTargetLayer, setTargetLayer, targetLayerStatus, layerBone, getTargetPiercer, setTargetPiercer,
 } from './poseTool.js';
 import { bindPart, defaultDensity } from './mesh.js';
 import { history } from './history.js';
@@ -181,7 +181,9 @@ function cacheElements() {
     'piercePhysicsBothBtn', 'piercePhysicsHint',
     'pierceDentRow', 'pierceDentDepthSlider', 'pierceDentDepthValue',
     'pierceDentWidthSlider', 'pierceDentWidthValue',
-    'pierceDentDilationSlider', 'pierceDentDilationValue',
+    'pierceDentDilationSlider', 'pierceDentDilationValue', 'pierceDentDilationRow',
+    'pierceWedgeAutoBtn', 'pierceWedgeManualBtn', 'pierceWedgeWidthRow', 'pierceWedgeWidthSlider',
+    'pierceWedgeWidthValue',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDentStartInput', 'pierceDepthDentMark', 'pierceWedgeLockInput', 'pierceDepthLockMark',
@@ -1654,6 +1656,15 @@ function renderPierceModal() {
     els.pierceDentWidthValue.textContent = `${part.pierceDentWidth} px`;
     els.pierceDentDilationSlider.value = String(part.pierceDentDilation);
     els.pierceDentDilationValue.textContent = `${part.pierceDentDilation}% of the tip`;
+    // Automatic (a share of the tip) or a fixed width in pixels: only the
+    // slider that is in charge is shown.
+    const manual = part.pierceWedgeMode === WedgeWidthMode.MANUAL;
+    els.pierceWedgeAutoBtn.setAttribute('aria-pressed', String(!manual));
+    els.pierceWedgeManualBtn.setAttribute('aria-pressed', String(manual));
+    els.pierceDentDilationRow.hidden = manual;
+    els.pierceWedgeWidthRow.hidden = !manual;
+    els.pierceWedgeWidthSlider.value = String(part.pierceWedgeWidthPx);
+    els.pierceWedgeWidthValue.textContent = `${part.pierceWedgeWidthPx} px`;
   }
 
   if (part.isPiercer) {
@@ -2526,8 +2537,10 @@ function renderChrome() {
         ? 'Import artwork first, then move it here.'
         : canPierce
           ? getPoseTarget() === PoseTarget.PIERCER
-            ? 'Dragging moves the PIERCER only. The character keeps running its own ' +
-              'physics underneath — bring the tip in and its pierceable area gives way.'
+            ? `Dragging moves ${getTargetPiercer() ? getTargetPiercer().name : 'the piercer'} only` +
+              (partsStore.piercers.length > 1 ? ' — choose which piercer in Drag moves.' : '.') +
+              ' The character keeps running its own physics underneath — bring the tip in ' +
+              'and its pierceable area gives way.'
             : 'Dragging moves the whole character, leaving the piercer where it is. ' +
               'Switch to Piercer to move that instead.'
           : 'Drag anywhere on the canvas to move the whole character — or use the pad below to ' +
@@ -2993,9 +3006,14 @@ function withStableFooter(change) {
 }
 
 function selectPoseLayer(partId) {
-  setTargetLayer(partId);
+  // The Piercer tab's list picks which piercer a drag moves; the Body tab's
+  // picks which layer's bone.
+  const piercing = getPoseTarget() === PoseTarget.PIERCER;
+  if (piercing) setTargetPiercer(partId);
+  else setTargetLayer(partId);
   poseLayerMenuOpen = false;
-  renderPoseLayerChrome();
+  // The Piercer tab's hint names the chosen piercer, so it is redrawn too.
+  if (piercing) renderChrome(); else renderPoseLayerChrome();
   canvasEngine.requestRender();
 }
 
@@ -3003,14 +3021,18 @@ function renderPoseLayerChrome() {
   if (!els.poseLayerRow) return;
 
   const isAnimating = currentState === AppState.ANIMATING || currentState === AppState.RECORDING;
-  // Hidden for a Piercer drag: that target has its own rule about which
-  // bones it writes to, and a layer picker would be claiming to steer
-  // something it does not steer.
-  const relevant = isAnimating && !partsStore.isEmpty && getPoseTarget() === PoseTarget.BODY;
+  // On the Piercer tab the same row picks WHICH piercer a drag moves -- one
+  // at a time -- listing every Piercer layer by name (renderPiercerChoice).
+  const piercing = getPoseTarget() === PoseTarget.PIERCER;
+  const relevant = isAnimating && !partsStore.isEmpty && (!piercing || partsStore.piercers.length > 0);
   els.poseLayerRow.hidden = !relevant;
   if (!relevant) {
     els.poseLayerNotice.hidden = true;
     els.poseLayerMenu.hidden = true;
+    return;
+  }
+  if (piercing) {
+    renderPiercerChoice();
     return;
   }
 
@@ -3062,6 +3084,37 @@ function renderPoseLayerChrome() {
   // bottom can leave it below the fold. Bring it into view once, after
   // layout has the real height, rather than leaving the user to discover
   // that the thing they just opened is off-screen.
+  requestAnimationFrame(() => {
+    if (!poseLayerMenuOpen) return;
+    els.poseLayerMenu.scrollTop = 0;
+    els.poseLayerMenu.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+// The Piercer tab's half of the row: every Piercer-role layer by name, the
+// chosen one ticked. Only it moves when the canvas is dragged.
+function renderPiercerChoice() {
+  const chosen = getTargetPiercer();
+  els.poseLayerNotice.hidden = true;
+  els.poseLayerBtnText.textContent = chosen ? chosen.name : 'No piercer';
+  els.poseLayerBtn.setAttribute('aria-expanded', String(poseLayerMenuOpen));
+  els.poseLayerMenu.hidden = !poseLayerMenuOpen;
+  if (!poseLayerMenuOpen) return;
+
+  els.poseLayerMenu.replaceChildren();
+  const group = document.createElement('p');
+  group.className = 'app-menu__group';
+  group.textContent = 'Piercer to move';
+  els.poseLayerMenu.appendChild(group);
+  for (const part of partsStore.piercers) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'app-menu__item';
+    button.textContent = part.name;
+    button.setAttribute('aria-pressed', String(Boolean(chosen) && chosen.id === part.id));
+    button.addEventListener('click', () => selectPoseLayer(part.id));
+    els.poseLayerMenu.appendChild(button);
+  }
   requestAnimationFrame(() => {
     if (!poseLayerMenuOpen) return;
     els.poseLayerMenu.scrollTop = 0;
@@ -3298,6 +3351,27 @@ function bindEvents() {
     markPierceStale();
     canvasEngine.requestRender();
   });
+  // Automatic or Manual wedge width, and the manual width itself.
+  const setWedgeMode = (mode) => {
+    const part = piercePart();
+    if (!part || part.pierceWedgeMode === mode) return;
+    history.run(mode === WedgeWidthMode.MANUAL ? 'Wedge width: manual' : 'Wedge width: automatic',
+      () => partsStore.setPierceWedgeMode(part.id, mode));
+    markPierceStale();
+    renderPierceModal();
+    canvasEngine.requestRender();
+  };
+  els.pierceWedgeAutoBtn.addEventListener('click', () => setWedgeMode(WedgeWidthMode.AUTO));
+  els.pierceWedgeManualBtn.addEventListener('click', () => setWedgeMode(WedgeWidthMode.MANUAL));
+  attachContinuousHistory(els.pierceWedgeWidthSlider, 'Change wedge width');
+  els.pierceWedgeWidthSlider.addEventListener('input', () => {
+    const part = piercePart();
+    if (!part) return;
+    els.pierceWedgeWidthValue.textContent = `${els.pierceWedgeWidthSlider.value} px`;
+    partsStore.setPierceWedgeWidth(part.id, Number(els.pierceWedgeWidthSlider.value));
+    markPierceStale();
+    canvasEngine.requestRender();
+  });
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
   const onDepthTyped = () => {
     renderPierceDepthBar();
@@ -3406,8 +3480,9 @@ function bindEvents() {
   }
   els.boneBatchApplyPhysicsBtn.addEventListener('click', applyBoneBatchPhysics);
 
-  els.poseTargetBodyBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.BODY); renderChrome(); });
-  els.poseTargetPiercerBtn.addEventListener('click', () => { setPoseTarget(PoseTarget.PIERCER); renderChrome(); });
+  // Switching tabs puts the list away: the two tabs list different things.
+  els.poseTargetBodyBtn.addEventListener('click', () => { poseLayerMenuOpen = false; setPoseTarget(PoseTarget.BODY); renderChrome(); });
+  els.poseTargetPiercerBtn.addEventListener('click', () => { poseLayerMenuOpen = false; setPoseTarget(PoseTarget.PIERCER); renderChrome(); });
 
   els.appMenuBtn.addEventListener('click', (event) => {
   // Rotating the phone, or a keyboard opening, changes the room the menu has.

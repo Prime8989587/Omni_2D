@@ -1239,12 +1239,18 @@ button, input, select, textarea {
    are already correct: the canvas keeps a guaranteed share of the screen
    and the footer takes what is left and SCROLLS. */
 
-#pcreateWindow .px-pin__canvas {
+#pcreateWindow .px-pin__canvas,
+#pierceWindow .px-pin__canvas {
   flex: 1 1 auto;
   min-height: 45vh;
 }
 
-#pcreateWindow .px-pin__controls {
+/* The Pierce window joined it in 2.8.0: its Dent target grew a step row
+   (mirror line, then triangle) and an Automatic / Manual width row, and on a
+   phone those two rows came straight out of the canvas -- 315 css px down to
+   207, too short to see the layer being configured. Same cure. */
+#pcreateWindow .px-pin__controls,
+#pierceWindow .px-pin__controls {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;

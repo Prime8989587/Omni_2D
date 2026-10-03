@@ -200,9 +200,13 @@ const TOPICS = {
       'in contact. Never blocks it going deeper -- that’s Enter/End.\n' +
       'All four paint only on the layer\u2019s own artwork, never on the ' +
       'transparent space round it.\n' +
-      '• Dent -- not a mask. The triangle marker, dragged onto the spot ' +
-      'where the seam should open: its base on the surface, its point ' +
-      'aimed the way the piercer goes in. Its centre line IS the seam. ' +
+      '• Dent -- not a mask. Placed in two steps. 1 · Mirror line: drag ' +
+      'the mint line onto where the wedge\u2019s centre should be (touch ' +
+      'anywhere to pick it up there, drag an end to turn it). The wedge ' +
+      'opens as two exact mirror images about it. 2 · Triangle: drag it ' +
+      'onto the spot the seam should open -- it slides along the mirror ' +
+      'line, so it can never be off-centre -- its base on the surface, its ' +
+      'point aimed the way the piercer goes in. ' +
       'While Dent is chosen the layer is drawn OPENED, as the scene will ' +
       'draw it at the Wedge Lock Point, with the piercer in it -- and it ' +
       'follows every drag of the marker, so you see the real wedge before ' +
@@ -224,20 +228,27 @@ const TOPICS = {
       '• Depth -- how far the seam runs in from the surface.\n' +
       '• Width -- how far the material beside the seam swells outward ' +
       'round the tip.\n' +
-      '• Opening width -- how wide the gap itself parts, as a share of the ' +
-      'piercer\u2019s tip width: at 75% an 8 px tip opens 6 px and a 12 px tip ' +
-      '9 px. Whole pixels, split between the two sides as evenly as they ' +
-      'go -- 7 px is 3 on one side and 4 on the other. The edges hug the ' +
-      'tip\u2019s own outline at that share, so the gap grows as the tip goes ' +
-      'in, and holds from the Wedge Lock Point (on the piercer, with Enter ' +
-      'and End).\n\n' +
+      '• Wedge width, Automatic (ratio) -- how wide the gap itself parts, ' +
+      'as a share of the piercer\u2019s tip width (Opening width): at 75% an ' +
+      '8 px tip opens 6 px and a 12 px tip 9 px.\n' +
+      '• Wedge width, Manual (px) -- exactly this many pixels, whatever the ' +
+      'piercer.\n' +
+      'Either way: whole pixels, split evenly either side of the mirror ' +
+      'line -- 7 px is 3 on one side and 4 on the other -- and the two ' +
+      'sides are mirror images however far off the line the piercer comes ' +
+      'in -- so put the line where the piercer goes in: one that comes in ' +
+      'well off it leaves a sliver of the gap beside the tip uncovered. ' +
+      'The edges follow the tip\u2019s own width row by row, so the gap ' +
+      'grows as the tip goes in, and holds from the Wedge Lock Point (on ' +
+      'the piercer, with Enter and End).\n\n' +
       'Set Depth or Width to 0 for no opening at all.\n\n' +
       'Easier still by hand: Paint regions…, then the Dent target, and drag ' +
       'the triangle marker on the artwork -- the wedge is drawn there live, ' +
-      'exactly as it will open. Its base handle places it, its apex handle ' +
-      'sets depth and direction, its width handle sets the swelling, and ' +
-      'Opening width is there too. These sliders and those handles are the ' +
-      'same numbers.\n\n' +
+      'exactly as it will open. First the mirror line, then the triangle: ' +
+      'its base handle slides it along the line, its apex handle sets depth ' +
+      'and which way along the line it points, its width handle sets the ' +
+      'swelling, and the wedge width is there too. These sliders and those ' +
+      'handles are the same numbers.\n\n' +
       'WHERE the seam is is fixed once you place it. The piercer decides ' +
       'how far it opens and where along it the bulge is, never where it is.\n\n' +
       'Pins (Px Pin) hold their pixels against the opening, bending the ' +

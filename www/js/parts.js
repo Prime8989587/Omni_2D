@@ -145,6 +145,38 @@ export function clampDentDilation(value) {
   return Math.max(DENT_DILATION_RANGE.min, Math.min(DENT_DILATION_RANGE.max, number));
 }
 
+// WEDGE WIDTH: AUTOMATIC OR A FIXED NUMBER OF PIXELS
+//
+// Automatic, the gap is the Dilation's share of the piercer's tip width (the
+// default, above). Manual, it is exactly this many scene pixels whatever the
+// piercer -- for a pairing where the ratio is not what the artwork needs.
+// Either way the result is split between the two sides of the mirror line,
+// the odd pixel to side B (opening.js, openingSideWidths).
+export const WedgeWidthMode = Object.freeze({ AUTO: 'auto', MANUAL: 'manual' });
+const WEDGE_WIDTH_MODES = new Set(Object.values(WedgeWidthMode));
+export const DEFAULT_WEDGE_WIDTH_PX = 6;
+export const WEDGE_WIDTH_RANGE = Object.freeze({ min: 1, max: 64 });
+
+export function clampWedgeWidthPx(value) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return DEFAULT_WEDGE_WIDTH_PX;
+  return Math.max(WEDGE_WIDTH_RANGE.min, Math.min(WEDGE_WIDTH_RANGE.max, number));
+}
+
+export function normalizeWedgeWidthMode(value) {
+  return WEDGE_WIDTH_MODES.has(value) ? value : WedgeWidthMode.AUTO;
+}
+
+// The mirror line's ends sit on texel CORNERS -- whole numbers in the
+// layer's texel space -- so the line runs along pixel edges and every pixel
+// on one side has a pixel exactly opposite it on the other. Kept on the
+// artwork's own rectangle.
+export function clampMirrorCoord(value, extent) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(extent, number));
+}
+
 export function clampDentSize(value) {
   const number = Math.round(Number(value));
   if (!Number.isFinite(number)) return 0;
@@ -308,6 +340,24 @@ export class Part {
     this.pierceDentX = 0;
     this.pierceDentY = 0;
     this.pierceDentAngle = Math.PI / 2;
+
+    // THE MIRROR LINE: the wedge's centre, placed before the triangle
+    //
+    // Two ends in this layer's texels (on texel corners, clampMirrorCoord).
+    // The opening is built mirror-symmetric about this line, and the
+    // triangle slides along it -- so the wedge is centred and symmetric by
+    // construction rather than by how carefully the triangle was dragged.
+    // Unplaced, the line is the triangle's own centreline (opening.js,
+    // openingMirror), so a layer set up before it existed is unchanged.
+    this.pierceMirrorPlaced = false;
+    this.pierceMirrorX1 = 0;
+    this.pierceMirrorY1 = 0;
+    this.pierceMirrorX2 = 0;
+    this.pierceMirrorY2 = 0;
+
+    // Automatic (the Dilation's share of the tip) or a fixed pixel width.
+    this.pierceWedgeMode = WedgeWidthMode.AUTO;
+    this.pierceWedgeWidthPx = DEFAULT_WEDGE_WIDTH_PX;
 
     // Which side's movement may deepen this piercer's contacts. Lives on
     // the piercer with Enter and End, because like them it describes the
@@ -607,11 +657,14 @@ class PartsStore {
   // The piercer side of that split. Bound piercers are left to their bones
   // (the caller translates those separately) -- moving both would double
   // the distance travelled.
-  translatePiercers(dx, dy) {
+  // Every unbound piercer, or with `onlyId` just that one (Free Move's
+  // Piercer tab moves the piercer chosen in its list, never the others).
+  translatePiercers(dx, dy, onlyId = null) {
     if (dx === 0 && dy === 0) return;
     let moved = false;
     for (const part of this._parts) {
       if (!part.isPiercer) continue;
+      if (onlyId !== null && part.id !== onlyId) continue;
       if (part.mesh && part.mesh.isBound) continue;
       part.x += dx;
       part.y += dy;
@@ -655,6 +708,13 @@ class PartsStore {
       part.pierceDentX = 0;
       part.pierceDentY = 0;
       part.pierceDentAngle = Math.PI / 2;
+      part.pierceMirrorPlaced = false;
+      part.pierceMirrorX1 = 0;
+      part.pierceMirrorY1 = 0;
+      part.pierceMirrorX2 = 0;
+      part.pierceMirrorY2 = 0;
+      part.pierceWedgeMode = WedgeWidthMode.AUTO;
+      part.pierceWedgeWidthPx = DEFAULT_WEDGE_WIDTH_PX;
       part.piercePhysics = PiercePhysics.PIERCER;
       part.pierceEnter = DEFAULT_PIERCE_ENTER;
       part.pierceEnd = DEFAULT_PIERCE_END;
@@ -706,6 +766,44 @@ class PartsStore {
     const next = clampDentDilation(percent);
     if (part.pierceDentDilation === next) return false;
     part.pierceDentDilation = next;
+    this._emit('transform');
+    return true;
+  }
+
+  setPierceWedgeMode(id, mode) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return false;
+    const next = normalizeWedgeWidthMode(mode);
+    if (part.pierceWedgeMode === next) return false;
+    part.pierceWedgeMode = next;
+    this._emit('transform');
+    return true;
+  }
+
+  setPierceWedgeWidth(id, px) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return false;
+    const next = clampWedgeWidthPx(px);
+    if (part.pierceWedgeWidthPx === next) return false;
+    part.pierceWedgeWidthPx = next;
+    this._emit('transform');
+    return true;
+  }
+
+  // The mirror line, end to end. Ends that land on the same corner make no
+  // line, so that write is refused rather than leaving the wedge with no
+  // direction.
+  setPierceMirror(id, x1, y1, x2, y2) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return false;
+    const W = part.naturalWidth;
+    const H = part.naturalHeight;
+    const next = [clampMirrorCoord(x1, W), clampMirrorCoord(y1, H), clampMirrorCoord(x2, W), clampMirrorCoord(y2, H)];
+    if (next[0] === next[2] && next[1] === next[3]) return false;
+    const now = [part.pierceMirrorX1, part.pierceMirrorY1, part.pierceMirrorX2, part.pierceMirrorY2];
+    if (part.pierceMirrorPlaced && next.every((value, i) => value === now[i])) return false;
+    part.pierceMirrorPlaced = true;
+    [part.pierceMirrorX1, part.pierceMirrorY1, part.pierceMirrorX2, part.pierceMirrorY2] = next;
     this._emit('transform');
     return true;
   }

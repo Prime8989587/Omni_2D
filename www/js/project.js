@@ -19,6 +19,7 @@ import {
   PierceRole, PIERCE_ROLES, clampPierceDepth, clampWedgeLock, DEFAULT_WEDGE_LOCK,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
   clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH, clampDentDilation, DEFAULT_DENT_DILATION,
+  clampMirrorCoord, clampWedgeWidthPx, normalizeWedgeWidthMode, DEFAULT_WEDGE_WIDTH_PX,
   clampDentCoord, normalizeAngle,
   PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
@@ -168,6 +169,13 @@ function serializePart(part, copyPixels) {
     pierceDentX: part.pierceDentX,
     pierceDentY: part.pierceDentY,
     pierceDentAngle: part.pierceDentAngle,
+    pierceMirrorPlaced: part.pierceMirrorPlaced,
+    pierceMirrorX1: part.pierceMirrorX1,
+    pierceMirrorY1: part.pierceMirrorY1,
+    pierceMirrorX2: part.pierceMirrorX2,
+    pierceMirrorY2: part.pierceMirrorY2,
+    pierceWedgeMode: part.pierceWedgeMode,
+    pierceWedgeWidthPx: part.pierceWedgeWidthPx,
     piercePhysics: part.piercePhysics,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
@@ -236,6 +244,17 @@ function deserializePart(data) {
   part.pierceDentX = clampDentCoord(data.pierceDentX ?? 0, part.naturalWidth);
   part.pierceDentY = clampDentCoord(data.pierceDentY ?? 0, part.naturalHeight);
   part.pierceDentAngle = normalizeAngle(data.pierceDentAngle ?? Math.PI / 2);
+  // The mirror line and the wedge-width mode. Absent before they existed:
+  // no mirror line placed (it follows the triangle, as the wedge always
+  // did) and the automatic width.
+  part.pierceMirrorX1 = clampMirrorCoord(data.pierceMirrorX1 ?? 0, part.naturalWidth);
+  part.pierceMirrorY1 = clampMirrorCoord(data.pierceMirrorY1 ?? 0, part.naturalHeight);
+  part.pierceMirrorX2 = clampMirrorCoord(data.pierceMirrorX2 ?? 0, part.naturalWidth);
+  part.pierceMirrorY2 = clampMirrorCoord(data.pierceMirrorY2 ?? 0, part.naturalHeight);
+  part.pierceMirrorPlaced = Boolean(data.pierceMirrorPlaced)
+    && (part.pierceMirrorX1 !== part.pierceMirrorX2 || part.pierceMirrorY1 !== part.pierceMirrorY2);
+  part.pierceWedgeMode = normalizeWedgeWidthMode(data.pierceWedgeMode);
+  part.pierceWedgeWidthPx = clampWedgeWidthPx(data.pierceWedgeWidthPx ?? DEFAULT_WEDGE_WIDTH_PX);
   // Absent before the setting existed, and its default is the behaviour
   // those projects were saved under.
   part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)

@@ -146,22 +146,25 @@ const MIN_RISE = 2;
 // meet, in texels: the edge rounds that corner instead of creasing on it.
 const RIM_SOFTNESS = 1;
 
-// HOW WIDE IT OPENS: A SHARE OF THE PIERCER'S OWN WIDTH
+// HOW WIDE IT OPENS: A SHARE OF THE PIERCER'S OWN WIDTH, OR A FIXED WIDTH
 //
 // The gap between the two edges is the pierced layer's Dilation (a
 // percentage, parts.js) of the piercer's tip width -- 75% of an 8 px tip is
-// a 6 px gap, of a 12 px tip a 9 px gap. Rounded to whole pixels, because a
-// gap is a number of pixels; split between the two sides as evenly as a
-// whole number allows, the odd pixel going to side B (+across) -- 7 px is 3
-// on side A and 4 on side B -- rather than half a pixel each, which no pixel
-// can show.
+// a 6 px gap, of a 12 px tip a 9 px gap -- or, with the layer's wedge width
+// set to Manual, exactly the pixels it names, whatever the piercer. Rounded
+// to whole pixels, because a gap is a number of pixels; split between the
+// two sides of the mirror line as evenly as a whole number allows, the odd
+// pixel going to side B (+across) -- 7 px is 3 on side A and 4 on side B --
+// rather than half a pixel each, which no pixel can show.
 //
-// Each edge then stands exactly on the tip's own outline, scaled across so
-// that its widest row is that side's width: the flesh hugs the piercer at
-// that share of its width, wherever the piercer is in the seam -- closed
-// ahead of it, narrow round a pointed front, full width where the tip is
-// widest. So the gap grows as the tip goes in, from its outline alone; the
-// Wedge Lock Point needs no say in it -- past the lock the tip it is given is
+// Each edge then follows the tip's own width, row by row along the seam,
+// halved about the mirror line and scaled so that its widest row is that
+// side's width: the flesh hugs the piercer at that share of its width,
+// wherever the piercer is in the seam -- closed ahead of it, narrow round a
+// pointed front, full width where the tip is widest -- and the two sides
+// are the same shape, mirror images, wherever across the line it sits. So
+// the gap grows as the tip goes in, from its outline alone; the Wedge Lock
+// Point needs no say in it -- past the lock the tip it is given is
 // the one AT the lock (pierce.js, openingOf), so the gap holds there too.
 // The swelling beside the gap is never allowed below the gap itself, so the
 // material at the edge is pushed exactly the gap's width and eases out from
@@ -233,8 +236,8 @@ function derivePlacement(part) {
   return { x, y, angle };
 }
 
-export function openingPlacement(part) {
-  if (!part) return null;
+// The triangle as the artist left it, before the mirror line has its say.
+function trianglePlacement(part) {
   if (part.pierceDentPlaced) {
     return { x: part.pierceDentX, y: part.pierceDentY, angle: part.pierceDentAngle };
   }
@@ -244,6 +247,64 @@ export function openingPlacement(part) {
   const placement = derivePlacement(part);
   defaultCache.set(part.id, { version, placement });
   return placement;
+}
+
+// THE MIRROR LINE
+//
+// The wedge's centre, placed first (Pierce window → Dent → Mirror line),
+// as a line between two texel corners. Everything about the opening is
+// built about it:
+//
+//   * the triangle slides ALONG it -- its base is wherever the artist put
+//     it, carried square onto the line; its apex points along the line, in
+//     whichever of the line's two directions the artist aimed it -- so it
+//     cannot be off-centre or askew however it is dragged;
+//   * the two sides of the opening are mirror images about it (coverageOf):
+//     each row of the seam opens to the piercer's whole width there, split
+//     evenly about the line, never to how far it happens to reach on each
+//     side.
+//
+// Until one is placed, the line is the triangle's own centreline, so a
+// layer set up before the mirror line existed opens where it always did.
+// { p1, p2, dir, placed } -- dir is the unit vector p1 -> p2.
+export function openingMirror(part) {
+  if (!part) return null;
+  if (part.pierceMirrorPlaced) {
+    const p1 = { x: part.pierceMirrorX1, y: part.pierceMirrorY1 };
+    const p2 = { x: part.pierceMirrorX2, y: part.pierceMirrorY2 };
+    const length = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    if (length > 1e-9) {
+      return { p1, p2, dir: { x: (p2.x - p1.x) / length, y: (p2.y - p1.y) / length }, placed: true };
+    }
+  }
+  const t = trianglePlacement(part);
+  const dir = { x: Math.cos(t.angle), y: Math.sin(t.angle) };
+  const reach = Math.max(4, part.pierceDentDepth || 0);
+  return {
+    p1: { x: t.x, y: t.y },
+    p2: { x: t.x + dir.x * reach, y: t.y + dir.y * reach },
+    dir,
+    placed: false,
+  };
+}
+
+// A point carried square onto the mirror line.
+export function onMirror(mirror, point) {
+  const along = (point.x - mirror.p1.x) * mirror.dir.x + (point.y - mirror.p1.y) * mirror.dir.y;
+  return { x: mirror.p1.x + mirror.dir.x * along, y: mirror.p1.y + mirror.dir.y * along };
+}
+
+export function openingPlacement(part) {
+  if (!part) return null;
+  const t = trianglePlacement(part);
+  const mirror = openingMirror(part);
+  if (!mirror.placed) return t;
+  // On the line, pointing along it: the way the triangle was aimed decides
+  // which of its two directions.
+  const base = onMirror(mirror, t);
+  const aimed = Math.cos(t.angle) * mirror.dir.x + Math.sin(t.angle) * mirror.dir.y;
+  const angle = Math.atan2(mirror.dir.y, mirror.dir.x) + (aimed < 0 ? Math.PI : 0);
+  return { x: base.x, y: base.y, angle };
 }
 
 // The marker itself, at full size, in the layer's texel space -- what the
@@ -302,10 +363,15 @@ export function openingFor(part, {
   // surface, the surface flinches first.
   const sApex = (tip.u - base.x) * inward.x + (tip.v - base.y) * inward.y;
   const sTip = Math.max(0, Math.min(length, sApex));
-  // The gap's two sides (see HOW WIDE IT OPENS).
-  const sides = tipWidth > 0 && Number.isFinite(dilation)
-    ? openingSideWidths((tipWidth * dilation) / 100, part.scale)
-    : null;
+  // The gap's two sides (see HOW WIDE IT OPENS): a fixed number of pixels
+  // when the layer says so, whatever the piercer; otherwise the Dilation's
+  // share of the tip.
+  const manual = part.pierceWedgeMode === 'manual' && part.pierceWedgeWidthPx > 0;
+  const sides = manual
+    ? openingSideWidths(part.pierceWedgeWidthPx, part.scale)
+    : tipWidth > 0 && Number.isFinite(dilation)
+      ? openingSideWidths((tipWidth * dilation) / 100, part.scale)
+      : null;
   const peak = f * halfWidth;
   const reach = Math.max(2, halfWidth * REACH_PER_HALF_WIDTH) * (1 + REACH_GROWTH * f);
   const o = {
@@ -369,11 +435,9 @@ function coverMargin(part) {
   return Math.max(1, Math.ceil((size / k) * 1.5)) + 1;
 }
 
-// How far the piercer reaches to each side of the seam, at every texel
-// along it: from its painted texels, binned by where they fall along the
-// seam. A side only counts where the piercer actually STRADDLES the seam
-// there -- a tip lying wholly to one side of it cannot hold the edges apart
-// round itself, because the strip between it and the seam would be empty.
+// How far the opening reaches to each side of the seam, at every texel
+// along it: from the piercer's painted texels, binned by where they fall
+// along the seam -- the same on both sides (see MIRRORED, below).
 //
 // Then made conservative: each bin is lowered to the least of the bins
 // within `margin` of it, so the rim never runs past a step in the outline,
@@ -400,13 +464,17 @@ function coverageOf(o, points, margin = 1) {
     if (t < tMin[i]) tMin[i] = t;
     if (t > tMax[i]) tMax[i] = t;
   }
-  const raw = (side) => {
+  const raw = () => {
     const out = new Float64Array(n);
     for (let i = 0; i < n; i++) {
-      // A texel is a square: one centred half a texel off the line still
-      // covers it.
-      if (!(tMin[i] <= 0.5 && tMax[i] >= -0.5)) continue;
-      out[i] = side > 0 ? Math.max(0, tMax[i]) : Math.max(0, -tMin[i]);
+      // MIRRORED: half the tip's whole width across this row, on both sides
+      // alike -- the same number for side A and side B, so the two sides of
+      // the opening are mirror images about the line by construction,
+      // wherever across it the piercer happens to sit. (Before the mirror
+      // line, each side took how far the tip reached on ITS side, so a tip
+      // a pixel off the centreline opened a lopsided wedge.)
+      if (!(tMax[i] >= tMin[i])) continue;
+      out[i] = (tMax[i] - tMin[i]) / 2;
     }
     const eroded = new Float64Array(n);
     for (let i = 0; i < n; i++) {
@@ -416,7 +484,8 @@ function coverageOf(o, points, margin = 1) {
     }
     return eroded;
   };
-  return { s0, a: raw(-1), b: raw(1) };
+  const both = raw();
+  return { s0, a: both, b: both };
 }
 
 // How far the piercer reaches from the seam on one side (-1: side A, +1:

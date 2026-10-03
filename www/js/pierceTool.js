@@ -27,13 +27,13 @@
 // rather than two.
 
 import { PixelPen, cellEdge, gridStrips } from './pixelDraw.js';
-import { partsStore } from './parts.js';
+import { partsStore, WedgeWidthMode } from './parts.js';
 import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
-import { pierceDentIssue, pierceOpeningPreview, pierceMeshOf, pierceMasks } from './pierce.js';
-import { openingPlacement, openingMarker, openingGeometry, openingSides } from './opening.js';
+import { pierceDentIssue, pierceOpeningPreview, pierceMeshOf, pierceMasks, markPierceStale } from './pierce.js';
+import { openingPlacement, openingMarker, openingGeometry, openingSides, openingMirror, onMirror } from './opening.js';
 import { rasterizeTriangle, layerClaims } from './raster.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { createIcon } from './pixelIcons.js';
@@ -70,6 +70,9 @@ const PAINT = {
 const paintOpacity = (target) => Number(getSetting(PAINT[target].key)) / 100;
 const paintFill = (target) => `rgba(${PAINT[target].rgb.join(', ')}, ${paintOpacity(target)})`;
 const DENT_EDGE = PAINT.dent.edge;
+// The mirror line: mint, the one colour no mask or marker uses, so it reads
+// as a construction line rather than as anything painted.
+const MIRROR_EDGE = '#4DFFB8';
 
 // How near a handle a touch counts as grabbing it, in css px. Generous:
 // this is a fingertip on a phone, and the three handles are deliberately
@@ -95,6 +98,9 @@ function cacheElements() {
     'piercePiercedOpacity', 'piercePiercedOpacityValue',
     'piercePaintOpacity', 'piercePaintOpacityValue', 'piercePaintOpacityLabel',
     'pierceWindowDilationRow', 'pierceWindowDilation', 'pierceWindowDilationValue',
+    'pierceDentStepRow', 'pierceDentStepMirrorBtn', 'pierceDentStepTriangleBtn',
+    'pierceWindowWedgeModeRow', 'pierceWindowWedgeAutoBtn', 'pierceWindowWedgeManualBtn',
+    'pierceWindowWedgeWidthRow', 'pierceWindowWedgeWidth', 'pierceWindowWedgeWidthValue',
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -171,6 +177,10 @@ export function openPiercePainter(partId, partnerId) {
     stroke: null,
     // Which dent handle is under the finger, on the dent target only.
     dentDrag: null,
+    // The Dent is placed in two steps: the mirror line first, then the
+    // triangle along it. A layer whose line is already placed opens on the
+    // triangle; one without starts at the line.
+    dentStep: pierced.pierceMirrorPlaced ? 'triangle' : 'mirror',
   };
 
   els.piercePiercerOpacity.value = '100';
@@ -355,6 +365,88 @@ function dentHandles(part) {
   };
 }
 
+// THE MIRROR LINE, PLACED FIRST
+//
+// Its two ENDS are grips (each swings the line about the other, landing on
+// texel corners), and the LINE ITSELF is one: grab it anywhere along its
+// length to move it whole, by whole texels, keeping its angle. (A grip in
+// its middle sat right on the triangle's depth grip.) It is drawn right
+// across the layer, not just between its ends, because the whole of it is
+// the wedge's centre. In the Mirror line step a touch that misses everything
+// picks the line up where the finger is, so placing it is one drag. It stays
+// draggable in the Triangle step too, with the triangle's grips first.
+function mirrorHandles(part) {
+  const m = openingMirror(part);
+  return {
+    m,
+    m1: m.p1,
+    m2: m.p2,
+    // A point on the line clear of both ends and of the triangle's middle,
+    // for anything that needs to aim at the line itself (tests).
+    mline: { x: m.p1.x + (m.p2.x - m.p1.x) * 0.3, y: m.p1.y + (m.p2.y - m.p1.y) * 0.3 },
+  };
+}
+
+// How far a window point is from the mirror line's drawn span, in window px.
+function distanceToMirror(part, at, point) {
+  const [a, b] = mirrorSpan(part, openingMirror(part)).map((p) => texelToWindow(part, at, p.x, p.y));
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length2 = dx * dx + dy * dy;
+  const t = length2 > 0 ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length2)) : 0;
+  return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+}
+
+// The line clipped to the layer's rectangle, two texels proud of it.
+function mirrorSpan(part, m) {
+  let lo = -Infinity;
+  let hi = Infinity;
+  const clip = (p, d, min, max) => {
+    if (Math.abs(d) < 1e-12) { if (p < min || p > max) { lo = 1; hi = 0; } return; }
+    let a = (min - p) / d;
+    let b = (max - p) / d;
+    if (a > b) [a, b] = [b, a];
+    lo = Math.max(lo, a);
+    hi = Math.min(hi, b);
+  };
+  clip(m.p1.x, m.dir.x, -2, part.naturalWidth + 2);
+  clip(m.p1.y, m.dir.y, -2, part.naturalHeight + 2);
+  if (!(hi > lo)) return [m.p1, m.p2];
+  return [
+    { x: m.p1.x + m.dir.x * lo, y: m.p1.y + m.dir.y * lo },
+    { x: m.p1.x + m.dir.x * hi, y: m.p1.y + m.dir.y * hi },
+  ];
+}
+
+function drawMirror(pen, part, at) {
+  const { m, m1, m2 } = mirrorHandles(part);
+  const { dpr } = session;
+  const point = (p) => {
+    const w = texelToWindow(part, at, p.x, p.y);
+    return { x: w.x * dpr, y: w.y * dpr };
+  };
+  const [from, to] = mirrorSpan(part, m).map(point);
+  // Solid once placed; dashed while it is only following the triangle.
+  pen.line(from.x, from.y, to.x, to.y, MIRROR_EDGE, m.placed ? {} : { dash: 3 });
+  const active = session.dentStep === 'mirror';
+  const r = (active ? HANDLE_RADIUS : HANDLE_RADIUS * 0.7) * dpr;
+  for (const end of [m1, m2]) {
+    const p = point(end);
+    pen.disc(p.x, p.y, r + pen.u, '#000000');
+    pen.disc(p.x, p.y, r, MIRROR_EDGE);
+  }
+  // Labelled beside whichever end is further from the triangle's base, off
+  // to the line's side, so it never lands on the triangle's own labels.
+  const base = openingPlacement(part);
+  const far = Math.hypot(m1.x - base.x, m1.y - base.y) >= Math.hypot(m2.x - base.x, m2.y - base.y) ? m1 : m2;
+  const end = point(far);
+  const side = { x: -m.dir.y, y: m.dir.x };
+  const reach = r + 6 * dpr;
+  const label = m.placed ? 'mirror' : 'mirror (drag to place)';
+  const align = side.x > 0.4 ? 'left' : side.x < -0.4 ? 'right' : 'center';
+  pen.text(label, end.x + side.x * reach, end.y + side.y * reach - 2.5 * pen.u, '#FFFFFF', { align, background: '#000000' });
+}
+
 function drawDent(ctx, part, at) {
   const handles = dentHandles(part);
   const tri = openingMarker(part);
@@ -365,6 +457,9 @@ function drawDent(ctx, part, at) {
     const w = texelToWindow(part, at, p.x, p.y);
     return { x: w.x * dpr, y: w.y * dpr };
   };
+
+  // The mirror line first, under the triangle that sits on it.
+  drawMirror(pen, part, at);
 
   if (tri) {
     const marker = [point(tri.b1), point(tri.b2), point(tri.apex)];
@@ -412,6 +507,10 @@ function drawDent(ctx, part, at) {
 const BASE_GRIP_OFFSET = 2.2; // handle radii, outward along the seam
 
 function handleWindowPoint(part, at, handles, which) {
+  if (which === 'm1' || which === 'm2' || which === 'mline') {
+    const p = mirrorHandles(part)[which];
+    return texelToWindow(part, at, p.x, p.y);
+  }
   const point = handles[which];
   const w = texelToWindow(part, at, point.x, point.y);
   if (which !== 'base') return w;
@@ -430,17 +529,25 @@ function grabDentHandle(point) {
     const w = handleWindowPoint(part, at, handles, which);
     return Math.hypot(point.x - w.x, point.y - w.y);
   };
-  const candidates = [
+  const triangle = [
     ['apex', near('apex')],
     ['width', near('width')],
     ['base', near('base')],
   ];
-  let best = null;
-  for (const [which, distance] of candidates) {
-    if (distance > HANDLE_GRAB_PX) continue;
-    if (!best || distance < best[1]) best = [which, distance];
-  }
-  return best ? best[0] : null;
+  const mirror = [['m1', near('m1')], ['m2', near('m2')]];
+  const onLine = distanceToMirror(part, at, point) <= HANDLE_GRAB_PX * 0.6 ? 'mline' : null;
+  const nearest = (candidates) => {
+    let best = null;
+    for (const [which, distance] of candidates) {
+      if (distance > HANDLE_GRAB_PX) continue;
+      if (!best || distance < best[1]) best = [which, distance];
+    }
+    return best ? best[0] : null;
+  };
+  // The step being worked on gets first claim on a touch.
+  return session.dentStep === 'mirror'
+    ? nearest(mirror) || onLine || nearest(triangle)
+    : nearest(triangle) || nearest(mirror) || onLine;
 }
 
 function dragDentHandle(which, point) {
@@ -448,23 +555,51 @@ function dragDentHandle(which, point) {
   const target = windowToTexel(part, session.piercedAt, point);
   const handles = dentHandles(part);
   const place = handles.place;
+  const mirror = openingMirror(part);
 
-  if (which === 'base') {
+  if (which === 'm1' || which === 'm2') {
+    // One end follows the finger; the other stays. Both on texel corners.
+    const other = which === 'm1' ? mirror.p2 : mirror.p1;
+    const [a, b] = which === 'm1' ? [target, other] : [other, target];
+    partsStore.setPierceMirror(part.id, a.x, a.y, b.x, b.y);
+  } else if (which === 'mline') {
+    // The whole line, by whole texels, keeping its angle.
+    const start = session.dentDrag && session.dentDrag.start;
+    if (start) {
+      const dx = Math.round(target.x - start.finger.x);
+      const dy = Math.round(target.y - start.finger.y);
+      partsStore.setPierceMirror(part.id, start.p1.x + dx, start.p1.y + dy, start.p2.x + dx, start.p2.y + dy);
+    }
+  } else if (which === 'base') {
     // The grip is drawn outside the surface (handleWindowPoint): the base is
-    // that far back in along the seam from the finger.
+    // that far back in along the seam from the finger. With a mirror line
+    // placed, carried square onto it: the triangle slides ALONG the line.
     const reach = (BASE_GRIP_OFFSET * HANDLE_RADIUS) / (session.cam.zoom * part.scale);
-    partsStore.setPierceDentPlacement(part.id, target.x + handles.inward.x * reach, target.y + handles.inward.y * reach, place.angle);
+    let at = { x: target.x + handles.inward.x * reach, y: target.y + handles.inward.y * reach };
+    if (mirror.placed) at = onMirror(mirror, at);
+    partsStore.setPierceDentPlacement(part.id, at.x, at.y, place.angle);
   } else if (which === 'apex') {
     // The apex sets the direction AND the depth: dragging it around the
     // base swings the marker, dragging it away from the base deepens it.
+    // With a mirror line placed it can only point along the line: the depth
+    // is how far along it the finger is, and dragging past the base turns
+    // it to point the other way.
     const dx = target.x - place.x;
     const dy = target.y - place.y;
-    const depth = Math.hypot(dx, dy);
-    // Too close to the base to read an angle from: keep the one it has
-    // rather than letting the marker spin under a fingertip.
-    const angle = depth < 0.5 ? place.angle : Math.atan2(dy, dx);
-    partsStore.setPierceDentPlacement(part.id, place.x, place.y, angle);
-    partsStore.setPierceDent(part.id, depth, part.pierceDentWidth);
+    if (mirror.placed) {
+      const along = dx * mirror.dir.x + dy * mirror.dir.y;
+      const lineAngle = Math.atan2(mirror.dir.y, mirror.dir.x);
+      const angle = Math.abs(along) < 0.5 ? place.angle : lineAngle + (along < 0 ? Math.PI : 0);
+      partsStore.setPierceDentPlacement(part.id, place.x, place.y, angle);
+      partsStore.setPierceDent(part.id, Math.abs(along), part.pierceDentWidth);
+    } else {
+      const depth = Math.hypot(dx, dy);
+      // Too close to the base to read an angle from: keep the one it has
+      // rather than letting the marker spin under a fingertip.
+      const angle = depth < 0.5 ? place.angle : Math.atan2(dy, dx);
+      partsStore.setPierceDentPlacement(part.id, place.x, place.y, angle);
+      partsStore.setPierceDent(part.id, depth, part.pierceDentWidth);
+    }
   } else {
     // Width alone: only the component across the marker counts, so dragging
     // at any angle widens it without dragging it off its own axis.
@@ -477,12 +612,24 @@ function dragDentHandle(which, point) {
 }
 
 function beginDentDrag(point) {
-  const which = grabDentHandle(point);
+  let which = grabDentHandle(point);
+  const part = session.pierced;
+  const m = openingMirror(part);
+  // In the Mirror line step a touch on nothing picks the line up there: it
+  // jumps so its middle is under the finger, and the drag carries on.
+  const jump = !which && session.dentStep === 'mirror';
+  if (jump) which = 'mline';
   if (!which) return false;
+  const finger = windowToTexel(part, session.piercedAt, point);
+  const middle = { x: (m.p1.x + m.p2.x) / 2, y: (m.p1.y + m.p2.y) / 2 };
+  const corner = (p) => ({ x: Math.round(p.x), y: Math.round(p.y) });
+  const mirrorDrag = which === 'm1' || which === 'm2' || which === 'mline';
   session.dentDrag = {
     which,
-    token: history.capture(which === 'base' ? 'Place dent' : `Resize dent (${which})`),
+    token: history.capture(mirrorDrag ? 'Place mirror line' : which === 'base' ? 'Place dent' : `Resize dent (${which})`),
     changed: false,
+    // Where the line and the finger started, for moving it whole.
+    start: { finger: jump ? middle : finger, p1: corner(m.p1), p2: corner(m.p2) },
   };
   dragDentHandle(which, point);
   return true;
@@ -516,6 +663,8 @@ function previewKey() {
   return [
     b.pierceDentDepth, b.pierceDentWidth, b.pierceDentDilation, b.pierceDentPlaced,
     b.pierceDentX, b.pierceDentY, b.pierceDentAngle, b.pierceRegionVersion, b.pierceRegion.size,
+    b.pierceMirrorPlaced, b.pierceMirrorX1, b.pierceMirrorY1, b.pierceMirrorX2, b.pierceMirrorY2,
+    b.pierceWedgeMode, b.pierceWedgeWidthPx,
     b.pierceDeformRegionVersion, b.pinsVersion || 0, b.mesh ? b.mesh.vertices.length : 0,
     a.pierceRegionVersion, a.pierceRegion.size, a.pierceEnter, a.pierceEnd, a.pierceDentStart,
     a.pierceWedgeLock, a.scale, b.scale,
@@ -688,13 +837,15 @@ function render() {
       `seam ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} ` +
       `@ ${where.x.toFixed(0)},${where.y.toFixed(0)}` +
       `${pierced.pierceDentPlaced ? '' : ' (unplaced)'} · ` +
+      `${pierced.pierceMirrorPlaced ? 'mirror placed' : 'mirror follows the triangle'} · ` +
       `${Math.round(cam.zoom * 100)}%`;
   if (issue) {
     els.pierceWindowStatus.replaceChildren(createIcon('warning'), document.createTextNode(` no opening — ${issue}`));
   } else if (layers && preview.built) {
     // What the preview is showing, in the numbers it was built from.
     const o = preview.built.opening;
-    const gap = o.sides ? `gap ${o.sides.px} px (${pierced.pierceDentDilation}% of the tip) · ` : '';
+    const how = pierced.pierceWedgeMode === WedgeWidthMode.MANUAL ? 'manual' : `${pierced.pierceDentDilation}% of the tip`;
+    const gap = o.sides ? `gap ${o.sides.px} px = ${Math.floor(o.sides.px / 2)} + ${o.sides.px - Math.floor(o.sides.px / 2)} mirrored (${how}) · ` : '';
     els.pierceWindowStatus.textContent = `preview at the Lock ${Math.round(preview.built.lock * 100)}% · ${gap}` +
       `seam ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} · ${Math.round(cam.zoom * 100)}%`;
   } else {
@@ -716,8 +867,12 @@ const TARGET_HINT = {
   area: 'Where a pierce registers at all on this layer.',
   tip: 'The part of the piercer that goes in.',
   dent: 'Drag the triangle onto the spot the seam should open: base on the '
-    + 'surface, point aimed the way the piercer goes in. Its centre line is the '
-    + 'seam. It stays there — the piercer decides how far it opens, not where.',
+    + 'surface, point aimed the way the piercer goes in. It slides along the '
+    + 'mirror line, which is the seam. It stays there — the piercer decides how '
+    + 'far it opens, not where.',
+  mirror: 'Step 1: drag the mirror line onto where the wedge\u2019s centre should be '
+    + '(touch anywhere to pick it up there; drag an end to turn it). The wedge '
+    + 'opens as two exact mirror images about it. Then step 2, the triangle.',
 };
 
 function renderTools() {
@@ -726,7 +881,8 @@ function renderTools() {
   els.piercePaintOpacityLabel.textContent = paint.label;
   els.piercePaintOpacity.value = String(percent);
   els.piercePaintOpacityValue.textContent = `${percent}%`;
-  const hint = TARGET_HINT[session.target];
+  const hint = session.target === 'dent' && session.dentStep === 'mirror'
+    ? TARGET_HINT.mirror : TARGET_HINT[session.target];
   els.pierceTargetHint.textContent = hint || '';
   els.pierceTargetHint.hidden = !hint;
   els.pierceTargetTipBtn.setAttribute('aria-pressed', String(session.target === 'tip'));
@@ -745,10 +901,20 @@ function renderTools() {
   const painting = session.target !== 'dent';
   // The opening's width, beside the marker it belongs to, so it can be tuned
   // against the preview (the Pierce panel has the same control).
-  els.pierceWindowDilationRow.hidden = painting;
+  const manual = Boolean(session.pierced) && session.pierced.pierceWedgeMode === WedgeWidthMode.MANUAL;
+  els.pierceDentStepRow.hidden = painting;
+  els.pierceDentStepMirrorBtn.setAttribute('aria-pressed', String(session.dentStep === 'mirror'));
+  els.pierceDentStepTriangleBtn.setAttribute('aria-pressed', String(session.dentStep === 'triangle'));
+  els.pierceWindowWedgeModeRow.hidden = painting;
+  els.pierceWindowWedgeAutoBtn.setAttribute('aria-pressed', String(!manual));
+  els.pierceWindowWedgeManualBtn.setAttribute('aria-pressed', String(manual));
+  els.pierceWindowDilationRow.hidden = painting || manual;
+  els.pierceWindowWedgeWidthRow.hidden = painting || !manual;
   if (session.pierced) {
     els.pierceWindowDilation.value = String(session.pierced.pierceDentDilation);
     els.pierceWindowDilationValue.textContent = `${session.pierced.pierceDentDilation}% of the tip`;
+    els.pierceWindowWedgeWidth.value = String(session.pierced.pierceWedgeWidthPx);
+    els.pierceWindowWedgeWidthValue.textContent = `${session.pierced.pierceWedgeWidthPx} px`;
   }
   els.pierceToolRow.hidden = !painting;
   els.pierceBrushPresets.hidden = !painting;
@@ -999,6 +1165,12 @@ export function pierceToolDebug() {
     brushMenuOpen: session.brushMenuOpen,
     // Where the dent's handles currently are, so a test can drive them
     // through the same coordinates a finger would land on.
+    dentStep: session.dentStep,
+    mirror: session.pierced ? mirrorHandles(session.pierced) : null,
+    // The Dent target's preview buffers (scene pixels, origin x/y in the
+    // window's flat placement), so a test can read the opened layer itself,
+    // without the marker and grips drawn over it.
+    preview: session.preview && session.preview.layers ? session.preview.layers : null,
     dent: session.pierced ? {
       ...dentHandles(session.pierced),
       depth: session.pierced.pierceDentDepth,
@@ -1014,6 +1186,7 @@ export function pierceToolDebug() {
 export function pierceDentHandlePoint(which) {
   if (!session || !session.pierced) return null;
   const handles = dentHandles(session.pierced);
+  if (which === 'm1' || which === 'm2' || which === 'mline') return handleWindowPoint(session.pierced, session.piercedAt, handles, which);
   return handles[which] ? handleWindowPoint(session.pierced, session.piercedAt, handles, which) : null;
 }
 
@@ -1090,6 +1263,46 @@ export function initPierceTool() {
     render();
   });
   els.pierceWindowDilation.addEventListener('change', commitDilation);
+
+  // The Dent's two steps.
+  const step = (which) => {
+    if (!session) return;
+    session.dentStep = which;
+    renderTools();
+    render();
+  };
+  els.pierceDentStepMirrorBtn.addEventListener('click', () => step('mirror'));
+  els.pierceDentStepTriangleBtn.addEventListener('click', () => step('triangle'));
+
+  // Automatic or a fixed pixel width -- one undo step each switch.
+  const wedgeMode = (mode) => {
+    if (!session || !session.pierced || session.pierced.pierceWedgeMode === mode) return;
+    history.run(mode === WedgeWidthMode.MANUAL ? 'Wedge width: manual' : 'Wedge width: automatic',
+      () => partsStore.setPierceWedgeMode(session.pierced.id, mode));
+    markPierceStale();
+    renderTools();
+    render();
+  };
+  els.pierceWindowWedgeAutoBtn.addEventListener('click', () => wedgeMode(WedgeWidthMode.AUTO));
+  els.pierceWindowWedgeManualBtn.addEventListener('click', () => wedgeMode(WedgeWidthMode.MANUAL));
+  let widthToken = null;
+  let widthTimer = null;
+  const commitWidth = () => {
+    clearTimeout(widthTimer);
+    if (widthToken) history.commitCapture(widthToken, true);
+    widthToken = null;
+  };
+  els.pierceWindowWedgeWidth.addEventListener('input', () => {
+    if (!session || !session.pierced) return;
+    if (!widthToken) widthToken = history.capture('Change wedge width');
+    clearTimeout(widthTimer);
+    widthTimer = setTimeout(commitWidth, 500);
+    partsStore.setPierceWedgeWidth(session.pierced.id, Number(els.pierceWindowWedgeWidth.value));
+    els.pierceWindowWedgeWidthValue.textContent = `${els.pierceWindowWedgeWidth.value} px`;
+    markPierceStale();
+    render();
+  });
+  els.pierceWindowWedgeWidth.addEventListener('change', commitWidth);
   els.piercePaintOpacity.addEventListener('input', () => {
     if (!session) return;
     setSetting((PAINT[session.target] || PAINT.area).key, Number(els.piercePaintOpacity.value));

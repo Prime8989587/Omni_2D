@@ -10,7 +10,9 @@ import { strict as assert } from 'node:assert';
 import {
   Part, partsStore, PierceRole, DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
   DEFAULT_WEDGE_LOCK, clampWedgeLock, DEFAULT_DENT_DILATION, clampDentDilation,
+  clampWedgeWidthPx, DEFAULT_WEDGE_WIDTH_PX, WedgeWidthMode,
 } from '../www/js/parts.js';
+import { serializeProject, applyProject } from '../www/js/project.js';
 import {
   contactOf, pierceOpeningOf, markPierceStale, resetPierceContainment, pierceDentIssue,
   pierceOpeningPreview,
@@ -18,7 +20,7 @@ import {
 import {
   openingFor, openingAmplitude, openingShift, openingSides, openingGeometry,
   refinedMesh, openingMarker, seamCoordinates, resetOpeningCaches, openingRim, openingCover,
-  openingDisplacement, openingSideWidths,
+  openingDisplacement, openingSideWidths, openingMirror, openingPlacement,
 } from '../www/js/opening.js';
 import { generateMesh, defaultDensity, deformVertices } from '../www/js/mesh.js';
 
@@ -213,15 +215,21 @@ section('1. The shape: a soft bulge that tracks the tip');
     for (let s = -2; s <= 28; s += 0.1) assert.equal(openingRim(o, s, 1) + openingRim(o, s, -1), 0);
   });
 
-  check('the rim follows the real outline on each side: an off-centre tip opens one side further', () => {
+  check('MIRRORED: a tip off the centreline opens both sides alike, half its width each side', () => {
     // A tip 6 texels wide whose middle is 2 texels to side B of the seam
-    // (across is -x, so side B is smaller u).
+    // (across is -x, so side B is smaller u). Before the mirror line this
+    // opened side B further than side A; now every row opens to the tip's
+    // width there, split evenly about the line.
     const points = [];
     for (let v = 0; v <= 10; v++) for (let u = 15; u <= 20; u++) points.push({ u: u + 0.5 - 0.5, v: v + 0.5 });
     const o = openingFor(part, { fraction: 1, tip: { u: 18, v: 10.5 }, tipHalfWidth: 3, tipPoints: points });
+    let worst = 0;
+    for (let s = -2; s <= 12; s += 0.05) {
+      worst = Math.max(worst, Math.abs(openingRim(o, s, -1) - openingRim(o, s, 1)));
+      worst = Math.max(worst, Math.abs(openingCover(o, s, -1) - openingCover(o, s, 1)));
+    }
     const a = openingRim(o, 5, -1);
-    const b = openingRim(o, 5, 1);
-    assert.ok(b > a + 1 && b <= openingCover(o, 5, 1) && a <= openingCover(o, 5, -1), `side A ${a.toFixed(2)}, side B ${b.toFixed(2)}`);
+    assert.ok(worst < 1e-12 && a > 1, `side A ${a.toFixed(2)}, worst difference ${worst}`);
   });
 
   check('pure: the same contact gives exactly the same opening, so backing out retraces it', () => {
@@ -737,6 +745,140 @@ section('4. How wide it opens: a share of the piercer\'s tip width');
     const moved = pierceOpeningPreview(p.piercer, p.pierced).opening;
     assert.equal(moved.base.x - first.base.x, 4);
     assert.deepEqual(moved.sides, first.sides);
+  });
+
+  // -------------------------------------------------------------------------
+  results.push('\n5. The mirror line, and a wedge width in plain pixels');
+
+  check('unplaced, the mirror line is the triangle\'s own centreline: nothing moves', () => {
+    const { pierced } = pair(8);
+    const m = openingMirror(pierced);
+    const p = openingPlacement(pierced);
+    assert.equal(m.placed, false);
+    assert.deepEqual({ x: p.x, y: p.y, angle: p.angle }, { x: 20, y: 0, angle: Math.PI / 2 });
+    assert.ok(Math.abs(m.dir.x) < 1e-12 && Math.abs(m.dir.y - 1) < 1e-12);
+  });
+
+  check('placed, the triangle is carried square onto it and points along it, whichever way it was aimed', () => {
+    const { pierced } = pair(8);
+    partsStore.setPierceMirror(pierced.id, 24, 0, 24, 48);
+    partsStore.setPierceDentPlacement(pierced.id, 30, 5, Math.PI / 2 + 0.4);
+    let p = openingPlacement(pierced);
+    assert.ok(Math.abs(p.x - 24) < 1e-12 && Math.abs(p.y - 5) < 1e-12 && Math.abs(p.angle - Math.PI / 2) < 1e-12,
+      `${p.x}, ${p.y}, ${p.angle}`);
+    partsStore.setPierceDentPlacement(pierced.id, 10, 30, -Math.PI / 2 + 0.2);
+    p = openingPlacement(pierced);
+    assert.ok(Math.abs(p.x - 24) < 1e-12 && Math.abs(p.y - 30) < 1e-12 && Math.abs(Math.cos(p.angle)) < 1e-12 && Math.sin(p.angle) < 0,
+      'aimed up the line, it points up it');
+    // A diagonal line: the base still lands exactly on it.
+    partsStore.setPierceMirror(pierced.id, 0, 0, 40, 40);
+    p = openingPlacement(pierced);
+    assert.ok(Math.abs(p.x - p.y) < 1e-12, `on the diagonal: ${p.x}, ${p.y}`);
+  });
+
+  check('the mirror line\'s ends sit on texel corners and must make a line', () => {
+    const { pierced } = pair(8);
+    partsStore.setPierceMirror(pierced.id, 20.4, 0.6, 19.6, 47.7);
+    assert.deepEqual([pierced.pierceMirrorX1, pierced.pierceMirrorY1, pierced.pierceMirrorX2, pierced.pierceMirrorY2], [20, 1, 20, 48]);
+    assert.equal(partsStore.setPierceMirror(pierced.id, 5, 5, 5, 5), false, 'a point is not a line');
+  });
+
+  // The wedge mirrored about the line, with the needle sitting `offset`
+  // texels off it: rims equal at every point of the seam, and the push on
+  // one side the exact reflection of the push on the other.
+  const mirrorWorst = (offset, mirrorX = 20) => {
+    const p = pair(8);
+    partsStore.setPierceMirror(p.pierced.id, mirrorX, 0, mirrorX, 48);
+    p.piercer.x += offset;
+    const { opening: o } = atLock(p);
+    let rim = 0;
+    let field = 0;
+    for (let s = -2; s <= o.length + 2; s += 0.1) rim = Math.max(rim, Math.abs(openingRim(o, s, -1) - openingRim(o, s, 1)));
+    for (let v = 0; v <= 30; v += 0.5) {
+      for (let d = 0; d <= 12; d += 0.25) {
+        // Across is -x here, so side B (t > 0) is the smaller u.
+        const b = openingDisplacement(o, mirrorX - d, v, 1);
+        const a = openingDisplacement(o, mirrorX + d, v, -1);
+        field = Math.max(field, Math.abs(b + a));
+      }
+    }
+    return { o, rim, field };
+  };
+  for (const offset of [0, 1, 2, -2]) {
+    check(`the wedge is the mirror image of itself about the line, the needle ${offset} px off it`, () => {
+      const { o, rim, field } = mirrorWorst(offset);
+      assert.ok(o && o.sides.px === 6, 'it opens, 6 px');
+      assert.ok(rim < 1e-12 && field < 1e-12, `rim ${rim}, field ${field}`);
+    });
+  }
+  check('wherever the triangle is dragged, the opening stays on the line', () => {
+    const p = pair(8);
+    partsStore.setPierceMirror(p.pierced.id, 20, 0, 20, 48);
+    for (const [x, y] of [[20, 0], [27, 0], [13, 2], [20, 6]]) {
+      partsStore.setPierceDentPlacement(p.pierced.id, x, y, Math.PI / 2);
+      const o = pierceOpeningPreview(p.piercer, p.pierced).opening;
+      assert.ok(Math.abs(o.base.x - 20) < 1e-12, `triangle at ${x},${y}: opening centred at ${o.base.x}`);
+    }
+  });
+
+  check('Manual: the wedge opens exactly the pixels asked for, whatever the tip', () => {
+    for (const tip of [8, 12]) {
+      const p = pair(tip);
+      partsStore.setPierceWedgeMode(p.pierced.id, WedgeWidthMode.MANUAL);
+      partsStore.setPierceWedgeWidth(p.pierced.id, 10);
+      const o = atLock(p).opening;
+      assert.deepEqual(o.sides, { a: 5, b: 5, px: 10 }, `tip ${tip}`);
+      const w = widest(o);
+      assert.ok(Math.abs(w.a - 5) < 0.02 && Math.abs(w.b - 5) < 0.02, `rims ${w.a.toFixed(3)} / ${w.b.toFixed(3)}`);
+    }
+  });
+  check('Manual, odd: 7 px is 3 + 4, the odd pixel to side B as in Automatic', () => {
+    const p = pair(12);
+    partsStore.setPierceWedgeMode(p.pierced.id, WedgeWidthMode.MANUAL);
+    partsStore.setPierceWedgeWidth(p.pierced.id, 7);
+    const o = atLock(p).opening;
+    assert.deepEqual(o.sides, { a: 3, b: 4, px: 7 });
+    const w = widest(o);
+    assert.ok(Math.abs(w.a - 3) < 0.02 && Math.abs(w.b - 4) < 0.02, `rims ${w.a.toFixed(3)} / ${w.b.toFixed(3)}`);
+  });
+  check('back to Automatic, the ratio rules again (75% of 12 px is 9)', () => {
+    const p = pair(12);
+    partsStore.setPierceWedgeMode(p.pierced.id, WedgeWidthMode.MANUAL);
+    partsStore.setPierceWedgeWidth(p.pierced.id, 3);
+    partsStore.setPierceWedgeMode(p.pierced.id, WedgeWidthMode.AUTO);
+    assert.deepEqual(atLock(p).opening.sides, { a: 4, b: 5, px: 9 });
+  });
+  check('the preview obeys Manual too', () => {
+    const p = pair(8);
+    partsStore.setPierceWedgeMode(p.pierced.id, WedgeWidthMode.MANUAL);
+    partsStore.setPierceWedgeWidth(p.pierced.id, 11);
+    assert.deepEqual(pierceOpeningPreview(p.piercer, p.pierced).opening.sides, { a: 5, b: 6, px: 11 });
+  });
+  check('the manual width is whole pixels, 1-64, 6 by default', () => {
+    assert.equal(DEFAULT_WEDGE_WIDTH_PX, 6);
+    assert.equal(makePart('x', { w: 4, h: 4, x: 0, y: 0 }).pierceWedgeMode, WedgeWidthMode.AUTO);
+    assert.equal(clampWedgeWidthPx(0), 1);
+    assert.equal(clampWedgeWidthPx(500), 64);
+    assert.equal(clampWedgeWidthPx(6.6), 7);
+    assert.equal(clampWedgeWidthPx('x'), DEFAULT_WEDGE_WIDTH_PX);
+  });
+  check('a saved project keeps the mirror line and the width mode; an older one loads with neither', () => {
+    const p = pair(8);
+    partsStore.setPierceMirror(p.pierced.id, 22, 0, 22, 40);
+    partsStore.setPierceWedgeMode(p.pierced.id, WedgeWidthMode.MANUAL);
+    partsStore.setPierceWedgeWidth(p.pierced.id, 9);
+    const data = JSON.parse(JSON.stringify(serializeProject({ copyPixels: true })));
+    for (const part of data.parts) part.pixels = new Uint8ClampedArray(Object.values(part.pixels));
+    applyProject(data);
+    const back = partsStore.parts.find((x) => x.name === 'flesh');
+    assert.deepEqual([back.pierceMirrorPlaced, back.pierceMirrorX1, back.pierceMirrorX2, back.pierceMirrorY2, back.pierceWedgeMode, back.pierceWedgeWidthPx],
+      [true, 22, 22, 40, 'manual', 9]);
+    for (const part of data.parts) {
+      for (const k of ['pierceMirrorPlaced', 'pierceMirrorX1', 'pierceMirrorY1', 'pierceMirrorX2', 'pierceMirrorY2', 'pierceWedgeMode', 'pierceWedgeWidthPx']) delete part[k];
+    }
+    applyProject(data);
+    const old = partsStore.parts.find((x) => x.name === 'flesh');
+    assert.deepEqual([old.pierceMirrorPlaced, old.pierceWedgeMode, old.pierceWedgeWidthPx], [false, 'auto', 6]);
   });
 }
 

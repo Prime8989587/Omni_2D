@@ -135,26 +135,49 @@ function boneWeights(part) {
   return totals;
 }
 
-// The bones a piercer drag writes to: whatever drives each piercer layer
-// (layerBone). A piercer bound to its own little rig is moved by moving
-// that rig; an unbound one is moved by its own coordinates
-// (partsStore.translatePiercers). Doing both to the same layer would
-// double its travel, which is why each layer answers to exactly one.
+// WHICH PIERCER A PIERCER DRAG MOVES
 //
-// A weight-bound piercer prefers a bone that moves no other layer, so the
-// Piercer tab still moves only the piercer wherever the rig allows it. When
-// every bone it has also reaches into the body -- auto-weights bleed across a
-// piercer bone sitting right on the body's edge -- the heaviest one is moved
-// anyway, and those body pixels follow it: that is what the weights say.
-function piercerBones() {
-  const bones = [];
-  const others = partsStore.parts.filter((part) => !part.isPiercer);
-  for (const part of partsStore.piercers) {
-    const attached = bonesStore.bonesAttachedTo(part.id);
-    const driving = attached.length ? attached : [layerBone(part.id, { avoid: others })].filter(Boolean);
-    for (const bone of driving) if (!bones.includes(bone)) bones.push(bone);
-  }
-  return bones;
+// One at a time. A scene can hold several Piercer layers -- three needles,
+// a finger and a tongue -- and the Piercer tab used to move every one of
+// them together as a single group, so none could be pushed in on its own.
+// The tab now has the same "Drag moves" list the Body tab has, naming every
+// Piercer layer; the one chosen there is the only one a drag moves, and the
+// others stay exactly where they are.
+//
+// Held by id and resolved fresh, like the Body tab's layer: a deleted or
+// re-roled piercer falls back to the first one there is.
+let targetPiercerId = null;
+
+export function getTargetPiercer() {
+  const piercers = partsStore.piercers;
+  return piercers.find((part) => part.id === targetPiercerId) || piercers[0] || null;
+}
+
+export function setTargetPiercer(partId) {
+  if (targetPiercerId === partId) return;
+  // Same reason as the Body tab: never hand the finger a different object
+  // halfway through one gesture.
+  endPoseDrag();
+  targetPiercerId = partId;
+}
+
+// The bones a piercer drag writes to: whatever drives the CHOSEN piercer
+// layer (layerBone). A piercer bound to its own little rig is moved by
+// moving that rig; an unbound one is moved by its own coordinates
+// (partsStore.translatePiercers). Doing both to the same layer would double
+// its travel, which is why each layer answers to exactly one.
+//
+// A weight-bound piercer prefers a bone that moves no other layer -- the
+// body, and every other piercer -- so the Piercer tab moves only the chosen
+// piercer wherever the rig allows it. When every bone it has also reaches
+// into another layer -- auto-weights bleed across a piercer bone sitting
+// right on the body's edge -- the heaviest one is moved anyway, and those
+// pixels follow it: that is what the weights say.
+function piercerBones(piercer) {
+  if (!piercer) return [];
+  const others = partsStore.parts.filter((part) => part.id !== piercer.id);
+  const attached = bonesStore.bonesAttachedTo(piercer.id);
+  return attached.length ? attached : [layerBone(piercer.id, { avoid: others })].filter(Boolean);
 }
 
 export function hasPiercerTarget() {
@@ -260,7 +283,9 @@ export function beginPoseDrag(bone, scenePoint) {
   // still be pushed around.
   // Resolved once per gesture: the same bones for the whole drag, and no
   // weight totals re-summed on every pointer move.
-  const piercerRig = piercing ? piercerBones() : [];
+  const piercer = piercing ? getTargetPiercer() : null;
+  if (piercing && !piercer) return;
+  const piercerRig = piercing ? piercerBones(piercer) : [];
   const anchorBone = piercing ? piercerRig[0] : bone;
   // A NON-ROOT bone is grabbed by its TAIL, not its head. Its head is the
   // joint, which is exactly the point that is going to stay still -- anchor
@@ -280,6 +305,7 @@ export function beginPoseDrag(bone, scenePoint) {
     token: history.capture(piercing ? 'Move piercer'
       : (anchorBone && anchorBone.parentId !== null ? `Move ${anchorBone.name}` : 'Move character')),
     piercing,
+    piercerId: piercer ? piercer.id : null,
     piercerRig,
     moved: false,
   };
@@ -301,7 +327,7 @@ export function updatePoseDrag(scenePoint) {
   // at -- and to nothing it is not.
   if (drag.piercing) {
     for (const bone of drag.piercerRig) bonesStore.nudgePosition(bone, dx, dy);
-    partsStore.translatePiercers(dx, dy);
+    partsStore.translatePiercers(dx, dy, drag.piercerId);
   } else {
     // The fork, and the ONLY thing the layer menu changes. Both branches
     // are the behaviour that was already here and already verified; which

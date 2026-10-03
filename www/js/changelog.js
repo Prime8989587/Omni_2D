@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.8.0',
+    date: '2026-10-03',
+    title: 'Pierce: a mirror line for the wedge, a wedge width in plain pixels; Free Move picks one piercer',
+    kind: 'minor',
+    notes: [
+      'Pierce window → Dent is now two steps. 1 · Mirror line: drag the mint line onto where the wedge\u2019s centre should be (touch anywhere to pick it up there, drag an end to turn it; its ends sit on pixel corners). 2 · Triangle: it slides ALONG that line, so it can never be off-centre or askew. The wedge opens as two exact mirror images about the line, however far off it the piercer comes in, and the live preview follows every drag of either.',
+      'Wedge width: Automatic (ratio) as before, or Manual (px) — exactly the pixels you set, whatever the piercer. Both split evenly either side of the mirror line; an odd width puts the extra pixel on one side (7 px is 3 + 4). In the Pierce panel and the Pierce window.',
+      'Free Move, Piercer tab: with several Piercer layers, Drag moves lists each one by name; the one chosen is the only one a drag moves (its bone too, if it has one) — the others stay exactly where they are.',
+      'The Pierce window keeps a proper share of the screen for its canvas on a phone; the controls under it scroll.',
+    ],
+  },
+  {
     version: '2.7.2',
     date: '2026-10-03',
     title: 'A bone moves the layer it controls, all of it, and nothing else',

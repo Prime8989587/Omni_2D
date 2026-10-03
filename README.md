@@ -8149,6 +8149,123 @@ upper arm now, 9 px for a 40° swing. That is the link's own setting: both
 layers give way. Before, the forearm's held-back elbow end left it nothing
 to pull. A default (parent holds still) link leaves the upper arm at 0.
 
+## 2.8.0: a mirror line for the wedge, a wedge width in pixels, one piercer at a time
+
+Three requests. The first two were illustrated with two reference images: a
+tapered piercer sitting on a centreline with the two sides diverging
+symmetrically from it, and the classic wedge diagram, where the inserted
+shape pushes two halves apart, each away from a shared centreline. The
+point of both is the *symmetry about a centre*, and that is what was
+missing. The Dent triangle was dropped by eye, and each side of the opening
+followed how far the piercer happened to reach on *that* side. So a
+triangle a pixel off, or a tip a pixel off-centre, opened a lopsided wedge.
+
+### 1. The mirror line, placed before the triangle
+
+Pierce window → **Dent** is now two steps:
+
+1. **Mirror line**: a mint line across the pierced layer. Drag it onto where
+   the wedge's centre should be. Touch anywhere to pick it up there, drag
+   along it to move it, drag an end to turn it. Its ends sit on **texel
+   corners**, so the line runs along pixel edges and every pixel on one side
+   has an exact partner on the other. Until it is placed it is the
+   triangle's own centreline (drawn dashed), so a project set up before 2.8.0
+   opens where it always did.
+2. **Triangle**: Width, Depth and the opening width work exactly as before,
+   but the triangle now **slides along the line**. Its base is carried
+   square onto the line wherever the finger drops it, and its apex can only
+   point along the line, in either direction. It cannot be off-centre or
+   askew.
+
+The line stays draggable in step 2 (the triangle's grips get the first
+claim on a touch there), and the live preview follows every drag of either.
+
+**Mirrored by construction** (`opening.js`). Each row of the seam now opens
+to *half the piercer's whole width there, on both sides alike*, about the
+line, instead of to how far the tip reaches on each side. The two rims are
+the same function, so the displacement on one side is the exact reflection
+of the other, wherever across the line the piercer sits. The odd pixel of an
+odd width goes to one side, as before (7 px is 3 + 4).
+
+### 2. Wedge width in plain pixels
+
+Beside Depth and Width (Pierce panel and Pierce window):
+
+- **Automatic (ratio)**: the gap is the Opening width's share of the
+  piercer's tip width, as in 2.7.0.
+- **Manual (px)**: exactly the pixels you set, 1–64, whatever the
+  piercer. It overrides the ratio entirely.
+
+Both are split about the mirror line with the same odd-pixel rule, in the
+live preview and in the scene alike, and both are saved with the project.
+
+### 3. Free Move: one piercer at a time
+
+With several Piercer layers, the Piercer tab used to move them all as one
+group. It now has the same **Drag moves** row as the Body tab, listing every
+Piercer layer by name. The one chosen is the only one a drag moves, its own
+coordinates or its bone if it has one. The others stay exactly where they
+are. The hint under the tabs names it.
+
+### Verified, in the real app with real touches
+
+![Pierce window: the mirror line placed by touch, the triangle dragged off it and staying on it, the live wedge at 75% and Manual 7 px](docs/images/pierce-mirror-line.png)
+
+The pierced layer is striped *symmetrically about x = 26*, so a mirrored
+wedge must render as its own reflection. Every pair of pixels either side
+of the line is compared on the opened layer itself: "boundary" counts gap
+vs flesh mismatches, "art" counts stripe colour mismatches.
+
+| | Gap (left + right of the line) | Boundary mismatches | Art mismatches |
+| --- | --- | --- | --- |
+| Window, line dragged to x = 26, triangle then dragged 9 px off it | base stays at x = 26.00 | | |
+| Window preview, Automatic 75% (8 px tip) | 3 + 3 = 6 | **0** / 1040 | 3 |
+| Window preview, Manual 10 px | 5 + 5 | **0** | 6 |
+| Window preview, Manual 7 px / 5 px | 3 + 4 / 2 + 3 | 4 / 4 (the odd pixel) | 8 / 6 |
+| Scene, finger centred / 2 px right / 2 px left (Automatic) | 3 + 3 each | **0** each | 1 each |
+| Scene, Manual 7 px, finger 2 px off | 3 + 4 | 5 (the odd pixel) | 8 |
+| Scene, Manual 10 px, finger 1 px off | 5 + 5 | **0** | 2 |
+| 2.7.2, same scene, triangle dropped by eye, finger 2 px off | lopsided, leaning | | 160 |
+
+![Free Move: the wedge mirrored about the line with the finger centred, 2 px right and 2 px left; 2.7.2 lopsided for comparison](docs/images/pierce-mirror-scene.png)
+
+The displacement *field* is an exact mirror (`tests/opening.mjs`: rims
+equal and the push on each side the reflection of the other, to 1e-12, with
+the needle 0, 1 and ±2 px off the line). The wedge's *outline* in the
+rendered pixels is exact too: 0 boundary mismatches. The few "art"
+mismatches are stripe edges inside the swelling, landing one pixel
+differently on the two sides. That happens because the artwork is
+resampled through a triangle mesh that is not itself symmetric about the
+line. Each is a single texel of the art, never the opening.
+
+The honest trade-off: the opening stays centred on the line however far off
+it the piercer comes in. With the finger 2 px off, a sliver of the gap
+beside the tip shows background (the dark pixels in the sheet). Put the
+line where the piercer goes in. The help says so.
+
+![Free Move, Piercer tab: three needles listed by name, each moved alone](docs/images/free-move-piercer-picker.png)
+
+| Three Piercer layers (NeedleA on its own bone) | Result |
+| --- | --- |
+| Piercer tab, Drag moves | lists NeedleA, NeedleB, NeedleC; the first chosen |
+| Choose NeedleB, drag (−6, −14) | NeedleB moved (−6, −14); NeedleA, NeedleC, Body 0.00 |
+| Choose NeedleC, drag (4, −10) | NeedleC moved (4, −10); the others 0.00 |
+| Choose NeedleA (bone-driven), drag (3, −12) | NeedleA moved (3, −12); the others 0.00 |
+| Body tab and back | Body reads "Whole character"; Piercer still NeedleA |
+
+`tests/opening.mjs`: 63 checks, 14 new. The new checks cover:
+
+- placement on the line, and the triangle following whichever way it is aimed;
+- texel-corner ends;
+- mirror symmetry with the needle 0 / 1 / ±2 px off;
+- the opening staying on the line wherever the triangle is dragged;
+- Manual 10 px and Manual 7 px = 3 + 4, back to Automatic;
+- the preview obeying Manual;
+- clamps, and save/load (older projects load with neither).
+
+The one older check that asserted the lopsided opening ("an off-centre tip
+opens one side further") now asserts the mirrored one.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

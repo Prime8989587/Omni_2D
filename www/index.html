@@ -479,9 +479,17 @@
             <span>Width <b id="pierceDentWidthValue">10 px</b></span>
             <input id="pierceDentWidthSlider" class="slider" type="range" min="0" max="128" step="1" value="10" />
           </label>
-          <label class="slider-field slider-field--wide">
+          <div class="segmented" role="group" aria-label="How the wedge width is set">
+            <button id="pierceWedgeAutoBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="true">Automatic (ratio)</button>
+            <button id="pierceWedgeManualBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">Manual (px)</button>
+          </div>
+          <label id="pierceDentDilationRow" class="slider-field slider-field--wide">
             <span>Opening width <b id="pierceDentDilationValue">75% of the tip</b></span>
             <input id="pierceDentDilationSlider" class="slider" type="range" min="10" max="150" step="1" value="75" />
+          </label>
+          <label id="pierceWedgeWidthRow" class="slider-field slider-field--wide" hidden>
+            <span>Wedge width <b id="pierceWedgeWidthValue">6 px</b></span>
+            <input id="pierceWedgeWidthSlider" class="slider" type="range" min="1" max="64" step="1" value="6" />
           </label>
           <p class="joint-hint">
             The seam a pierce opens in this layer, in its own pixels. Depth is
@@ -807,6 +815,12 @@
           <button id="pierceTargetBarrierBtn" class="segmented__btn" type="button" aria-pressed="false">Barrier</button>
           <button id="pierceTargetDentBtn" class="segmented__btn" type="button" aria-pressed="false">Dent</button>
         </div>
+        <!-- The Dent is placed in two steps: the mirror line (the wedge's
+             centre) first, then the triangle, which slides along it. -->
+        <div id="pierceDentStepRow" class="segmented" role="group" aria-label="Dent placement step" hidden>
+          <button id="pierceDentStepMirrorBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="true">1 · Mirror line</button>
+          <button id="pierceDentStepTriangleBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">2 · Triangle</button>
+        </div>
         <div id="pierceToolRow" class="segmented" role="group" aria-label="Paint tools">
           <button id="pierceToolPaintBtn" class="segmented__btn" type="button" aria-pressed="true">Paint</button>
           <button id="pierceToolEraseBtn" class="segmented__btn" type="button" aria-pressed="false">Erase</button>
@@ -815,9 +829,17 @@
         <div id="pierceBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
         <div id="pierceBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
         <p id="pierceTargetHint" class="joint-hint" hidden></p>
+        <div id="pierceWindowWedgeModeRow" class="segmented" role="group" aria-label="How the wedge width is set" hidden>
+          <button id="pierceWindowWedgeAutoBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="true">Automatic (ratio)</button>
+          <button id="pierceWindowWedgeManualBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">Manual (px)</button>
+        </div>
         <label id="pierceWindowDilationRow" class="slider-field slider-field--wide" hidden>
           <span>Opening width <b id="pierceWindowDilationValue">75% of the tip</b></span>
           <input id="pierceWindowDilation" class="slider" type="range" min="10" max="150" step="1" value="75" />
+        </label>
+        <label id="pierceWindowWedgeWidthRow" class="slider-field slider-field--wide" hidden>
+          <span>Wedge width <b id="pierceWindowWedgeWidthValue">6 px</b></span>
+          <input id="pierceWindowWedgeWidth" class="slider" type="range" min="1" max="64" step="1" value="6" />
         </label>
         <label class="slider-field slider-field--wide">
           <span><span id="piercePaintOpacityLabel">Tip paint</span> opacity <b id="piercePaintOpacityValue">55%</b></span>
