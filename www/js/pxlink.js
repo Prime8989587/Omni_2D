@@ -847,7 +847,10 @@ export function solve(transforms) {
     let welds;
     let offsets = null;
     let field = null;
-    if (sites.length <= 1) {
+    // A piercer's points stay joints however many there are (see A PIERCER
+    // IS NEVER ATTACHED): a field would carry it back as surely as an
+    // attachment.
+    if (sites.length <= 1 || part.isPiercer) {
       welds = solveWelds(g.mesh, sites);
     } else {
       const carried = rigid.has(id) || !(part.mesh && part.mesh.isBound);
@@ -872,11 +875,25 @@ export function solve(transforms) {
 // given other layer -- as a follower of that layer's anchored links, or as
 // one of a shared link's members -- grouped by that other layer. A group of
 // two or more is an attachment. Map partId -> [{ k, i }] (link, member).
+//
+// A PIERCER IS NEVER ATTACHED. It is the one layer the Piercer tab drives
+// on its own, into another; moved back as a whole onto whatever it is
+// linked to, it could never be driven anywhere, and no pierce could begin
+// (2.5.4 to 2.6.0: a finger tied to a hand layer at two points sat still
+// under the drag and the wedge never opened). Its link points are joints:
+// welded locally, as every link was before attachments, while the drag
+// carries the rest of it in.
+function isPiercerId(id) {
+  const part = partsStore.parts.find((candidate) => candidate.id === id);
+  return Boolean(part && part.isPiercer);
+}
+
 function pairGroups(links) {
   const groups = new Map(); // `${id}|${other}` -> [{ k, i, other }]
   links.forEach((link, k) => {
     link.members.forEach((member, i) => {
       if (member.partId === link.anchorId) return;
+      if (isPiercerId(member.partId)) return;
       const others = link.anchorId
         ? [link.anchorId]
         : link.members.filter((m) => m.partId !== member.partId).map((m) => m.partId);

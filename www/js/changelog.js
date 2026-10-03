@@ -33,6 +33,17 @@
 
 export const RELEASES = [
   {
+    version: '2.6.1',
+    date: '2026-10-03',
+    title: 'Pierce: the wedge happens again, in its own shape',
+    kind: 'patch',
+    notes: [
+      'A piercer tied to another layer by two or more PxLinks can be driven in again. Since 2.5.4 it was moved back onto that layer as a whole every frame, so the Piercer drag never reached the pierced layer and the wedge never opened. A piercer’s links are joints again, as they were when the wedge was right: the drag carries it in, and only the link points stay put.',
+      'The wedge is drawn exactly as in 2.5.4 again: 2.6.0’s change that bent layers linked onto the pierced layer along with the opening is undone — it tore a linked outline into dashes across the wedge.',
+      'The opening’s shape, Lock Point, depth and retraction are unchanged.',
+    ],
+  },
+  {
     version: '2.6.0',
     date: '2026-10-03',
     title: 'PxLink Brush mode, several links on one layer without tearing, Combine Layers',

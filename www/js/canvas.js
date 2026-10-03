@@ -16,8 +16,8 @@ import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
 import { deformVerticesSnapped, partQuad } from './mesh.js';
-import { isLinked, ensureLinkMesh, linkPositions, linkOffsetAt, moveRigid, pxlinkStore, expandLinks } from './pxlink.js';
-import { pxlinkMove, applyPxLinkMove, pxlinkCorrection, locateTexel, landTexel } from './pxlinkState.js';
+import { isLinked, ensureLinkMesh, linkPositions, linkOffsetAt, moveRigid } from './pxlink.js';
+import { pxlinkMove, applyPxLinkMove, pxlinkCorrection } from './pxlinkState.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion, layerClaims } from './raster.js';
@@ -199,79 +199,6 @@ function linkBent(part, transforms, place) {
   return { positions: place(positions), uvs: refined.uvs, triangles: refined.triangles };
 }
 
-// A LAYER LINKED ONTO A PIERCED LAYER OPENS WITH IT
-//
-// A pierce's opening is drawn on top of the pierced layer's shape, and
-// nothing that measures a layer sees it -- PxLink included. So artwork on a
-// separate layer linked onto the pierced one -- an outline of the very edge
-// that opens, a strap across it -- used to stay shut while the flesh beneath
-// it parted: the drawn boundary of the opening was then the overlay's, still
-// closed. Now, at draw time, each such layer's link pairs with the opened
-// layer are moved exactly as the opening moves the pierced layer's own
-// texels there (the drawn pass, minus the shape before the opening), and
-// the layer follows them smoothly round each pair: an inverse-distance blend
-// of their moves, so it never pushes harder than the opening does, faded
-// out a few texels past them. Drawing only, exactly like the opening itself.
-const FOLLOW_PAIRS = 64;
-
-function followOpening(part, geometry, opened) {
-  if (opened.size === 0 || !isLinked(part)) return geometry;
-  const moves = [];
-  for (const [pid, open] of opened) {
-    const pairs = expandLinks(pxlinkStore.links.filter((link) => link.members.some((m) => m.partId === part.id)
-      && link.members.some((m) => m.partId === pid)));
-    const step = Math.max(1, Math.ceil(pairs.length / FOLLOW_PAIRS));
-    for (let k = 0; k < pairs.length; k += step) {
-      const mine = pairs[k].members.find((m) => m.partId === part.id);
-      const theirs = pairs[k].members.find((m) => m.partId === pid);
-      const { opening: o, coarse, passes } = open;
-      const t = (theirs.u - o.base.x) * o.across.x + (theirs.v - o.base.y) * o.across.y;
-      const pass = passes.get(t < 0 ? -1 : 1);
-      const before = locateTexel(coarse.uvs, coarse.triangles, theirs.u, theirs.v);
-      const after = locateTexel(pass.uvs, pass.triangles, theirs.u, theirs.v);
-      if (!before || !after) continue;
-      const a = landTexel(coarse.positions, before);
-      const b = landTexel(pass.positions, after);
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      if (Math.hypot(dx, dy) < 1e-6) continue;
-      moves.push({ u: mine.u, v: mine.v, dx, dy, reach: Math.max(4, 2.5 * Math.hypot(dx, dy) / Math.max(1e-6, part.scale || 1)) });
-    }
-  }
-  if (moves.length === 0) return geometry;
-  // Through the finer copy of the layer's mesh, so a thin outline bends in
-  // a smooth curve, not a few straight pieces.
-  if (part.mesh && geometry.uvs === part.mesh.vertices) {
-    const refined = refinedMesh(part.mesh, part);
-    const P = geometry.positions;
-    geometry = {
-      positions: refined.blends.map(({ ids, ws }) => {
-        let x = 0; let y = 0;
-        for (let c = 0; c < ids.length; c++) { x += P[ids[c]].x * ws[c]; y += P[ids[c]].y * ws[c]; }
-        return { x, y };
-      }),
-      uvs: refined.uvs,
-      triangles: refined.triangles,
-    };
-  }
-  const smooth = (x) => { const k = Math.max(0, Math.min(1, x)); return k * k * (3 - 2 * k); };
-  const positions = geometry.positions.map((p, i) => {
-    const { u, v } = geometry.uvs[i];
-    let W = 0; let x = 0; let y = 0; let keep = 1;
-    for (const m of moves) {
-      const d = Math.hypot(u - m.u, v - m.v);
-      if (d >= m.reach) continue;
-      const w = 1 / (d * d + 0.25);
-      W += w; x += w * m.dx; y += w * m.dy;
-      keep *= 1 - smooth(1 - d / m.reach);
-    }
-    if (W === 0) return p;
-    const k = 1 - keep;
-    return { x: p.x + (x / W) * k, y: p.y + (y / W) * k };
-  });
-  return { ...geometry, positions };
-}
-
 // The same geometry, for a tool window that draws layers exactly as the scene
 // does (the PxLink window) -- one function, so the two can never disagree.
 //
@@ -297,28 +224,21 @@ const sceneClaims = layerClaims();
 function buildDrawList(boneTransforms) {
   const openings = pierceOpenings();
   const entries = [];
-  const opened = new Map(); // partId -> { coarse, passes }, for followOpening
-  const visible = partsStore.partsBottomFirst.filter((part) => part.visible);
-  for (const part of visible) {
+  for (const part of partsStore.partsBottomFirst) {
+    if (!part.visible) continue;
     const opening = part.mesh ? openings.get(part.id) : null;
-    if (!opening) continue;
-    // An opening is built on the layer's own mesh, so a layer being opened
-    // is never handed the finer link drawing.
-    const coarse = partGeometry(part, boneTransforms, { refine: false });
-    const passes = new Map([-1, 1].map((side) => [side, openingGeometry(part, coarse, opening, side)]));
-    opened.set(part.id, { part, opening, coarse, passes });
-  }
-  for (const part of visible) {
-    const open = opened.get(part.id);
-    if (open) {
-      const sides = openingSides(part, open.opening);
+    if (opening) {
+      // An opening is built on the layer's own mesh, so a layer being opened
+      // is never handed the finer link drawing.
+      const geometry = partGeometry(part, boneTransforms, { refine: false });
+      const sides = openingSides(part, opening);
       for (const [side, mask] of [[-1, sides.a], [1, sides.b]]) {
-        const pass = open.passes.get(side);
+        const pass = openingGeometry(part, geometry, opening, side);
         entries.push({ part, geometry: pass, mask, bounds: boundsOf(pass.positions) });
       }
       continue;
     }
-    const geometry = followOpening(part, partGeometry(part, boneTransforms), opened);
+    const geometry = partGeometry(part, boneTransforms);
     entries.push({ part, geometry, mask: null, bounds: boundsOf(geometry.positions) });
   }
 

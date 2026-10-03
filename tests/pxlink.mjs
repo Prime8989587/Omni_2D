@@ -907,5 +907,49 @@ console.log('\nSave, load, undo, delete, crop');
   say(reported && reported.members.length === 2, 'linkPositions reports every member for the tool markers');
 }
 
+// ---------------------------------------------------------------------------
+console.log('\nA piercer tied on at two points is still driven in (never attached)');
+{
+  // The hand tied to the arm at two points, the arm holding still: an
+  // ordinary layer is ATTACHED -- moved back onto the arm as a whole.
+  const tie = (arm, hand) => {
+    link([arm, hand], { x: 42, y: 70 }, arm.id);
+    link([arm, hand], { x: 48, y: 70 }, arm.id);
+  };
+  const far = (part) => part.mesh.vertices.reduce((best, t, i) => (t.v > part.mesh.vertices[best].v ? i : best), 0);
+  {
+    const { arm, hand } = scene();
+    tie(arm, hand);
+    const i = far(hand);
+    const before = deformVertices(hand.mesh, hand, snapshot())[i];
+    bonesStore.nudgePosition(bone('hand'), 0, -8);
+    const after = deformVertices(hand.mesh, hand, snapshot())[i];
+    say(solve(snapshot()).get(hand.id).rigid !== null && Math.hypot(after.x - before.x, after.y - before.y) < 1e-6,
+      'an ordinary layer tied on at two points is attached: its own bone moved 8 px, it stays on the arm');
+  }
+  {
+    // The same hand as a PIERCER, driven up 8 px by its bone (the Piercer
+    // tab): it goes, all but the joints themselves. Before 2.6.1 it stayed
+    // on the arm and no pierce could ever start.
+    const { arm, hand } = scene();
+    partsStore.setPierceRole(hand.id, 'piercer');
+    tie(arm, hand);
+    const i = far(hand);
+    const before = deformVertices(hand.mesh, hand, snapshot())[i];
+    bonesStore.nudgePosition(bone('hand'), 0, -8);
+    const T = snapshot();
+    const correction = solve(T).get(hand.id);
+    const after = deformVertices(hand.mesh, hand, T)[i];
+    const moved = before.y - after.y;
+    say(correction.rigid === null && correction.field === null && correction.offsets === null,
+      'a piercer is never attached, nor carried by a field: its link points are joints');
+    // (A 12 px hand lies wholly inside its joints' welds, which hold a little
+    // of it back; a longer piercer's tip, outside them, goes the whole way --
+    // see the real-app run in the README.)
+    say(moved > 5, 'driven 8 px by its bone, the piercer goes (an attached layer would not move at all)', `far end moved ${moved.toFixed(2)} px`);
+    say(pxlinkStore.links.every((l) => attachedMembers(l).length === 0), 'and the PxLink list does not call it attached');
+  }
+}
+
 console.log(`\n${passed}/${total} passed`);
 if (passed !== total) process.exit(1);

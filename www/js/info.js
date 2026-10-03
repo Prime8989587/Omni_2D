@@ -60,7 +60,9 @@ const TOPICS = {
       'and springs no longer pull it away. Use one link for a joint that ' +
       'bends (a wrist), two or more for something that sits on top (a ' +
       'badge, a strap, an outline) -- or paint it on with Brush (see ' +
-      'Point or Brush).\n\n' +
+      'Point or Brush). A Pierce PIERCER is the exception: it is never ' +
+      'attached, however many links it has, so the Piercer tab can still ' +
+      'drive it in -- its links stay joints.\n\n' +
       'A layer linked to SEVERAL different layers -- a string held by both ' +
       'hands and the body -- is bent by all of its links together, as one ' +
       'smooth shape: haul one hand far away and the string turns and ' +

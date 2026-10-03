@@ -7770,6 +7770,11 @@ was folded by the same failing welds, right where the notch opens.
 
 ![The wedge with its outline on a linked layer, driven past the Lock: 2.5.4 (the outline stays shut over the opening) and now (it opens with the flesh, symmetric round the tip, frozen from the Lock on)](docs/images/wedge-outline.png)
 
+> **Undone in 2.6.1.** Bending linked layers with the opening tore a linked
+> outline into dashes across the wedge, and the wedge in your project had
+> stopped happening for a different reason altogether -- see the 2.6.1
+> chapter below.
+
 ### Verified
 
 Checked in the real app: phone-sized Chromium with real touches and taps.
@@ -7787,6 +7792,68 @@ Checked in the real app: phone-sized Chromium with real touches and taps.
 saving them). The new `tests/combine.mjs` (7) covers compositing, the
 store, and the rasterizer's once-per-layer claims. The twelve browser
 regression suites, the PxLink browser suites and `npm test` all pass.
+
+## 2.6.1: Pierce -- the wedge happens again, in its own shape
+
+You reported the wedge had stopped happening altogether, and showed the
+2.5.2 capture it should look like. Two things since then could each take it
+away, and both are fixed.
+
+### 1. A piercer tied on by PxLinks could not be driven in
+
+Since **2.5.4**, a layer tied to the same other layer at two or more points
+is *attached*: every frame it is moved back onto that layer as a whole. That
+is right for a patch on a torso. For a piercer it was a trap: the Piercer
+tab moves the piercer, and the attachment moved it straight back. The finger
+never reached the pierced layer, the depth never left 0, and no wedge ever
+opened. 2.6.0 made it no better: a layer tied to *different* layers at
+several points became carried by a field, which pulls it back the same way.
+
+Measured in the real app: a finger whose hand end is PxLinked at two points
+to a hand layer that holds still, pushed up the same 36 px on every build:
+
+| Build | Opening, every 4 px of the push |
+| --- | --- |
+| 2.5.2 | 0, 0, 0, 17%, 33%, 50%, 67%, 83%, 100%, 100% |
+| 2.5.3 | the same, held from the Lock (50%) on |
+| 2.5.4 / 2.6.0 | **0 all the way** -- the finger never moves |
+| 2.6.1 | 0, 0, 0, 17%, 33%, 50%, then held at the Lock to 100% |
+
+**The fix** (`pxlink.js`, *A PIERCER IS NEVER ATTACHED*): a piercer is never
+attached and never carried by a field. Its link points are joints, as every
+link was when the wedge looked right. The drag carries the piercer in, and
+only its link points stay put. Every other layer is attached exactly as
+before.
+
+### 2. 2.6.0's "outline opens with the flesh" is undone
+
+2.6.0 bent layers PxLinked onto the pierced layer along with the opening. On
+a linked V outline that tore the lines into dashes across the wedge. It was
+the only change to how the wedge is drawn since the shape you confirmed, so,
+as you asked, it is reversed. The wedge is drawn exactly as in 2.5.4
+(identical to 2.5.2 below the Lock Point), and linked layers keep their
+shape.
+
+![Same push on each build. Top: 2.5.2, a linked finger goes in. 2.6.0: the linked finger never moves. 2.6.1: it goes in, and the shape holds from the Lock. Bottom two rows: a linked outline torn into dashes in 2.6.0, whole in 2.6.1](docs/images/wedge-261.png)
+
+Unchanged: the opening's shape, the Lock Point, depth sync and retraction.
+
+### Verified
+
+Checked in the real app: phone-sized Chromium with real touches and taps.
+
+| | Result |
+| --- | --- |
+| Finger PxLinked to a hand at two points, pushed in (Piercer tab) | opens 17% → 50%, held at the Lock to 100% (2.6.0: 0 throughout) |
+| Finger linked to the hand, outline shared onto the pierced layer, pierced layer pinned to the body | opens exactly as with no links at all |
+| Outline shared onto the pierced layer (4 links), pushed past the Lock | outline whole, wedge as in 2.5.4 |
+| No links, Piercer tab or body dragged (Physics Direction Both) | the same opening fractions on 2.5.2, 2.5.4 and 2.6.1 |
+| Lock sweep (2.5.3) on this build | 11/11 |
+
+`tests/pxlink.mjs` has 87 checks (4 new: an ordinary layer tied on at two
+points is attached, a piercer is not, it follows its drag, and the list
+agrees). The browser regression suites, the PxLink browser suites and
+`npm test` all pass.
 
 ## What's next
 
