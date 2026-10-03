@@ -32,36 +32,44 @@ import { bonesStore } from './bones.js';
 import { history } from './history.js';
 import { pinCarriageOffset } from './mesh.js';
 import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
-import { pierceDentIssue } from './pierce.js';
-import { openingPlacement, openingMarker } from './opening.js';
+import { pierceDentIssue, pierceOpeningPreview, pierceMeshOf, pierceMasks } from './pierce.js';
+import { openingPlacement, openingMarker, openingGeometry, openingSides } from './opening.js';
+import { rasterizeTriangle, layerClaims } from './raster.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
 import { createIcon } from './pixelIcons.js';
 import { fitBackingStore, watchCanvasBox, snapCamera, pinchMidpoint, keepCentred } from './pixelCanvas.js';
 import { noteToolUsed } from './recentTools.js';
+import { getSetting, setSetting } from './settings.js';
 
 // The tip is the app's accent; the pierceable area is deliberately NOT,
 // because the two are painted in the same window and confusing them would
 // put the flesh region on the needle.
-const TIP_COLOR = 'rgba(255, 46, 147, 0.55)';
-const TIP_EDGE = '#FF2E93';
-const AREA_COLOR = 'rgba(46, 230, 255, 0.45)';
-const AREA_EDGE = '#2EE6FF';
+//
 // Deformable is a SUBSET of pierceable and is drawn on top of it, so it
 // needs a colour that reads clearly against cyan rather than blending
 // into it -- amber, the warm opposite of both the other two. It marks the
 // material that GIVES WAY as the seam opens, so amber reading as "this is
-// the part that moves" is exactly right.
-const DEFORM_COLOR = 'rgba(255, 176, 46, 0.6)';
-const DEFORM_EDGE = '#FFB02E';
-// Walls. Near-white, and the most opaque of the four: a barrier is not a
-// degree of anything, it is solid or it is not.
-const BARRIER_COLOR = 'rgba(236, 238, 248, 0.85)';
-const BARRIER_EDGE = '#FFFFFF';
-// The opening's marker, drawn as a triangle rather than as painted texels --
-// because it is not painted, it is placed. Violet: the one hue not already
-// spoken for by a mask, so the marker never reads as a fifth region.
-const DENT_FILL = 'rgba(160, 120, 255, 0.35)';
-const DENT_EDGE = '#A078FF';
+// the part that moves" is exactly right. Walls are near-white. The
+// opening's marker is violet: the one hue not already spoken for by a
+// mask, so the marker never reads as a fifth region.
+//
+// HOW SOLID EACH PAINT IS, IS THE ARTIST'S
+//
+// Each target's fill is drawn at its own opacity (settings.js,
+// piercePaintOpacity*), set on the slider under the targets while that
+// target is chosen: low to see the artwork through the paint, high to see
+// exactly what is painted. The cell outlines, drawn once zoomed in, stay
+// at full strength, so even at 0% what is painted can still be told.
+const PAINT = {
+  tip: { rgb: [255, 46, 147], edge: '#FF2E93', key: 'piercePaintOpacityTip', label: 'Tip paint' },
+  area: { rgb: [46, 230, 255], edge: '#2EE6FF', key: 'piercePaintOpacityArea', label: 'Pierceable paint' },
+  deform: { rgb: [255, 176, 46], edge: '#FFB02E', key: 'piercePaintOpacityDeform', label: 'Deformable paint' },
+  barrier: { rgb: [236, 238, 248], edge: '#FFFFFF', key: 'piercePaintOpacityBarrier', label: 'Barrier paint' },
+  dent: { rgb: [160, 120, 255], edge: '#A078FF', key: 'piercePaintOpacityDent', label: 'Dent marker' },
+};
+const paintOpacity = (target) => Number(getSetting(PAINT[target].key)) / 100;
+const paintFill = (target) => `rgba(${PAINT[target].rgb.join(', ')}, ${paintOpacity(target)})`;
+const DENT_EDGE = PAINT.dent.edge;
 
 // How near a handle a touch counts as grabbing it, in css px. Generous:
 // this is a fingertip on a phone, and the three handles are deliberately
@@ -85,6 +93,8 @@ function cacheElements() {
     'pierceBrushPresets',
     'piercePiercerOpacity', 'piercePiercerOpacityValue',
     'piercePiercedOpacity', 'piercePiercedOpacityValue',
+    'piercePaintOpacity', 'piercePaintOpacityValue', 'piercePaintOpacityLabel',
+    'pierceWindowDilationRow', 'pierceWindowDilation', 'pierceWindowDilationValue',
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -272,13 +282,16 @@ function drawLayer(ctx, canvas, at, part, opacity) {
 function drawRegion(ctx, part, at, fill, edge, region = part.pierceRegion) {
   const { cam } = session;
   const size = part.scale * cam.zoom;
-  ctx.fillStyle = fill;
   for (const index of region) {
     const u = index % part.naturalWidth;
     const v = Math.floor(index / part.naturalWidth);
     const x = (at.x + u * part.scale) * cam.zoom + cam.panX;
     const y = (at.y + v * part.scale) * cam.zoom + cam.panY;
     if (x + size < 0 || y + size < 0 || x > session.cssWidth || y > session.cssHeight) continue;
+    // Set for every cell: cellEdge leaves the context on the solid EDGE
+    // colour, and every fill after the first was drawn solid with it -- so,
+    // zoomed in, paint hid the artwork whatever its opacity.
+    ctx.fillStyle = fill;
     ctx.fillRect(x, y, size, size);
     if (size >= 6) cellEdge(ctx, x, y, size, Math.min(2, Math.max(1, size / 10)), edge, session.dpr);
   }
@@ -355,7 +368,7 @@ function drawDent(ctx, part, at) {
 
   if (tri) {
     const marker = [point(tri.b1), point(tri.b2), point(tri.apex)];
-    pen.polygon(marker, DENT_FILL);
+    pen.polygon(marker, paintFill('dent'));
     pen.polyline(marker, DENT_EDGE);
   }
 
@@ -383,10 +396,27 @@ function drawDent(ctx, part, at) {
     pen.text(label, x, top, '#FFFFFF', { align, background: '#000000' });
   };
   const { inward, across } = handles;
-  grip(base, 'base', '#A078FF', { x: -inward.x, y: -inward.y });
+  const baseGrip = (() => { const w = handleWindowPoint(part, at, handles, 'base'); return { x: w.x * dpr, y: w.y * dpr }; })();
+  pen.line(base.x, base.y, baseGrip.x, baseGrip.y, DENT_EDGE);
+  grip(baseGrip, 'base', '#A078FF', { x: -inward.x, y: -inward.y });
   grip(apex, `depth ${part.pierceDentDepth}`, '#FFB02E', inward);
   grip(point(handles.width), `width ${part.pierceDentWidth}`, '#2EE6FF', across);
   pen.end();
+}
+
+// Where each grip is drawn and grabbed, in window coordinates. The apex and
+// width grips sit on their points; the BASE grip sits just outside the
+// surface, on a short leader to the base itself, because the base is where
+// the wedge opens and a grip on it would cover the very opening the preview
+// is showing.
+const BASE_GRIP_OFFSET = 2.2; // handle radii, outward along the seam
+
+function handleWindowPoint(part, at, handles, which) {
+  const point = handles[which];
+  const w = texelToWindow(part, at, point.x, point.y);
+  if (which !== 'base') return w;
+  const reach = BASE_GRIP_OFFSET * HANDLE_RADIUS;
+  return { x: w.x - handles.inward.x * reach, y: w.y - handles.inward.y * reach };
 }
 
 // Which handle a touch is going for, or null for none. Base is tested last
@@ -396,14 +426,14 @@ function grabDentHandle(point) {
   const part = session.pierced;
   const at = session.piercedAt;
   const handles = dentHandles(part);
-  const near = (p) => {
-    const w = texelToWindow(part, at, p.x, p.y);
+  const near = (which) => {
+    const w = handleWindowPoint(part, at, handles, which);
     return Math.hypot(point.x - w.x, point.y - w.y);
   };
   const candidates = [
-    ['apex', near(handles.apex)],
-    ['width', near(handles.width)],
-    ['base', near(handles.base)],
+    ['apex', near('apex')],
+    ['width', near('width')],
+    ['base', near('base')],
   ];
   let best = null;
   for (const [which, distance] of candidates) {
@@ -420,7 +450,10 @@ function dragDentHandle(which, point) {
   const place = handles.place;
 
   if (which === 'base') {
-    partsStore.setPierceDentPlacement(part.id, target.x, target.y, place.angle);
+    // The grip is drawn outside the surface (handleWindowPoint): the base is
+    // that far back in along the seam from the finger.
+    const reach = (BASE_GRIP_OFFSET * HANDLE_RADIUS) / (session.cam.zoom * part.scale);
+    partsStore.setPierceDentPlacement(part.id, target.x + handles.inward.x * reach, target.y + handles.inward.y * reach, place.angle);
   } else if (which === 'apex') {
     // The apex sets the direction AND the depth: dragging it around the
     // base swings the marker, dragging it away from the base deepens it.
@@ -462,6 +495,135 @@ function endDentDrag() {
   history.commitCapture(drag.token, true);
 }
 
+// ---------------------------------------------------------------------------
+// The wedge, live, while the triangle is placed
+//
+// On the Dent target the pierced layer is drawn OPENED, exactly as the
+// scene will draw it at the Wedge Lock Point -- the shape the wedge keeps --
+// with the paired piercer in it as the stand-in contact. Nothing here is a
+// second opening: pierce.js (pierceOpeningPreview) makes the contact and
+// calls the same openingFor the live solver does, and the layer goes through
+// the same two passes (openingGeometry, split by openingSides) and the same
+// rasterizer as the scene, with the piercer's painted tip beneath it and the
+// rest of the piercer on top, as in a real contact. It is rebuilt whenever
+// the marker, the opening's settings or the piercer's change -- every step
+// of a handle drag -- and reused while only the camera moves.
+const previewClaims = layerClaims();
+const MAX_PREVIEW_PX = 1024;
+
+function previewKey() {
+  const { piercer: a, pierced: b } = session;
+  return [
+    b.pierceDentDepth, b.pierceDentWidth, b.pierceDentDilation, b.pierceDentPlaced,
+    b.pierceDentX, b.pierceDentY, b.pierceDentAngle, b.pierceRegionVersion, b.pierceRegion.size,
+    b.pierceDeformRegionVersion, b.pinsVersion || 0, b.mesh ? b.mesh.vertices.length : 0,
+    a.pierceRegionVersion, a.pierceRegion.size, a.pierceEnter, a.pierceEnd, a.pierceDentStart,
+    a.pierceWedgeLock, a.scale, b.scale,
+  ].join('|');
+}
+
+function wedgePreview() {
+  const key = previewKey();
+  if (session.preview && session.preview.key === key) return session.preview;
+  session.preview = { key, layers: null, built: null };
+  const { piercer, pierced, piercedAt } = session;
+  const built = pierceOpeningPreview(piercer, pierced);
+  if (!built || !built.opening) return session.preview;
+  const o = built.opening;
+  const mesh = pierceMeshOf(pierced);
+  const s = pierced.scale;
+
+  // The piercer's sprite, carried to where the stand-in is: its texels into
+  // the pierced layer's (built.map), then onto the window's flat placement.
+  const flat = (t) => ({ x: piercedAt.x + t.u * s, y: piercedAt.y + t.v * s });
+  const corners = built.map ? [
+    { x: 0, y: 0 }, { x: piercer.naturalWidth, y: 0 },
+    { x: piercer.naturalWidth, y: piercer.naturalHeight }, { x: 0, y: piercer.naturalHeight },
+  ].map((c) => flat(built.map(c))) : [];
+
+  // The buffer: the layer's own footprint, room for the swelling, and the
+  // stand-in -- in whole scene pixels, so it lands on the pixel grid.
+  const margin = Math.ceil(o.lateral * s) + 2;
+  let x0 = piercedAt.x - margin;
+  let y0 = piercedAt.y - margin;
+  let x1 = piercedAt.x + pierced.sceneWidth + margin;
+  let y1 = piercedAt.y + pierced.sceneHeight + margin;
+  for (const c of corners) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); x1 = Math.max(x1, c.x); y1 = Math.max(y1, c.y); }
+  x0 = Math.floor(x0); y0 = Math.floor(y0);
+  const W = Math.min(MAX_PREVIEW_PX, Math.ceil(x1) - x0);
+  const H = Math.min(MAX_PREVIEW_PX, Math.ceil(y1) - y0);
+  if (W <= 0 || H <= 0) return session.preview;
+  const local = (p) => ({ x: p.x - x0, y: p.y - y0 });
+
+  const draw = (part, geometry, mask) => {
+    const buffer = new Uint8ClampedArray(W * H * 4);
+    const claims = previewClaims.begin(W, H);
+    const { positions, uvs, triangles } = geometry;
+    for (let i = 0; i < triangles.length; i += 3) {
+      const a = triangles[i]; const b = triangles[i + 1]; const c = triangles[i + 2];
+      rasterizeTriangle(buffer, W, H, part.pixels, part.naturalWidth, part.naturalHeight,
+        positions[a], positions[b], positions[c], uvs[a], uvs[b], uvs[c], mask, claims);
+    }
+    return buffer;
+  };
+  const toCanvas = (buffers) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const context = canvas.getContext('2d');
+    const image = context.createImageData(W, H);
+    // Several passes of one layer, each over the one before.
+    for (const buffer of buffers) {
+      for (let i = 0; i < buffer.length; i += 4) {
+        if (buffer[i + 3] === 0) continue;
+        image.data[i] = buffer[i]; image.data[i + 1] = buffer[i + 1];
+        image.data[i + 2] = buffer[i + 2]; image.data[i + 3] = buffer[i + 3];
+      }
+    }
+    context.putImageData(image, 0, 0);
+    return canvas;
+  };
+
+  // The pierced layer, opened: its own mesh at its flat placement, then the
+  // two passes.
+  const coarse = {
+    positions: mesh.vertices.map((t) => local(flat({ u: t.u, v: t.v }))),
+    uvs: mesh.vertices,
+    triangles: mesh.triangles,
+  };
+  const sides = openingSides(pierced, o);
+  const opened = toCanvas([
+    draw(pierced, openingGeometry(pierced, coarse, o, -1), sides.a),
+    draw(pierced, openingGeometry(pierced, coarse, o, 1), sides.b),
+  ]);
+  // The stand-in: its painted tip beneath the layer, the rest on top.
+  let tip = null;
+  let rest = null;
+  if (corners.length) {
+    const quad = {
+      positions: corners.map(local),
+      uvs: [{ u: 0, v: 0 }, { u: piercer.naturalWidth, v: 0 },
+        { u: piercer.naturalWidth, v: piercer.naturalHeight }, { u: 0, v: piercer.naturalHeight }],
+      triangles: [0, 1, 2, 0, 2, 3],
+    };
+    const masks = pierceMasks(piercer);
+    tip = toCanvas([draw(piercer, quad, masks ? masks.region : null)]);
+    rest = masks ? toCanvas([draw(piercer, quad, masks.rest)]) : null;
+  }
+  session.preview.layers = { x: x0, y: y0, W, H, tip, opened, rest };
+  session.preview.built = built;
+  return session.preview;
+}
+
+function drawPreviewCanvas(ctx, canvas, layers, opacity) {
+  if (!canvas) return;
+  const { cam } = session;
+  ctx.globalAlpha = opacity;
+  ctx.drawImage(canvas, layers.x * cam.zoom + cam.panX, layers.y * cam.zoom + cam.panY,
+    layers.W * cam.zoom, layers.H * cam.zoom);
+  ctx.globalAlpha = 1;
+}
+
 function render() {
   if (!session) return;
   const canvas = els.pierceCanvas;
@@ -474,8 +636,18 @@ function render() {
   ctx.fillStyle = '#101014';
   ctx.fillRect(0, 0, session.cssWidth, session.cssHeight);
 
-  drawLayer(ctx, session.piercedCanvas, piercedAt, pierced, session.piercedOpacity);
-  drawLayer(ctx, session.piercerCanvas, piercerAt, piercer, session.piercerOpacity);
+  // On the Dent target, the wedge as it will be (see wedgePreview); the
+  // piercer is drawn as its stand-in there, not where it happens to sit.
+  const preview = session.target === 'dent' ? wedgePreview() : null;
+  const layers = preview && preview.layers;
+  if (layers) {
+    drawPreviewCanvas(ctx, layers.tip, layers, session.piercerOpacity);
+    drawPreviewCanvas(ctx, layers.opened, layers, session.piercedOpacity);
+    drawPreviewCanvas(ctx, layers.rest, layers, session.piercerOpacity);
+  } else {
+    drawLayer(ctx, session.piercedCanvas, piercedAt, pierced, session.piercedOpacity);
+    drawLayer(ctx, session.piercerCanvas, piercerAt, piercer, session.piercerOpacity);
+  }
 
   // The texel grid of the layer being painted, once its cells are big
   // enough to aim at.
@@ -487,13 +659,17 @@ function render() {
       part.naturalWidth, part.naturalHeight, cell, 'rgba(255, 255, 255, 0.12)', session.dpr);
   }
 
-  drawRegion(ctx, pierced, piercedAt, AREA_COLOR, AREA_EDGE);
-  // On top of the pierceable area, because it is a part of it.
-  drawRegion(ctx, pierced, piercedAt, DEFORM_COLOR, DEFORM_EDGE, pierced.pierceDeformRegion);
-  // Walls last: they are what the tip is stopped by, so they belong on top
-  // of whatever they are bounding.
-  drawRegion(ctx, pierced, piercedAt, BARRIER_COLOR, BARRIER_EDGE, pierced.pierceBarrierRegion);
-  drawRegion(ctx, piercer, piercerAt, TIP_COLOR, TIP_EDGE);
+  // The painted regions sit on the layers as painted, flat -- so not over the
+  // opened preview, which they would no longer line up with.
+  if (!layers) {
+    drawRegion(ctx, pierced, piercedAt, paintFill('area'), PAINT.area.edge);
+    // On top of the pierceable area, because it is a part of it.
+    drawRegion(ctx, pierced, piercedAt, paintFill('deform'), PAINT.deform.edge, pierced.pierceDeformRegion);
+    // Walls last: they are what the tip is stopped by, so they belong on top
+    // of whatever they are bounding.
+    drawRegion(ctx, pierced, piercedAt, paintFill('barrier'), PAINT.barrier.edge, pierced.pierceBarrierRegion);
+    drawRegion(ctx, piercer, piercerAt, paintFill('tip'), PAINT.tip.edge);
+  }
   // Only while it is the thing being edited: the marker is a big opaque
   // shape and would hide the paint underneath it the rest of the time.
   if (session.target === 'dent') drawDent(ctx, pierced, piercedAt);
@@ -515,6 +691,12 @@ function render() {
       `${Math.round(cam.zoom * 100)}%`;
   if (issue) {
     els.pierceWindowStatus.replaceChildren(createIcon('warning'), document.createTextNode(` no opening — ${issue}`));
+  } else if (layers && preview.built) {
+    // What the preview is showing, in the numbers it was built from.
+    const o = preview.built.opening;
+    const gap = o.sides ? `gap ${o.sides.px} px (${pierced.pierceDentDilation}% of the tip) · ` : '';
+    els.pierceWindowStatus.textContent = `preview at the Lock ${Math.round(preview.built.lock * 100)}% · ${gap}` +
+      `seam ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} · ${Math.round(cam.zoom * 100)}%`;
   } else {
     els.pierceWindowStatus.textContent = status;
   }
@@ -539,6 +721,11 @@ const TARGET_HINT = {
 };
 
 function renderTools() {
+  const paint = PAINT[session.target] || PAINT.area;
+  const percent = Math.round(paintOpacity(session.target) * 100);
+  els.piercePaintOpacityLabel.textContent = paint.label;
+  els.piercePaintOpacity.value = String(percent);
+  els.piercePaintOpacityValue.textContent = `${percent}%`;
   const hint = TARGET_HINT[session.target];
   els.pierceTargetHint.textContent = hint || '';
   els.pierceTargetHint.hidden = !hint;
@@ -556,6 +743,13 @@ function renderTools() {
   // pair go away rather than sitting there greyed: an active-looking Paint
   // button on a target that cannot paint is a worse lie than no button.
   const painting = session.target !== 'dent';
+  // The opening's width, beside the marker it belongs to, so it can be tuned
+  // against the preview (the Pierce panel has the same control).
+  els.pierceWindowDilationRow.hidden = painting;
+  if (session.pierced) {
+    els.pierceWindowDilation.value = String(session.pierced.pierceDentDilation);
+    els.pierceWindowDilationValue.textContent = `${session.pierced.pierceDentDilation}% of the tip`;
+  }
   els.pierceToolRow.hidden = !painting;
   els.pierceBrushPresets.hidden = !painting;
   if (!painting) {
@@ -820,8 +1014,7 @@ export function pierceToolDebug() {
 export function pierceDentHandlePoint(which) {
   if (!session || !session.pierced) return null;
   const handles = dentHandles(session.pierced);
-  const point = handles[which];
-  return point ? texelToWindow(session.pierced, session.piercedAt, point.x, point.y) : null;
+  return handles[which] ? handleWindowPoint(session.pierced, session.piercedAt, handles, which) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -877,6 +1070,30 @@ export function initPierceTool() {
     if (!session) return;
     session.piercerOpacity = Number(els.piercePiercerOpacity.value) / 100;
     els.piercePiercerOpacityValue.textContent = `${els.piercePiercerOpacity.value}%`;
+    render();
+  });
+  // One undo step per drag of the slider, however many values it passes.
+  let dilationToken = null;
+  let dilationTimer = null;
+  const commitDilation = () => {
+    clearTimeout(dilationTimer);
+    if (dilationToken) history.commitCapture(dilationToken, true);
+    dilationToken = null;
+  };
+  els.pierceWindowDilation.addEventListener('input', () => {
+    if (!session || !session.pierced) return;
+    if (!dilationToken) dilationToken = history.capture('Change opening width');
+    clearTimeout(dilationTimer);
+    dilationTimer = setTimeout(commitDilation, 500);
+    partsStore.setPierceDentDilation(session.pierced.id, Number(els.pierceWindowDilation.value));
+    els.pierceWindowDilationValue.textContent = `${els.pierceWindowDilation.value}% of the tip`;
+    render();
+  });
+  els.pierceWindowDilation.addEventListener('change', commitDilation);
+  els.piercePaintOpacity.addEventListener('input', () => {
+    if (!session) return;
+    setSetting((PAINT[session.target] || PAINT.area).key, Number(els.piercePaintOpacity.value));
+    els.piercePaintOpacityValue.textContent = `${els.piercePaintOpacity.value}%`;
     render();
   });
   els.piercePiercedOpacity.addEventListener('input', () => {

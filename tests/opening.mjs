@@ -9,15 +9,16 @@
 import { strict as assert } from 'node:assert';
 import {
   Part, partsStore, PierceRole, DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
-  DEFAULT_WEDGE_LOCK, clampWedgeLock,
+  DEFAULT_WEDGE_LOCK, clampWedgeLock, DEFAULT_DENT_DILATION, clampDentDilation,
 } from '../www/js/parts.js';
 import {
   contactOf, pierceOpeningOf, markPierceStale, resetPierceContainment, pierceDentIssue,
+  pierceOpeningPreview,
 } from '../www/js/pierce.js';
 import {
   openingFor, openingAmplitude, openingShift, openingSides, openingGeometry,
   refinedMesh, openingMarker, seamCoordinates, resetOpeningCaches, openingRim, openingCover,
-  openingDisplacement,
+  openingDisplacement, openingSideWidths,
 } from '../www/js/opening.js';
 import { generateMesh, defaultDensity, deformVertices } from '../www/js/mesh.js';
 
@@ -620,6 +621,122 @@ section('3. Driven by the live contact');
     assert.equal(piercer.pierceWedgeLock, 65);
     partsStore.setPierceDepths(piercer.id, 12, 24, 12);
     assert.equal(piercer.pierceWedgeLock, 65, 'left alone when not given');
+  });
+}
+
+section('4. How wide it opens: a share of the piercer\'s tip width');
+{
+  check('the gap is whole pixels, split as evenly as a whole number allows (the odd one to side B)', () => {
+    assert.deepEqual(openingSideWidths(6), { a: 3, b: 3, px: 6 });
+    assert.deepEqual(openingSideWidths(6.75), { a: 3, b: 4, px: 7 }, '75% of 9 px');
+    assert.deepEqual(openingSideWidths(9), { a: 4, b: 5, px: 9 }, '75% of 12 px');
+    assert.deepEqual(openingSideWidths(6, 2), { a: 1.5, b: 1.5, px: 6 }, 'in a 2x layer\'s texels');
+  });
+  check('a new pierced layer opens to 75% of the tip; the share is clamped to 10-150%', () => {
+    assert.equal(DEFAULT_DENT_DILATION, 75);
+    assert.equal(makePart('x', { w: 4, h: 4, x: 0, y: 0 }).pierceDentDilation, 75);
+    assert.equal(clampDentDilation(5), 10);
+    assert.equal(clampDentDilation(400), 150);
+    assert.equal(clampDentDilation('x'), DEFAULT_DENT_DILATION);
+  });
+
+  // A needle 8 texels wide over the seam, its tip the bottom 4 rows.
+  const pair = (tipWidth) => {
+    partsStore._parts.length = 0;
+    resetPierceContainment();
+    resetOpeningCaches();
+    const pierced = seamPart();
+    const lo = 4 - Math.floor(tipWidth / 2);
+    const piercer = makePart('needle', { w: 8 + 8, h: 24, x: 112, y: 40 });
+    piercer.pierceRole = PierceRole.PIERCER;
+    for (let v = 12; v < 24; v++) for (let u = lo + 4; u < lo + 4 + tipWidth; u++) piercer.pierceRegion.add(v * 16 + u);
+    piercer.pierceRegionVersion++;
+    // Contact 4 px out, End 24 px further: at the half-way lock the tip is
+    // 8 px into the seam.
+    piercer.pierceEnter = 4;
+    piercer.pierceEnd = 24;
+    piercer.pierceDentStart = 4;
+    partsStore.add(pierced);
+    partsStore.add(piercer);
+    return { pierced, piercer };
+  };
+  // Driven in until the shape locks, and read.
+  const atLock = ({ pierced, piercer }) => {
+    for (let y = 40; y <= 120; y += 1) {
+      piercer.y = y;
+      markPierceStale();
+      resetPierceContainment();
+      const contact = contactOf(piercer, pierced, null);
+      if (contact && contact.dentT >= contact.lockT) return { contact, opening: pierceOpeningOf(pierced) };
+    }
+    return null;
+  };
+  // How far each edge stands off the seam at its widest.
+  const widest = (o) => {
+    let a = 0; let b = 0;
+    for (let s = 0; s <= o.length; s += 0.25) { a = Math.max(a, openingRim(o, s, -1)); b = Math.max(b, openingRim(o, s, 1)); }
+    return { a, b };
+  };
+
+  for (const [tip, px, a, b] of [[8, 6, 3, 3], [12, 9, 4, 5], [9, 7, 3, 4]]) {
+    check(`a ${tip} px tip at 75%: the contact measures it ${tip} px, the gap is ${px} px (${a} + ${b}) at the lock`, () => {
+      const { contact, opening } = atLock(pair(tip));
+      // (A tip half a texel off its sprite's centre leans a little: 9.06.)
+      assert.ok(Math.abs(contact.tipWidth - tip) < 0.1, `tip measured ${contact.tipWidth}`);
+      assert.deepEqual(opening.sides, { a, b, px });
+      const w = widest(opening);
+      // Each edge exactly on its side's width at the tip's widest row.
+      assert.ok(Math.abs(w.a - a) < 0.02 && Math.abs(w.b - b) < 0.02, `rims ${w.a.toFixed(3)} / ${w.b.toFixed(3)}`);
+    });
+  }
+
+  check('the share is the layer\'s own setting: 100% of an 8 px tip is 8 px, 50% of a 12 px tip 6 px', () => {
+    const p8 = pair(8);
+    partsStore.setPierceDentDilation(p8.pierced.id, 100);
+    assert.equal(atLock(p8).opening.sides.px, 8);
+    const p12 = pair(12);
+    partsStore.setPierceDentDilation(p12.pierced.id, 50);
+    assert.equal(atLock(p12).opening.sides.px, 6);
+  });
+
+  check('it grows as the tip goes in, and holds from the lock on -- the lock deciding only WHERE it stops', () => {
+    const p = pair(12);
+    const sweep = [];
+    for (let y = 40; y <= 120; y += 1) {
+      p.piercer.y = y;
+      markPierceStale();
+      resetPierceContainment();
+      const c = contactOf(p.piercer, p.pierced, null);
+      const o = pierceOpeningOf(p.pierced);
+      if (c && o) sweep.push({ t: c.dentT, lock: c.lockT, gap: widest(o).a + widest(o).b });
+    }
+    const before = sweep.filter((r) => r.t < r.lock);
+    const after = sweep.filter((r) => r.t > r.lock);
+    assert.ok(before.length > 3 && after.length > 3);
+    for (let i = 1; i < before.length; i++) assert.ok(before[i].gap >= before[i - 1].gap - 1e-9, 'never narrows on the way in');
+    assert.ok(before[0].gap < 9 - 1, `starts narrow: ${before[0].gap.toFixed(2)}`);
+    for (const r of after) assert.ok(Math.abs(r.gap - 9) < 0.02, `held at 9: ${r.gap.toFixed(3)}`);
+  });
+
+  check('the Pierce window\'s preview is the same opening the contact makes at the lock', () => {
+    for (const tip of [8, 12, 9]) {
+      const p = pair(tip);
+      const live = atLock(p).opening;
+      const preview = pierceOpeningPreview(p.piercer, p.pierced).opening;
+      assert.deepEqual(preview.sides, live.sides, `tip ${tip}`);
+      assert.equal(preview.fraction, live.fraction);
+      const a = widest(preview); const b = widest(live);
+      assert.ok(Math.abs(a.a - b.a) < 0.05 && Math.abs(a.b - b.b) < 0.05, `preview ${a.a.toFixed(3)}/${a.b.toFixed(3)} live ${b.a.toFixed(3)}/${b.b.toFixed(3)}`);
+    }
+  });
+
+  check('the preview follows the marker: moved 4 texels across, the seam moves with it', () => {
+    const p = pair(8);
+    const first = pierceOpeningPreview(p.piercer, p.pierced).opening;
+    partsStore.setPierceDentPlacement(p.pierced.id, 24, 0, Math.PI / 2);
+    const moved = pierceOpeningPreview(p.piercer, p.pierced).opening;
+    assert.equal(moved.base.x - first.base.x, 4);
+    assert.deepEqual(moved.sides, first.sides);
   });
 }
 

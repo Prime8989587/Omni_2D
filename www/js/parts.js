@@ -131,6 +131,20 @@ export const MAX_DENT_SIZE = 128;
 export const DEFAULT_DENT_DEPTH = 6;
 export const DEFAULT_DENT_WIDTH = 10;
 
+// How wide the opening parts, as a share of the piercer's own tip width:
+// 75% means an 8 px tip opens a 6 px wedge and a 12 px one a 9 px wedge. The
+// flesh hugs the piercer a little rather than gaping round it. Editable,
+// beside the dent's Depth and Width; the solver rounds the result to whole
+// pixels and splits it between the two sides (opening.js, openingSideWidths).
+export const DEFAULT_DENT_DILATION = 75;
+export const DENT_DILATION_RANGE = Object.freeze({ min: 10, max: 150 });
+
+export function clampDentDilation(value) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return DEFAULT_DENT_DILATION;
+  return Math.max(DENT_DILATION_RANGE.min, Math.min(DENT_DILATION_RANGE.max, number));
+}
+
 export function clampDentSize(value) {
   const number = Math.round(Number(value));
   if (!Number.isFinite(number)) return 0;
@@ -270,6 +284,9 @@ export class Part {
     // a layer that registers contact without giving way.
     this.pierceDentDepth = DEFAULT_DENT_DEPTH;
     this.pierceDentWidth = DEFAULT_DENT_WIDTH;
+    // How wide the opening parts, as a percentage of the piercer's tip
+    // width (see DEFAULT_DENT_DILATION).
+    this.pierceDentDilation = DEFAULT_DENT_DILATION;
 
     // WHERE THE SEAM IS, IN THIS LAYER'S OWN TEXELS
     //
@@ -633,6 +650,7 @@ class PartsStore {
       part.pierceBarrierRegionVersion++;
       part.pierceDentDepth = DEFAULT_DENT_DEPTH;
       part.pierceDentWidth = DEFAULT_DENT_WIDTH;
+      part.pierceDentDilation = DEFAULT_DENT_DILATION;
       part.pierceDentPlaced = false;
       part.pierceDentX = 0;
       part.pierceDentY = 0;
@@ -678,6 +696,16 @@ class PartsStore {
     if (part.pierceDentDepth === nextDepth && part.pierceDentWidth === nextWidth) return false;
     part.pierceDentDepth = nextDepth;
     part.pierceDentWidth = nextWidth;
+    this._emit('transform');
+    return true;
+  }
+
+  setPierceDentDilation(id, percent) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part) return false;
+    const next = clampDentDilation(percent);
+    if (part.pierceDentDilation === next) return false;
+    part.pierceDentDilation = next;
     this._emit('transform');
     return true;
   }

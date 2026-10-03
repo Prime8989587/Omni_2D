@@ -76,8 +76,11 @@ const TOPICS = {
       'it while the others\' points come to meet it -- normally the one ' +
       'nearest the body. Shared: they all give way equally and meet in the ' +
       'middle.\n' +
-      '• You can have as many links as you like. Delete one and nothing ' +
-      'else changes.',
+      '• You can have as many links as you like. To delete one, tap it in ' +
+      'the list to select it (its row and its layers light up), then ' +
+      'Delete link… above the list, and confirm. Only that link goes: both ' +
+      'layers keep their artwork, bones, weights, mesh and physics, and ' +
+      'every other link stays as it is. Undo brings it back.',
   },
   'combine-layers': {
     title: 'Combine Layers',
@@ -199,7 +202,15 @@ const TOPICS = {
       'transparent space round it.\n' +
       '• Dent -- not a mask. The triangle marker, dragged onto the spot ' +
       'where the seam should open: its base on the surface, its point ' +
-      'aimed the way the piercer goes in. Its centre line IS the seam.',
+      'aimed the way the piercer goes in. Its centre line IS the seam. ' +
+      'While Dent is chosen the layer is drawn OPENED, as the scene will ' +
+      'draw it at the Wedge Lock Point, with the piercer in it -- and it ' +
+      'follows every drag of the marker, so you see the real wedge before ' +
+      'ever testing it.\n\n' +
+      'The opacity slider under the targets sets how solid the chosen ' +
+      'target\u2019s PAINT is drawn (each target remembers its own): low to ' +
+      'see the artwork through it, high to see exactly what is painted. The ' +
+      'Piercer and Pierced sliders are the artwork itself.',
   },
   'pierce-dent': {
     title: 'Opening shape',
@@ -211,16 +222,22 @@ const TOPICS = {
       'and reaches further along the edge; as it comes out, everything eases ' +
       'back to the rest outline the same way.\n\n' +
       '• Depth -- how far the seam runs in from the surface.\n' +
-      '• Width -- how far apart the edges would bow at the End point. The ' +
-      'wedge stops growing at the Wedge Lock Point (on the piercer, with ' +
-      'Enter and End), so at the default 50% it reaches half of this and ' +
-      'holds.\n\n' +
-      'Set either to 0 for no opening at all.\n\n' +
-      'Both are easier to set by hand: Paint regions…, then the Dent ' +
-      'target, and drag the triangle marker on the artwork. Its base handle ' +
-      'places it, its apex handle sets depth and direction, its width ' +
-      'handle sets the opening. These sliders and those handles are the ' +
-      'same two numbers.\n\n' +
+      '• Width -- how far the material beside the seam swells outward ' +
+      'round the tip.\n' +
+      '• Opening width -- how wide the gap itself parts, as a share of the ' +
+      'piercer\u2019s tip width: at 75% an 8 px tip opens 6 px and a 12 px tip ' +
+      '9 px. Whole pixels, split between the two sides as evenly as they ' +
+      'go -- 7 px is 3 on one side and 4 on the other. The edges hug the ' +
+      'tip\u2019s own outline at that share, so the gap grows as the tip goes ' +
+      'in, and holds from the Wedge Lock Point (on the piercer, with Enter ' +
+      'and End).\n\n' +
+      'Set Depth or Width to 0 for no opening at all.\n\n' +
+      'Easier still by hand: Paint regions…, then the Dent target, and drag ' +
+      'the triangle marker on the artwork -- the wedge is drawn there live, ' +
+      'exactly as it will open. Its base handle places it, its apex handle ' +
+      'sets depth and direction, its width handle sets the swelling, and ' +
+      'Opening width is there too. These sliders and those handles are the ' +
+      'same numbers.\n\n' +
       'WHERE the seam is is fixed once you place it. The piercer decides ' +
       'how far it opens and where along it the bulge is, never where it is.\n\n' +
       'Pins (Px Pin) hold their pixels against the opening, bending the ' +

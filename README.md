@@ -7855,6 +7855,107 @@ points is attached, a piercer is not, it follows its drag, and the list
 agrees). The browser regression suites, the PxLink browser suites and
 `npm test` all pass.
 
+## 2.7.0: the wedge, previewed live; its width a share of the piercer; paint opacity; PxLink select and delete
+
+### 1. PxLink: select a link, delete it
+
+Tap a link in the PxLink list to select it. Its row lights up, its layers
+light up on the canvas, and the bar above the list names it with a
+**Delete link…** button. Delete asks first, like a layer or a bone, then
+removes that one link and nothing else. Both layers keep their artwork,
+bones, weights, mesh and physics, and every other link stays as it is. Undo
+brings it back. A link picked from the list while it is off the canvas is
+brought into view. (The small ✕ on each row does the same, one tap
+shorter.)
+
+![PxLink: a link selected, the confirmation, and the list after: only that link gone](docs/images/pxlink-select-delete.png)
+
+### 2. How solid the Pierce paint is
+
+Under the paint targets in the Pierce window there is now a **paint
+opacity** slider for the chosen target: Tip, Pierceable, Deformable,
+Barrier or the Dent marker. Each remembers its own value. Low lets the
+artwork show through the paint, high shows exactly what is painted. Once
+zoomed in, the cell outlines stay at full strength, so even at 0% you can
+see what is painted. This is separate from the Piercer and Pierced
+sliders, which dim the artwork itself.
+
+While building this, an older bug turned up: zoomed in, every painted cell
+after the first was drawn in the solid edge colour, so paint hid the
+artwork whatever its opacity. Fixed.
+
+![Pierce window paint at 100%, 30% and 0% for each target: the artwork shows through as the paint fades](docs/images/pierce-paint-opacity.png)
+
+### 3. The wedge, live, while the triangle is placed
+
+On the **Dent** target the pierced layer is now drawn *opened*, exactly as
+the scene will draw it at the Wedge Lock Point, the shape the wedge keeps,
+with your piercer in it. It follows every drag of the triangle's handles.
+Nothing here is a second rendering of the opening. `pierce.js`
+(`pierceOpeningPreview`) builds a contact on the spot and hands it to the
+same `openingFor` the live solver calls:
+- the paired piercer's own painted tip, turned to travel along the seam
+  (snapped to a right angle when within 20°, so pixel art is not resampled);
+- its leading point as far past the surface as its Enter / Dent Trigger /
+  Lock / End settings put it at the Lock;
+- the Lock's fraction, the tip's width and the layer's Opening width.
+
+The layer then goes through the same two passes (`openingGeometry`, split
+by `openingSides`) and the same rasterizer as the scene. The piercer's tip
+is drawn beneath it and the rest of the piercer on top, as in a real
+contact. With no tip painted yet, a stand-in the triangle's Width across is
+used. The base grip now sits just outside the surface on a short leader, so
+it does not cover the opening it places.
+
+![Dent target: the wedge previewed (marker tinted, marker paint at 0%) beside the real Free-Move frame at the Lock](docs/images/pierce-live-preview.png)
+
+### 4. Opening width: a share of the piercer's tip
+
+A new setting on the pierced layer, beside Depth and Width (and in the
+Pierce window's Dent target): **Opening width**, 10–150% of the piercer's
+tip width, default 75%.
+- The tip width is measured edge to edge across its travel, slice by slice,
+  so a finger drawn half a pixel off its sprite's centre still measures its
+  true width (9.03, not 9.96).
+- The gap is that share, rounded to whole pixels, then split between the two
+  sides as evenly as they go. The odd pixel goes to side B: 7 px is 3 + 4.
+- Each edge stands exactly on the tip's own outline, scaled across so its
+  widest row is that side's width. The gap therefore grows as the tip goes
+  in: narrow round a pointed front, full width where the tip is widest.
+- The Lock needs no say in it. It stays the simple clamp it was in 2.5.3,
+  and below it the opening grows exactly as with no Lock (both 2.5.3 checks
+  still pass).
+- The swelling beside the gap is never allowed below the gap, so nothing
+  folds.
+
+Measured in the real app, counting the drawn gap scene pixel by scene pixel
+(the piercer is a flat colour, so every gap pixel is countable):
+
+| Tip | Expected at 75% | Free Move (real drag), at the Lock and after | Live preview |
+| --- | --- | --- | --- |
+| 8 px | 6 | **6** (cols 19–24: 3 + 3) | **6** (cols 19–24) |
+| 9 px | 6.75 → 7 | **7** (cols 19–25: 3 + 4) | **7** (cols 19–25) |
+| 11 px | 8.25 → 8 | **8** (cols 18–25: 4 + 4) | **8** (cols 18–25) |
+| 12 px | 9 | **9** (cols 18–26: 4 + 5) | **9** (cols 18–26) |
+| 8 px at 100% | 8 | **8** | |
+| 12 px at 50% | 6 | **6** | **6** |
+
+The preview and the scene draw the same columns. Dragging the triangle's
+base 4 px moves the previewed gap 4 px, with the same width at every step of
+the drag.
+
+![Opening width at 75%: 8, 9 and 12 px tips, in Free Move at the Lock and in the live preview](docs/images/pierce-opening-width.png)
+
+### Verified
+
+| | Result |
+| --- | --- |
+| PxLink: tap a row, Delete link…, Cancel, then Delete | selected row and bar named; Cancel removes nothing; Delete removes only that link (the other two keep their ids); both layers' saved data byte-identical; Undo restores |
+| Paint opacity, each target | 100% = the paint colour, 0% = the artwork, 30% = the blend (Tip 118,55,85 over 60,60,60); each target keeps its own value; the artwork sliders untouched |
+| Live preview | gap as in the table, in the same columns as Free Move; follows a touch drag of the base live |
+| Opening width | as in the table; `tests/opening.mjs` 49 checks (9 new) |
+| Lock sweep (2.5.3), the 12 browser suites, PxLink suites, features, scan | Lock 11/11; all 12 suites; PxLink c1–c7 gap 0 and UI 34/34; features 17/17 + 40/40; scan 24/24; a linked piercer still pierces |
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

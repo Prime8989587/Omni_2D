@@ -18,7 +18,7 @@ import {
   Part, partsStore, reservePartId,
   PierceRole, PIERCE_ROLES, clampPierceDepth, clampWedgeLock, DEFAULT_WEDGE_LOCK,
   DEFAULT_PIERCE_ENTER, DEFAULT_PIERCE_END,
-  clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH,
+  clampDentSize, DEFAULT_DENT_DEPTH, DEFAULT_DENT_WIDTH, clampDentDilation, DEFAULT_DENT_DILATION,
   clampDentCoord, normalizeAngle,
   PiercePhysics, PIERCE_PHYSICS,
 } from './parts.js';
@@ -159,6 +159,7 @@ function serializePart(part, copyPixels) {
     pierceBarrierRegion: [...part.pierceBarrierRegion],
     pierceDentDepth: part.pierceDentDepth,
     pierceDentWidth: part.pierceDentWidth,
+    pierceDentDilation: part.pierceDentDilation,
     pierceDentPlaced: part.pierceDentPlaced,
     pierceDentX: part.pierceDentX,
     pierceDentY: part.pierceDentY,
@@ -219,6 +220,9 @@ function deserializePart(data) {
   // window's sliders and the painter's Dent handles are then the whole setup.
   part.pierceDentDepth = clampDentSize(data.pierceDentDepth ?? DEFAULT_DENT_DEPTH);
   part.pierceDentWidth = clampDentSize(data.pierceDentWidth ?? DEFAULT_DENT_WIDTH);
+  // Absent before the opening's width followed the piercer's: those projects
+  // load with the default share.
+  part.pierceDentDilation = clampDentDilation(data.pierceDentDilation ?? DEFAULT_DENT_DILATION);
   // Where the seam sits. Absent in a project saved while the wedge still
   // followed the piercer's live contact point (or while there was a V), and
   // left unplaced for one: there is no stored spot to recover, so opening.js

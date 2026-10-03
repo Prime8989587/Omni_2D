@@ -181,6 +181,7 @@ function cacheElements() {
     'piercePhysicsBothBtn', 'piercePhysicsHint',
     'pierceDentRow', 'pierceDentDepthSlider', 'pierceDentDepthValue',
     'pierceDentWidthSlider', 'pierceDentWidthValue',
+    'pierceDentDilationSlider', 'pierceDentDilationValue',
     'pierceDepthReadout', 'pierceEditDepthsBtn', 'piercePaintBtn', 'pierceOverlayBtn', 'pierceRemoveBtn',
     'pierceDoneBtn', 'pierceDepthModal', 'pierceEnterInput', 'pierceEndInput',
     'pierceDentStartInput', 'pierceDepthDentMark', 'pierceWedgeLockInput', 'pierceDepthLockMark',
@@ -1651,6 +1652,8 @@ function renderPierceModal() {
     els.pierceDentWidthSlider.value = String(part.pierceDentWidth);
     els.pierceDentDepthValue.textContent = `${part.pierceDentDepth} px`;
     els.pierceDentWidthValue.textContent = `${part.pierceDentWidth} px`;
+    els.pierceDentDilationSlider.value = String(part.pierceDentDilation);
+    els.pierceDentDilationValue.textContent = `${part.pierceDentDilation}% of the tip`;
   }
 
   if (part.isPiercer) {
@@ -3285,6 +3288,16 @@ function bindEvents() {
       canvasEngine.requestRender();
     });
   }
+  // How wide the gap parts, as a share of the piercer's tip width.
+  attachContinuousHistory(els.pierceDentDilationSlider, 'Change opening width');
+  els.pierceDentDilationSlider.addEventListener('input', () => {
+    const part = piercePart();
+    if (!part) return;
+    els.pierceDentDilationValue.textContent = `${els.pierceDentDilationSlider.value}% of the tip`;
+    partsStore.setPierceDentDilation(part.id, Number(els.pierceDentDilationSlider.value));
+    markPierceStale();
+    canvasEngine.requestRender();
+  });
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
   const onDepthTyped = () => {
     renderPierceDepthBar();

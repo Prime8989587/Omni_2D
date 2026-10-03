@@ -146,6 +146,36 @@ const MIN_RISE = 2;
 // meet, in texels: the edge rounds that corner instead of creasing on it.
 const RIM_SOFTNESS = 1;
 
+// HOW WIDE IT OPENS: A SHARE OF THE PIERCER'S OWN WIDTH
+//
+// The gap between the two edges is the pierced layer's Dilation (a
+// percentage, parts.js) of the piercer's tip width -- 75% of an 8 px tip is
+// a 6 px gap, of a 12 px tip a 9 px gap. Rounded to whole pixels, because a
+// gap is a number of pixels; split between the two sides as evenly as a
+// whole number allows, the odd pixel going to side B (+across) -- 7 px is 3
+// on side A and 4 on side B -- rather than half a pixel each, which no pixel
+// can show.
+//
+// Each edge then stands exactly on the tip's own outline, scaled across so
+// that its widest row is that side's width: the flesh hugs the piercer at
+// that share of its width, wherever the piercer is in the seam -- closed
+// ahead of it, narrow round a pointed front, full width where the tip is
+// widest. So the gap grows as the tip goes in, from its outline alone; the
+// Wedge Lock Point needs no say in it -- past the lock the tip it is given is
+// the one AT the lock (pierce.js, openingOf), so the gap holds there too.
+// The swelling beside the gap is never allowed below the gap itself, so the
+// material at the edge is pushed exactly the gap's width and eases out from
+// there.
+
+// The two sides of a gap of `gapPx` scene pixels, in the pierced layer's
+// texels: { a, b, px } -- side A floor(px / 2), side B the rest.
+export function openingSideWidths(gapPx, scale = 1) {
+  const px = Math.max(0, Math.round(gapPx));
+  const a = Math.floor(px / 2);
+  const s = Math.max(1e-6, scale || 1);
+  return { a: a / s, b: (px - a) / s, px };
+}
+
 // Where something holds the material still -- a pin, or the edge of a
 // painted Deformable region -- the push has to fall to nothing between the
 // two, and the material there is squeezed. Over this many times the push it
@@ -254,7 +284,13 @@ const bump = (x) => (x >= 1 ? 0 : 0.5 * (1 + Math.cos(Math.PI * x)));
 //                 space -- the outline the rim may open round. Without
 //                 them the tip is taken to be round-ended, tipHalfWidth
 //                 across.
-export function openingFor(part, { fraction, tip, tipHalfWidth = 0, tipPoints = null }) {
+//   tipWidth      the tip's full width across its travel, in SCENE pixels,
+//   dilation      and the share of it the gap opens to, in percent -- both
+//                 or neither (without them the gap is the tip's whole
+//                 outline, as before the Dilation existed)
+export function openingFor(part, {
+  fraction, tip, tipHalfWidth = 0, tipPoints = null, tipWidth = 0, dilation = null,
+}) {
   const marker = openingMarker(part);
   if (!marker || !(fraction > 0) || !tip) return null;
   const f = Math.min(1, fraction);
@@ -266,6 +302,10 @@ export function openingFor(part, { fraction, tip, tipHalfWidth = 0, tipPoints = 
   // surface, the surface flinches first.
   const sApex = (tip.u - base.x) * inward.x + (tip.v - base.y) * inward.y;
   const sTip = Math.max(0, Math.min(length, sApex));
+  // The gap's two sides (see HOW WIDE IT OPENS).
+  const sides = tipWidth > 0 && Number.isFinite(dilation)
+    ? openingSideWidths((tipWidth * dilation) / 100, part.scale)
+    : null;
   const peak = f * halfWidth;
   const reach = Math.max(2, halfWidth * REACH_PER_HALF_WIDTH) * (1 + REACH_GROWTH * f);
   const o = {
@@ -286,10 +326,33 @@ export function openingFor(part, { fraction, tip, tipHalfWidth = 0, tipPoints = 
     // the rest of the curve.
     closeIn: Math.max(2, peak),
     closeOut: Math.max(1.5, peak),
-    lateral: LATERAL_SPREAD * peak + LATERAL_MARGIN,
+    // Over the swelling or the gap, whichever is the more: the material at
+    // the gap's edge is pushed the gap's width however small the swelling.
+    lateral: LATERAL_SPREAD * (sides ? Math.max(peak, sides.a, sides.b) : peak) + LATERAL_MARGIN,
     cover: null,
+    // { a, b, px }: the gap's sides in texels and its width in scene pixels,
+    // or null when it is the tip's whole outline.
+    sides,
+    // Per side, what the piercer's reach is multiplied by so that its
+    // widest row lands exactly on that side's width (1: unscaled).
+    coverScale: { a: 1, b: 1 },
   };
   if (tipPoints && tipPoints.length) o.cover = coverageOf(o, tipPoints, coverMargin(part));
+  if (sides) {
+    // The widest the piercer reaches on each side, as openingCover reads it
+    // -- the smooth curve through the bins, sampled finely: it peaks between
+    // two equal bins, not at either one's middle.
+    const widest = (side) => {
+      if (!o.cover) return o.tipHalfWidth;
+      const values = side > 0 ? o.cover.b : o.cover.a;
+      let best = 0;
+      for (let j = -8; j <= values.length * 8 + 8; j++) best = Math.max(best, reachOf(o, o.cover.s0 + j / 8, side));
+      return best;
+    };
+    const wa = widest(-1);
+    const wb = widest(1);
+    o.coverScale = { a: wa > 1e-6 ? sides.a / wa : 0, b: wb > 1e-6 ? sides.b / wb : 0 };
+  }
   return o;
 }
 
@@ -360,6 +423,11 @@ function coverageOf(o, points, margin = 1) {
 // side B) at seam position s, in texels.
 export function openingCover(o, s, side) {
   if (!o) return 0;
+  const scale = o.coverScale ? (side > 0 ? o.coverScale.b : o.coverScale.a) : 1;
+  return scale * reachOf(o, s, side);
+}
+
+function reachOf(o, s, side) {
   if (o.cover) {
     // A quadratic B-spline through the bins: smooth in value and slope, so
     // the rim -- and the material it carries -- has no corner where the
@@ -391,10 +459,15 @@ export function openingAmplitude(o, s) {
   } else {
     g = o.hug + (1 - o.hug) * bump(-d / o.behind);
   }
-  // Closed past the seam's far end, and outside the surface.
+  return o.peak * g * openingClosure(o, s);
+}
+
+// Closed past the seam's far end, and outside the surface: 1 along the seam,
+// easing to 0 at both.
+function openingClosure(o, s) {
   const end = smooth((o.length - s) / o.closeIn);
   const start = smooth((s + o.closeOut) / o.closeOut);
-  return o.peak * g * end * start;
+  return end * start;
 }
 
 // The seam frame of a texel point: s along the seam, t across it.
@@ -409,7 +482,11 @@ export function seamCoordinates(o, u, v) {
 // meeting in a rounded corner rather than a crease. Zero ahead of the tip,
 // zero where the piercer does not straddle the seam, zero outside it.
 export function openingRim(o, s, side, amplitude = openingAmplitude(o, s)) {
-  if (!o || amplitude <= 0) return 0;
+  if (!o) return 0;
+  // With a Dilation, exactly the tip's outline at its share (HOW WIDE IT
+  // OPENS), closed where the seam is.
+  if (o.sides) return amplitude > 0 ? openingCover(o, s, side) * openingClosure(o, s) : 0;
+  if (amplitude <= 0) return 0;
   const cover = openingCover(o, s, side);
   if (cover <= 0) return 0;
   const d = amplitude - cover;
@@ -427,9 +504,12 @@ export function openingRim(o, s, side, amplitude = openingAmplitude(o, s)) {
 // it cannot fold the surface over itself.
 export function openingShift(o, u, v, side = 1) {
   const { s, t } = seamCoordinates(o, u, v);
-  const amplitude = openingAmplitude(o, s);
-  if (amplitude === 0) return 0;
-  return sideProfile(o, openingRim(o, s, side, amplitude), amplitude, Math.abs(t));
+  const swelling = openingAmplitude(o, s);
+  if (swelling === 0) return 0;
+  const rim = openingRim(o, s, side, swelling);
+  // Never less than the gap (see HOW WIDE IT OPENS).
+  const amplitude = o.sides ? Math.max(swelling, openingRim(o, s, -1, swelling), openingRim(o, s, 1, swelling)) : swelling;
+  return sideProfile(o, rim, amplitude, Math.abs(t));
 }
 
 function riseOf(amplitude) {
@@ -456,10 +536,12 @@ function sideProfile(o, rim, amplitude, d) {
 // it belongs.
 export function openingDisplacement(o, u, v, pass) {
   const { s, t } = seamCoordinates(o, u, v);
-  const amplitude = openingAmplitude(o, s);
-  if (amplitude === 0) return 0;
-  const rimA = openingRim(o, s, -1, amplitude);
-  const rimB = openingRim(o, s, 1, amplitude);
+  const swelling = openingAmplitude(o, s);
+  if (swelling === 0) return 0;
+  const rimA = openingRim(o, s, -1, swelling);
+  const rimB = openingRim(o, s, 1, swelling);
+  // Never less than the gap (see HOW WIDE IT OPENS).
+  const amplitude = o.sides ? Math.max(swelling, rimA, rimB) : swelling;
   const d = Math.abs(t);
   const own = t >= 0 ? 1 : -1;
   const value = own * sideProfile(o, own > 0 ? rimB : rimA, amplitude, d);

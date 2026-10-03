@@ -460,6 +460,31 @@ function dentSpan(piercer, enter, end) {
   return dentStartOf(piercer, enter, end) - (enter - end);
 }
 
+// How wide a tip is across its travel: the furthest any of its texels sits
+// off its middle line (half its width, for the rim to rest against), and its
+// full width, which is what the opening's Dilation is a share of -- edge to
+// edge of its painted texels (centre to centre, plus one texel) in the
+// widest one-texel slice along its travel. Slice by slice, because the
+// travel axis is read off the artwork and is rarely exactly square to it:
+// measured across the whole tip at once, a degree of tilt adds the tip's
+// length times that tilt to its width (a 9 px finger read as 9.96). In the
+// units the points are in; `texel` is one texel in those units.
+function tipAcross(points, middle, axis, texel) {
+  let tipHalfWidth = 0;
+  let tipWidth = 0;
+  const slices = new Map();
+  for (const p of points) {
+    const across = (p.x - middle.x) * axis.y - (p.y - middle.y) * axis.x;
+    tipHalfWidth = Math.max(tipHalfWidth, Math.abs(across));
+    const along = Math.round(((p.x - middle.x) * axis.x + (p.y - middle.y) * axis.y) / texel);
+    const slice = slices.get(along);
+    if (slice) { slice.lo = Math.min(slice.lo, across); slice.hi = Math.max(slice.hi, across); }
+    else slices.set(along, { lo: across, hi: across });
+  }
+  for (const { lo, hi } of slices.values()) tipWidth = Math.max(tipWidth, hi - lo + texel);
+  return { tipHalfWidth, tipWidth };
+}
+
 // The Wedge Lock Point as a fraction of the opening's own range.
 function wedgeLockOf(piercer) {
   return clampWedgeLock(Number.isFinite(piercer.pierceWedgeLock) ? piercer.pierceWedgeLock : DEFAULT_WEDGE_LOCK) / 100;
@@ -477,13 +502,9 @@ export function contactOf(piercer, pierced, transforms) {
   // Half the tip's width ACROSS its travel -- what an opening's edges rest
   // against behind the tip. tipSpread is a radius in every direction, so on
   // a long, narrow tip it would be the length, not the width.
-  let tipHalfWidth = 0;
-  if (axis) {
-    for (const p of tip) {
-      tipHalfWidth = Math.max(tipHalfWidth,
-        Math.abs((p.x - tipMiddle.x) * axis.y - (p.y - tipMiddle.y) * axis.x));
-    }
-  }
+  const { tipHalfWidth, tipWidth } = axis
+    ? tipAcross(tip, tipMiddle, axis, Math.max(1e-6, piercer.scale || 1))
+    : { tipHalfWidth: 0, tipWidth: 0 };
   const axial = axis ? axialGap(tip, flesh, tipMiddle, tipSpread, axis) : null;
   // Off the path, or a piercer with no readable direction: report the real
   // separation, but nothing engages off a measurement that has no sign.
@@ -678,6 +699,7 @@ export function contactOf(piercer, pierced, transforms) {
     tipPoints: tip,
     tipSpread,
     tipHalfWidth,
+    tipWidth,
     gap,
     inPath,
     depth,
@@ -951,6 +973,11 @@ function publishOcclusion(contacts) {
     // Where along the seam the bulge is centred, in the layer's texels --
     // held with the shape once it locks.
     along: openings.has(pierced.id) ? openings.get(pierced.id).sTip : null,
+    // The gap the opening parts to at the lock, in scene pixels, and how
+    // that splits between side A and side B (the pierced layer's Dilation
+    // of the piercer's tip width) -- null without an opening.
+    gapPx: openings.has(pierced.id) && openings.get(pierced.id).sides ? openings.get(pierced.id).sides.px : null,
+    tipWidth: contact ? contact.tipWidth : null,
     dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
     engaged: Boolean(contact && contact.engaged),
     sunk: Boolean(contact && next.has(contact.piercer.id)),
@@ -1215,7 +1242,120 @@ function openingOf(pierced, contact) {
     tip: carried.tip,
     tipHalfWidth: contact.tipHalfWidth / Math.max(1e-6, pierced.scale || 1),
     tipPoints: carried.points,
+    // The gap: the pierced layer's Dilation of the tip's width (opening.js,
+    // HOW WIDE IT OPENS).
+    tipWidth: contact.tipWidth,
+    dilation: pierced.pierceDentDilation,
   });
+}
+
+// THE WEDGE, PREVIEWED WHERE THE MARKER IS
+//
+// The Pierce window shows the opening while its triangle is placed, before
+// anything has touched anything. Not a drawing of an opening: THE opening --
+// this is the same openingFor the live contact calls (openingOf, above),
+// handed a contact made up on the spot instead of measured:
+//
+//   * the paired piercer's own painted tip, in its own texels, turned so it
+//     travels along the seam (its middle-to-tip line onto the marker's
+//     centreline) and scaled into the pierced layer's texels;
+//   * its leading point on the seam exactly as far past the surface (the
+//     marker's base) as the piercer's depth settings put it at the Wedge
+//     Lock Point -- the Lock's share of the way from the Dent Trigger
+//     Distance to the End Point -- so the shape is the one the wedge keeps;
+//   * the fraction at the lock, the tip's width, and the layer's Dilation.
+//
+// With no tip painted yet there is no outline to wrap, so a stand-in is
+// used: a round-ended tip the marker's Width across. Returns the opening and
+// the map that carries the piercer's texels to where the stand-in is drawn,
+// or null when there is no opening to show (no marker, or one placed off
+// the artwork).
+const PREVIEW_SNAP = (20 * Math.PI) / 180;
+
+export function pierceOpeningPreview(piercer, pierced) {
+  if (!piercer || !pierced || !pierced.isPierced) return null;
+  const marker = openingMarker(pierced);
+  if (!marker || pierceDentIssue(pierced) !== null) return null;
+  meshFor(pierced);
+  const enter = piercer.pierceEnter;
+  const end = Math.max(1, piercer.pierceEnd);
+  const lock = wedgeLockOf(piercer);
+  const scale = Math.max(1e-6, pierced.scale || 1);
+  // How far past the surface the leading point is at the lock, in the
+  // pierced layer's texels: the gap there is start - lock x span.
+  const reach = (lock * dentSpan(piercer, enter, end) - dentStartOf(piercer, enter, end)) / scale;
+  const lead = { u: marker.base.x + marker.inward.x * reach, v: marker.base.y + marker.inward.y * reach };
+  const common = { fraction: lock, tip: lead, dilation: pierced.pierceDentDilation };
+
+  const W = piercer.naturalWidth;
+  const points = [...piercer.pierceRegion].map((i) => ({ x: (i % W) + 0.5, y: Math.floor(i / W) + 0.5 }));
+  const middle = points.length ? centroid(points) : null;
+  const dx = middle ? middle.x - W / 2 : 0;
+  const dy = middle ? middle.y - piercer.naturalHeight / 2 : 0;
+  const length = Math.hypot(dx, dy);
+  if (!middle || length < 1e-6) {
+    // No tip to wrap (or no direction to read off it): the stand-in.
+    return {
+      opening: openingFor(pierced, {
+        ...common,
+        tipHalfWidth: marker.width / 2,
+        tipWidth: marker.width * scale,
+      }),
+      map: null,
+      reach,
+      lock,
+    };
+  }
+  const axis = { x: dx / length, y: dy / length };
+  const ratio = Math.max(1e-6, piercer.scale || 1) / scale;
+  // The piercer's leading edge, its middle -- what goes into the seam first,
+  // as openingOf takes it -- carried onto the lead, travelling along the seam.
+  const front = leadingPoint(points, axis, middle, { x: 0, y: 0 });
+  // Turned so it travels along the seam -- to the nearest right angle when
+  // it is within PREVIEW_SNAP of one. The middle-to-tip line is read off the
+  // artwork, and a finger drawn half a pixel off its sprite's centre leans a
+  // degree or two; turning pixel art by that much resamples every row of it
+  // (a 9 px finger came out 8 wide), where the scene would draw it square.
+  let turnBy = Math.atan2(marker.inward.y, marker.inward.x) - Math.atan2(axis.y, axis.x);
+  const quarter = Math.round(turnBy / (Math.PI / 2)) * (Math.PI / 2);
+  if (Math.abs(turnBy - quarter) < PREVIEW_SNAP) turnBy = quarter;
+  const cos = Math.round(Math.cos(turnBy) * 1e12) / 1e12;
+  const sin = Math.round(Math.sin(turnBy) * 1e12) / 1e12;
+  const turn = (p) => {
+    const x = (p.x - front.x) * ratio;
+    const y = (p.y - front.y) * ratio;
+    return { u: lead.u + cos * x - sin * y, v: lead.v + sin * x + cos * y };
+  };
+  // Onto the pixel grid: the sprite's corner on a whole texel, so its texels
+  // fall on the pierced layer's pixels as a placed layer's do (half a texel
+  // off, every row of it would sit on a pixel's edge). Within half a texel
+  // of where the depth puts it.
+  const corner = turn({ x: 0, y: 0 });
+  const nudge = { u: Math.round(corner.u * scale) / scale - corner.u, v: Math.round(corner.v * scale) / scale - corner.v };
+  const map = (p) => {
+    const q = turn(p);
+    return { u: q.u + nudge.u, v: q.v + nudge.v };
+  };
+  lead.u += nudge.u;
+  lead.v += nudge.v;
+  const { tipHalfWidth, tipWidth } = tipAcross(points, middle, axis, 1);
+  return {
+    opening: openingFor(pierced, {
+      ...common,
+      tipHalfWidth: tipHalfWidth * ratio,
+      tipPoints: points.map(map),
+      tipWidth: tipWidth * Math.max(1e-6, piercer.scale || 1),
+    }),
+    map,
+    reach,
+    lock,
+  };
+}
+
+// The pierced layer's mesh, made if it has none yet (see meshFor) -- for the
+// Pierce window's preview, which draws through it.
+export function pierceMeshOf(part) {
+  return part ? meshFor(part) : null;
 }
 
 function leadingPoint(points, axis, fallback, shift) {

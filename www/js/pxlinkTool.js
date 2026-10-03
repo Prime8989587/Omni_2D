@@ -61,6 +61,7 @@ function cacheElements() {
     'pxlinkDeleteConfirmBtn', 'pxlinkDeleteCancelBtn',
     'pxlinkModePointBtn', 'pxlinkModeBrushBtn', 'pxlinkBrushTools', 'pxlinkPaintBtn', 'pxlinkEraseBtn',
     'pxlinkBrushBtn', 'pxlinkBrushMenu', 'pxlinkBrushPresets',
+    'pxlinkSelectHint', 'pxlinkSelectedBar', 'pxlinkSelectedName', 'pxlinkDeleteSelectedBtn',
   ]) els[id] = document.getElementById(id);
 }
 
@@ -355,10 +356,22 @@ function renderAnchorSelect() {
 }
 
 // The links already in the project: name, who holds still, delete.
+//
+// SELECT, THEN DELETE. A tap on a link selects it -- its row lit, its layers
+// lit on the canvas, its point or painted pairs drawn large -- and the bar
+// above the list names it with a Delete button, so what is about to go is
+// never in doubt. Delete asks first, like a layer or a bone, and removes
+// that one link and nothing else: both layers keep their artwork, bones,
+// weights, mesh and physics, and every other link stays exactly as it is.
+// (The small x on each row is the same delete, one tap shorter.)
 function renderList() {
   els.pxlinkList.replaceChildren();
   const links = pxlinkStore.links;
   els.pxlinkListEmpty.hidden = links.length > 0;
+  const selected = session.focusId ? pxlinkStore.byId(session.focusId) : null;
+  els.pxlinkSelectedBar.hidden = !selected;
+  els.pxlinkSelectHint.hidden = Boolean(selected) || links.length === 0;
+  if (selected) els.pxlinkSelectedName.textContent = linkName(selected);
   for (const link of links) {
     const li = document.createElement('li');
     li.className = 'pxlink__row';
@@ -434,6 +447,19 @@ function toggleLayer(partId) {
 function focusLink(id) {
   session.focusId = session.focusId === id ? null : id;
   renderAll();
+  // Selected from the list while its point is off the canvas: brought into
+  // view, so what is selected can always be seen.
+  const link = session.focusId ? session.links.find((l) => l.id === session.focusId) : null;
+  const at = link && link.members.length ? link.members[0] : null;
+  if (at) {
+    const p = toScreen(at.x, at.y);
+    if (p.x < 0 || p.y < 0 || p.x > session.viewWidth || p.y > session.viewHeight) {
+      session.cam.panX += session.viewWidth / 2 - p.x;
+      session.cam.panY += session.viewHeight / 2 - p.y;
+      snapCamera(session.cam, session.dpr, session.viewWidth / 2, session.viewHeight / 2, { maxZoom: MAX_ZOOM });
+      render();
+    }
+  }
 }
 
 function clearDraft() {
@@ -514,9 +540,13 @@ function askDelete(id) {
   const link = pxlinkStore.byId(id);
   if (!link) return;
   pendingDeleteId = id;
+  const where = link.kind === 'brush'
+    ? `along its ${link.members[0].points.length} painted pixel${link.members[0].points.length === 1 ? '' : 's'}`
+    : 'at this point';
   els.pxlinkDeleteMessage.textContent =
-    `"${linkName(link)}" will no longer be held together at this point. ` +
-    'The layers keep all their own artwork, bones and weights, and every other link stays as it is.';
+    `"${linkName(link)}" will no longer be held together ${where}. ` +
+    'The layers keep all their own artwork, bones, weights, mesh and physics, and every other link stays as it is. ' +
+    'Undo brings it back.';
   els.pxlinkDeleteModal.hidden = false;
 }
 
@@ -765,6 +795,7 @@ export function initPxLinkTool() {
     renderTools();
   });
   els.pxlinkDeleteConfirmBtn.addEventListener('click', confirmDelete);
+  els.pxlinkDeleteSelectedBtn.addEventListener('click', () => { if (session && session.focusId) askDelete(session.focusId); });
   els.pxlinkDeleteCancelBtn.addEventListener('click', cancelDelete);
   if (els.pxlinkOpenBtn) els.pxlinkOpenBtn.addEventListener('click', openPxLink);
   // Undo, redo, a load, or a layer deleted elsewhere can change what the

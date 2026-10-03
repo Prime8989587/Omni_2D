@@ -306,6 +306,18 @@ export const SCHEMA = [
     max: 10,
     default: [1, 4, 8],
   },
+  // How solid each Pierce paint colour is drawn in the Pierce window, 0-100%
+  // -- the PAINT, not the artwork under it (the window's own Piercer and
+  // Pierced sliders are those). One per target, edited on the window itself,
+  // so each kind of region keeps the strength it was last left at. No
+  // section: like the brush presets, they live where they are used.
+  ...[
+    ['piercePaintOpacityTip', 55],
+    ['piercePaintOpacityArea', 45],
+    ['piercePaintOpacityDeform', 60],
+    ['piercePaintOpacityBarrier', 85],
+    ['piercePaintOpacityDent', 35],
+  ].map(([key, value]) => ({ key, kind: 'slider', default: value, min: 0, max: 100, step: 5 })),
   {
     key: 'meshTrimInPlace',
     section: 'rig',

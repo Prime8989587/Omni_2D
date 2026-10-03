@@ -479,16 +479,24 @@
             <span>Width <b id="pierceDentWidthValue">10 px</b></span>
             <input id="pierceDentWidthSlider" class="slider" type="range" min="0" max="128" step="1" value="10" />
           </label>
+          <label class="slider-field slider-field--wide">
+            <span>Opening width <b id="pierceDentDilationValue">75% of the tip</b></span>
+            <input id="pierceDentDilationSlider" class="slider" type="range" min="10" max="150" step="1" value="75" />
+          </label>
           <p class="joint-hint">
             The seam a pierce opens in this layer, in its own pixels. Depth is
-            how far the seam runs in from the surface; Width is how far apart
-            its two edges would bow around the tip at the End Point. Nothing
-            is cut: the edges bulge outward around the tip and follow it in
-            from the Dent Trigger Distance until the piercer's Wedge Lock
-            Point, hold that shape beyond it, and ease back to closed on the
-            way out. WHERE the seam is is yours to place: Paint regions…,
-            then Dent, and drag the triangle marker onto the spot. Set Depth
-            or Width to 0 for no opening.
+            how far the seam runs in from the surface; Width is how far the
+            material beside it swells outward round the tip. <b>Opening
+            width</b> is how wide the gap itself parts: a share of the
+            piercer's tip width — at 75% an 8 px tip opens 6 px and a 12 px tip
+            9 px, in whole pixels split between the two sides (7 px is 3 + 4).
+            Nothing is cut: the edges part around the tip and follow it in
+            from the Dent Trigger Distance, reach that width at the piercer's
+            Wedge Lock Point, hold that shape beyond it, and ease back to
+            closed on the way out. WHERE the seam is is yours to place: Paint
+            regions…, then Dent, and drag the triangle marker onto the spot —
+            the wedge is previewed there as you drag. Set Depth or Width to 0
+            for no opening.
           </p>
         </div>
 
@@ -807,6 +815,14 @@
         <div id="pierceBrushMenu" class="px-pin__brushes" role="group" aria-label="Brush size" hidden></div>
         <div id="pierceBrushPresets" class="brush-presets" role="group" aria-label="Saved brush sizes"></div>
         <p id="pierceTargetHint" class="joint-hint" hidden></p>
+        <label id="pierceWindowDilationRow" class="slider-field slider-field--wide" hidden>
+          <span>Opening width <b id="pierceWindowDilationValue">75% of the tip</b></span>
+          <input id="pierceWindowDilation" class="slider" type="range" min="10" max="150" step="1" value="75" />
+        </label>
+        <label class="slider-field slider-field--wide">
+          <span><span id="piercePaintOpacityLabel">Tip paint</span> opacity <b id="piercePaintOpacityValue">55%</b></span>
+          <input id="piercePaintOpacity" class="slider" type="range" min="0" max="100" step="5" value="55" />
+        </label>
         <label class="slider-field slider-field--wide">
           <span>Piercer opacity <b id="piercePiercerOpacityValue">100%</b></span>
           <input id="piercePiercerOpacity" class="slider" type="range" min="10" max="100" step="5" value="100" />
@@ -1221,6 +1237,11 @@
 
       <div class="px-pin__row-label pxlink__list-label">
         <span>Links in this project <b id="pxlinkCount">0</b></span>
+      </div>
+      <p id="pxlinkSelectHint" class="px-pin__hint">Tap a link to select it.</p>
+      <div id="pxlinkSelectedBar" class="pxlink__selected" hidden>
+        <span class="pxlink__selected-name">Selected: <b id="pxlinkSelectedName"></b></span>
+        <button id="pxlinkDeleteSelectedBtn" class="btn btn--sm btn--danger" type="button"><span class="px-icon--lead" data-icon="trash"></span>Delete link…</button>
       </div>
       <ul id="pxlinkList" class="scene-parts pxlink__list"></ul>
       <p id="pxlinkListEmpty" class="list-tools__empty">No links yet — pick two or more layers, tap where they meet (or paint where they overlap, in Brush), then Link.</p>

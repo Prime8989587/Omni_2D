@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.7.0',
+    date: '2026-10-03',
+    title: 'Pierce: the wedge previewed live as you place it, its width a share of the piercer; paint opacity; PxLink select and delete',
+    kind: 'minor',
+    notes: [
+      'Pierce window, Dent: the layer is drawn OPENED while you place the triangle -- the real wedge, exactly as the scene will draw it at the Wedge Lock Point, with your piercer in it -- and it follows every drag of the marker.',
+      'Opening width: how wide the wedge parts, as a share of the piercer\u2019s tip width (75% by default: an 8 px tip opens 6 px, a 12 px tip 9 px). Whole pixels, split between the two sides as evenly as they go (7 px is 3 + 4). In the Pierce panel beside Depth and Width, and in the Pierce window\u2019s Dent target.',
+      'Each paint target in the Pierce window (Tip, Pierceable, Deformable, Barrier, Dent) has its own paint opacity, remembered, so the artwork shows through the paint. Zoomed in, paint used to be drawn solid whatever its opacity -- fixed.',
+      'PxLink: tap a link in the list to select it -- its row and layers light up and the bar above the list names it -- then Delete link… and confirm. Only that link goes; Undo brings it back.',
+    ],
+  },
+  {
     version: '2.6.1',
     date: '2026-10-03',
     title: 'Pierce: the wedge happens again, in its own shape',
