@@ -22,12 +22,14 @@ import {
   clampMirrorCoord, clampWedgeWidthPx, normalizeWedgeWidthMode, DEFAULT_WEDGE_WIDTH_PX,
   clampDentCoord, normalizeAngle,
   PiercePhysics, PIERCE_PHYSICS,
+  InteractiveResponse, INTERACTIVE_RESPONSES, clampInteractiveSpring,
 } from './parts.js';
 import { Bone, bonesStore, reserveBoneId, DEFAULT_INERTIA, JointType, JOINT_TYPES } from './bones.js';
 import { MeshVertex, PartMesh, sanitizeWeights, generateMesh, migrateWeightRule } from './mesh.js';
 import { transferWeights } from './meshedit.js';
 import { sceneStore } from './scene.js';
 import { resetPierceContainment } from './pierce.js';
+import { resetInteractive } from './interactive.js';
 import {
   pxlinkStore, serializePxLinks, deserializePxLinks, LEGACY_PROJECT_KEY,
 } from './pxlink.js';
@@ -177,6 +179,10 @@ function serializePart(part, copyPixels) {
     pierceWedgeMode: part.pierceWedgeMode,
     pierceWedgeWidthPx: part.pierceWedgeWidthPx,
     piercePhysics: part.piercePhysics,
+    interactive: part.interactive,
+    interactiveResponse: part.interactiveResponse,
+    interactiveStiffness: part.interactiveStiffness,
+    interactiveDamping: part.interactiveDamping,
     pierceEnter: part.pierceEnter,
     pierceEnd: part.pierceEnd,
     pierceDentStart: part.pierceDentStart,
@@ -259,6 +265,12 @@ function deserializePart(data) {
   // those projects were saved under.
   part.piercePhysics = PIERCE_PHYSICS.has(data.piercePhysics)
     ? data.piercePhysics : PiercePhysics.PIERCER;
+  // Interactive. Absent before it existed: off, Solid, the bone defaults.
+  part.interactive = data.interactive === true;
+  part.interactiveResponse = INTERACTIVE_RESPONSES.has(data.interactiveResponse)
+    ? data.interactiveResponse : InteractiveResponse.SOLID;
+  part.interactiveStiffness = clampInteractiveSpring('stiffness', data.interactiveStiffness);
+  part.interactiveDamping = clampInteractiveSpring('damping', data.interactiveDamping);
   part.pierceEnter = clampPierceDepth(data.pierceEnter ?? DEFAULT_PIERCE_ENTER);
   part.pierceEnd = clampPierceDepth(data.pierceEnd ?? DEFAULT_PIERCE_END);
   // The Dent Trigger Distance. Absent before the dent had its own starting
@@ -388,4 +400,7 @@ export function applyProject(data) {
   // this, a scene restored with the needle somewhere else would sweep from
   // where the OLD one had got to and drag the contact across with it.
   resetPierceContainment();
+  // And every Interactive push: it measures movement frame to frame, and a
+  // load is not a movement anybody made.
+  resetInteractive();
 }

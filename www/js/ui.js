@@ -9,6 +9,7 @@ import { initCheckpoints, openCheckpoints } from './checkpoints.js';
 import { initRecentTools, registerToolLauncher } from './recentTools.js';
 import {
   partsStore, PierceRole, PIERCE_DEPTH_RANGE, clampPierceDepth, PiercePhysics, clampWedgeLock, WedgeWidthMode,
+  InteractiveResponse,
 } from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
@@ -40,6 +41,7 @@ import { PixelPen } from './pixelDraw.js';
 import { initMeshTrim, openMeshTrim, isMeshTrimOpen } from './meshtrim.js';
 import { initDebugOverlay, debugViewOn, subscribeDebugOverlay } from './debugOverlay.js';
 import { initPxLink, pxlinkStore } from './pxlink.js';
+import { initInteractive, describeStructure } from './interactive.js';
 import { combinedArtwork, stackOrder } from './combine.js';
 import { initPxLinkTool, openPxLink } from './pxlinkTool.js';
 import { initPierceTool, openPiercePainter } from './pierceTool.js';
@@ -191,6 +193,12 @@ function cacheElements() {
     'pierceDepthCanvas', 'pierceDrawHint',
     'pierceDepthLegend', 'pierceDepthOkBtn', 'pierceDepthCancelBtn',
     'pierceTipModal', 'pierceTipOkBtn',
+    'interactiveModal', 'interactiveLayerName', 'interactiveOffBtn', 'interactiveOnBtn', 'interactiveHint',
+    'interactiveResponseRow', 'interactiveSolidBtn', 'interactiveGivesBtn', 'interactiveResponseHint',
+    'interactiveSpringRow', 'interactiveStiffnessSlider', 'interactiveStiffnessValue',
+    'interactiveDampingSlider', 'interactiveDampingValue',
+    'interactiveStructureRow', 'interactiveStructureText', 'interactiveThinWarning', 'interactivePxLinkBtn',
+    'interactiveWedgeText', 'interactivePierceBtn', 'interactiveDoneBtn',
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -1497,6 +1505,14 @@ function partRowAside(part, index, total) {
     renderPartsList();
     openPierceModal(part.id);
   }, { pressed: part.hasPierceRole });
+  // Interactive: whether this layer's outline touches, pushes and is
+  // pushed by other Interactive layers -- next to Pierce, which is the
+  // specialised case of the same contact.
+  action(part.interactive ? `Interactive: ${part.givesWay ? 'gives way' : 'solid'}` : 'Interactive', 'push', () => {
+    openPartMenuId = null;
+    renderPartsList();
+    openInteractiveModal(part.id);
+  }, { pressed: part.interactive });
 
   return aside;
 }
@@ -1591,6 +1607,94 @@ const PIERCE_PHYSICS_HINTS = {
 };
 
 const PIERCE_TIP_SEEN_KEY = 'omni2d.pierce.tipSeen';
+
+// ---- Interactive ---------------------------------------------------------
+
+let interactiveModalPartId = null;
+
+function interactivePart() {
+  return partsStore.parts.find((part) => part.id === interactiveModalPartId) || null;
+}
+
+function openInteractiveModal(partId) {
+  interactiveModalPartId = partId;
+  renderInteractiveModal();
+  els.interactiveModal.hidden = false;
+}
+
+function closeInteractiveModal() {
+  interactiveModalPartId = null;
+  els.interactiveModal.hidden = true;
+}
+
+const listNames = (names) => (names.length <= 1 ? names.join('')
+  : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+function renderInteractiveModal() {
+  const part = interactivePart();
+  if (!part) return;
+  els.interactiveLayerName.textContent = part.name;
+  els.interactiveOffBtn.setAttribute('aria-pressed', String(!part.interactive));
+  els.interactiveOnBtn.setAttribute('aria-pressed', String(part.interactive));
+  els.interactiveHint.textContent = part.interactive
+    ? 'Its outline touches every other Interactive layer\u2019s. Whatever moves into a layer that gives way pushes it the way it is moving.'
+    : 'Off: this layer touches nothing (Pierce, if it has a role, works as before).';
+
+  els.interactiveResponseRow.hidden = !part.interactive;
+  els.interactiveSolidBtn.setAttribute('aria-pressed', String(!part.givesWay));
+  els.interactiveGivesBtn.setAttribute('aria-pressed', String(part.givesWay));
+  els.interactiveResponseHint.textContent = part.givesWay
+    ? 'Pushed when touched -- with everything PxLinked to it that is free to follow -- and springs back when the touch ends. The spring is a physics bone\u2019s.'
+    : 'Holds its ground: it pushes the layers it moves into, and nothing pushes it. A hand, a body.';
+  els.interactiveSpringRow.hidden = !part.givesWay;
+  els.interactiveStiffnessSlider.value = String(part.interactiveStiffness);
+  els.interactiveStiffnessValue.textContent = String(part.interactiveStiffness);
+  els.interactiveDampingSlider.value = String(part.interactiveDamping);
+  els.interactiveDampingValue.textContent = String(part.interactiveDamping);
+
+  // What a push moves, and what it hangs from -- read live off the links,
+  // so it says exactly what the next push will do.
+  const structure = part.givesWay ? describeStructure(part) : null;
+  els.interactiveStructureRow.hidden = !structure;
+  if (structure) {
+    const moves = structure.moves.length
+      ? `Pushed with it: ${listNames(structure.moves)}.`
+      : 'Nothing else is PxLinked to it: it is pushed on its own.';
+    const held = structure.heldBy.length
+      ? ` Held by ${listNames(structure.heldBy)} (${[
+        structure.brushHolds ? `${structure.brushHolds} brush link${structure.brushHolds === 1 ? '' : 's'}` : '',
+        structure.pointHolds ? `${structure.pointHolds} point link${structure.pointHolds === 1 ? '' : 's'}` : '',
+      ].filter(Boolean).join(', ')}): it bends from there instead of moving whole.`
+      : ' Held by nothing: the whole structure moves as one piece.';
+    els.interactiveStructureText.textContent = moves + held;
+    const riveted = structure.thin && structure.pointHolds > 0;
+    els.interactiveThinWarning.hidden = !riveted;
+    els.interactiveThinWarning.textContent = riveted
+      ? 'Long and thin, but held by point links: it will kink at each point when pulled. Link it with PxLink Brush along its length instead, and it lifts smoothly.'
+      : '';
+  }
+
+  els.interactiveWedgeText.textContent = part.hasPierceRole
+    ? `This layer is the ${part.pierceRole} of a wedge: Pierce\u2019s contact, with a painted tip and a seam.`
+    : 'A piece pressed INTO the seam between two layers (fabric pulled into a body seam) opens a wedge there: make it the Piercer and the two layers Pierced.';
+}
+
+function setInteractive(on) {
+  const part = interactivePart();
+  if (!part || part.interactive === on) return;
+  history.run(on ? 'Make interactive' : 'Make not interactive', () => partsStore.setInteractive(part.id, on));
+  renderInteractiveModal();
+  canvasEngine.requestRender();
+}
+
+function setInteractiveResponse(response) {
+  const part = interactivePart();
+  if (!part || part.interactiveResponse === response) return;
+  history.run(response === InteractiveResponse.GIVES ? 'Gives way when touched' : 'Solid when touched',
+    () => partsStore.setInteractiveResponse(part.id, response));
+  renderInteractiveModal();
+  canvasEngine.requestRender();
+}
 
 let pierceModalPartId = null;
 // How the depth popup was opened, which decides what Cancel means:
@@ -3373,6 +3477,33 @@ function bindEvents() {
     canvasEngine.requestRender();
   });
   els.pierceDoneBtn.addEventListener('click', closePierceModal);
+
+  els.interactiveOffBtn.addEventListener('click', () => setInteractive(false));
+  els.interactiveOnBtn.addEventListener('click', () => setInteractive(true));
+  els.interactiveSolidBtn.addEventListener('click', () => setInteractiveResponse(InteractiveResponse.SOLID));
+  els.interactiveGivesBtn.addEventListener('click', () => setInteractiveResponse(InteractiveResponse.GIVES));
+  for (const [slider, key, value] of [
+    [els.interactiveStiffnessSlider, 'stiffness', els.interactiveStiffnessValue],
+    [els.interactiveDampingSlider, 'damping', els.interactiveDampingValue],
+  ]) {
+    attachContinuousHistory(slider, key === 'stiffness' ? 'Change push stiffness' : 'Change push damping');
+    slider.addEventListener('input', () => {
+      const part = interactivePart();
+      if (!part) return;
+      partsStore.setInteractiveSpring(part.id, key, Number(slider.value));
+      value.textContent = String(key === 'stiffness' ? part.interactiveStiffness : part.interactiveDamping);
+    });
+  }
+  els.interactivePxLinkBtn.addEventListener('click', () => {
+    closeInteractiveModal();
+    openPxLink();
+  });
+  els.interactivePierceBtn.addEventListener('click', () => {
+    const part = interactivePart();
+    closeInteractiveModal();
+    if (part) openPierceModal(part.id);
+  });
+  els.interactiveDoneBtn.addEventListener('click', closeInteractiveModal);
   const onDepthTyped = () => {
     renderPierceDepthBar();
     // Re-plan, so a number far outside the current ruler brings the ruler
@@ -3583,6 +3714,8 @@ export function initUI() {
   // PxLink's solver has to be registered before the first frame is drawn:
   // every layer's deformation asks it for a correction.
   initPxLink();
+  // Interactive's push likewise: every layer's deformation asks it too.
+  initInteractive();
 
   applySliderRange(els.stiffnessSlider, PHYSICS_RANGES.stiffness);
   applySliderRange(els.dampingSlider, PHYSICS_RANGES.damping);
@@ -3608,7 +3741,10 @@ export function initUI() {
     renderPartsList();
     renderBindList();
     renderChrome();
+    if (interactiveModalPartId) renderInteractiveModal();
   });
+  // What a push moves is read off the links, so the panel follows them.
+  pxlinkStore.subscribe(() => { if (interactiveModalPartId) renderInteractiveModal(); });
 
   bonesStore.subscribe((changeType) => {
     // Nudges and handle drags change the readout but not the tree, so

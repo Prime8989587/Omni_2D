@@ -8266,6 +8266,262 @@ line where the piercer goes in. The help says so.
 The one older check that asserted the lopsided opening ("an off-centre tip
 opens one side further") now asserts the mirrored one.
 
+## 2.9.0: Interactive -- layers that touch, push, and spring back
+
+Any layer can now be marked **Interactive**: Scene Parts → ⋮ →
+**Interactive**, next to Pierce. Its *outline* (the edge of its artwork, the
+same edge the contour ring hugs) then touches the outline of every other
+Interactive layer. When one moves into another, the touched one is pushed
+the way the toucher is moving, together with everything PxLinked to it, and
+springs back when the touch ends.
+
+![Setting it up, every step a real tap: the PxLink window offers only Brush for a thin Interactive waistband; its Interactive panel, before and after linking](docs/images/interactive-setup.png)
+
+### The panel
+
+- **Touches other layers: Off | On.**
+- **When touched: Solid | Gives way.** Solid holds its ground: it pushes and
+  is never pushed (a hand, a body). Gives way is pushed, then springs back.
+- **Stiffness and Damping** (Gives way only). These are a physics bone's own
+  spring settings: same defaults (180 and 8), same ranges.
+- **Pushed together** says, live from the links, what a push will move and
+  what holds it. For example: *"Pushed with it: Cup and Breast. Held by
+  Torso (1 point link): it bends from there instead of moving whole."*
+- A long, thin layer held by point links gets a warning (see below).
+- **Pressing into a seam** links to Pierce, the specialised case (see
+  below).
+
+### What it is made of
+
+Nothing here is a new deformation system. It is four existing things,
+generalized:
+
+| | Reused | Generalized to |
+| --- | --- | --- |
+| Contact | Pierce's axial gap (how far the leading edge is past the near face, along an axis) | asked of outlines, slice by slice, through the faces the movement runs into (`contact.js`) |
+| Press | Pierce's `pressOf`, the very function: 0 at first touch, 1 at 12 px in, up to 2 | unchanged |
+| Spring | a physics bone's: stiffness, damping, the same semi-implicit Euler at the same substep, the same settle test | moving a point in the plane instead of an angle |
+| Structure | the PxLink network and its link points | walked outward from the touched layer; its links to layers that hold their ground are where it hangs from |
+
+The measuring now lives in one module, `contact.js`, and **Pierce imports it
+back unchanged**: `centroid`, `spread`, `nearestSeparation`, `axialGap` and
+`pressOf` moved there verbatim. Pierce is the specialised configuration:
+painted Tip and Pierceable regions, an axis read off the piercer's artwork,
+and a wedge as the response.
+
+**One honest note on "the universal direction fix".** Pierce never had a
+force direction taken from live movement. Its push follows the piercer's
+*artwork* axis (from the middle of the layer to the middle of its painted
+tip), which turns with the layer, and that is unchanged. The live-movement
+direction is new here, in Interactive.
+
+### Which way: the toucher's live movement
+
+The push points the way the toucher is actually moving *relative to* what it
+touches. That direction is measured frame to frame from where both outlines
+are drawn, with any push of their own taken back out, so a layer bouncing on
+its own spring is not "moving into" anything. When the toucher stops, the
+last direction it had is kept for as long as it stays in contact, so a hand
+pressed in and held keeps pressing.
+
+Only faces turned against the movement are pushed:
+
+- **Sliding a hand along a waistband pushes nothing.** The band's top and
+  bottom face sideways to that movement.
+- **Pulling the hand back out lets go.** What it pressed is now behind it.
+- **A quick push still holds.** For a few frames the touched layer lags the
+  hand, and a small hand can briefly be more than halfway into it. A press
+  already under way stays engaged until the toucher turns back on it by more
+  than a right angle.
+
+### How hard, and springing back
+
+The press asks the spring for 4× as much travel as the spring gives back
+for the same distance. So the touched structure gets out of the way, moving
+0.8 of the distance the toucher presses in, instead of letting the toucher
+pass through. Contact and spring are solved together inside the substeps,
+not a frame apart, and the contact damps as real contact does. Once the
+touch ends only the spring is left: it overshoots and settles exactly like a
+physics bone with the same stiffness and damping, then the structure is
+removed and nothing is pushed at all.
+
+### What moves together: the structure
+
+The touched layer is pushed together with every layer joined to it by
+PxLinks (point or brush, any number, chains of them) that is free to follow.
+A layer **holds its ground** when:
+
+- it is bound to the skeleton with no spring bone among its bones (a body on
+  rigid bones), or
+- it is Interactive and Solid.
+
+The walk stops at held layers. Their links to the structure are where it
+hangs from. Layers with no bones, and layers on spring bones (a breast meant
+to respond), follow.
+
+The structure moves by **one displacement field over the scene**:
+
+```
+push(x) = d * smoothstep( distance from x to the nearest hold / reach )
+```
+
+- `d` is the spring's displacement.
+- `reach` is the distance from the toucher's footprint (the stretch of
+  outline it bears on) to the nearest hold.
+- **Held nowhere,** the push is `d` everywhere: the whole structure moves as
+  one piece, and every link in it stays joined.
+- **Held somewhere,** the push is zero at the holds and rises smoothly to `d`
+  under the whole footprint, so the material under a flat hand lies flat
+  against it. Everything farther from the holds than the footprint (the cup
+  below a lifted strap, the breast below the cup) is carried the full `d`.
+- **Links between members stay joined without correction.** It is one field
+  over the scene, not one per layer, so two linked layers are pushed by the
+  same amount at the point they share.
+- **It is applied after PxLink** (in `deformVertices`). PxLink's own solve
+  runs exactly as before underneath, and every caller (the renderer, the
+  contact itself, weight painting) sees the layer where it is drawn. A layer
+  being bent is drawn through the same finer mesh PxLink's bends use.
+
+**Bent, never folded.** A field `d * s(x)` folds the material exactly where
+`1 + d · ∇s ≤ 0`, that is, where it pushes some of the structure back over
+the part behind it, toward a hold. Every frame this is checked at every
+drawn point of every layer in the structure. The push is never allowed to
+come within PxLink's own margin of folding (the same 2.5× its welds are
+sized by). Like the End Point of a pierce, past that the structure gives no
+further that way. The push is shortened, never turned.
+
+### Brush links are glue, point links are rivets
+
+- **A Brush link peels.** Pulled near it, every painted pair within 2.5 ×
+  (push + press) of the footprint lets go, so a band painted on along its
+  whole length lifts in a smooth arch round the hand and stays down
+  everywhere else.
+- **Peeled glue sticks again** only once the pull has eased 2 px below where
+  it gave (so the edge does not flicker), and it re-sticks from the outside
+  in as the band settles.
+- **The last quarter holds.** On either side of the press, the last 25% of a
+  painted region's length never lets go, so it lifts but never comes off at
+  either end, even with the hand nearer one end.
+- **A point link is a rivet.** It never lets go, and a band can hardly lift
+  right beside one.
+
+So **long, thin Interactive pieces are attached with Brush**. "Long and thin"
+is measured whichever way the artwork lies: at most 8 px thick and at least
+4× as long. Diagonal straps count. This is enforced in two places:
+
+- **The PxLink window.** With such a layer chosen, Point is disabled (dimmed)
+  and Brush is selected, with a hint that says why.
+- **The Interactive panel.** It warns about any point links such a layer
+  already has.
+
+### Pressing into a seam is Pierce
+
+Fabric pulled *into* the line where two body parts meet opens a wedge there.
+That is Pierce, configured for it:
+
+- **The fabric is the Piercer.** Its tip is painted over the part that
+  presses in (the gusset), running on past the edge of the body so the seam
+  stays open where the fabric enters.
+- **The two body parts are each Pierced,** each with its **mirror line on
+  the line they share**. Each opens its own side, and together they open one
+  symmetric wedge.
+- **Wedge Lock at 100%,** so the opening keeps following the fabric all the
+  way in.
+
+No new code was needed for this. Two Pierced layers already each engage with
+the same piercer, each opens its own side of the line, and the tip sinks
+beneath the lower of the two.
+
+### Verified
+
+All in the real app: a phone-sized Chromium (390×844 @3×), real taps and real
+touch drags. The hand is a layer on an arm bone, dragged in Free Move with
+Drag moves = Hand, so it sweeps in along a real arc.
+
+**Seven PxLinked pieces, one of them Interactive.** Seven sash pieces are
+point-linked into a chain. Only Sash4 is Interactive (Gives way); the hand
+is Solid.
+
+| | Result |
+| --- | --- |
+| Sash4's panel | pushed with it: Sash3, Sash5, Sash2, Sash6, Sash1, Sash7; held by nothing |
+| Hand swept in (2.20 px pressed) | **all seven moved by exactly (−4.78, 7.38)**, spread 0.0000 px; as drawn on whole pixels, within rounding; 0 folded triangles |
+| Direction | push 122.9°, the hand moving 122.0° as it pressed (its whole sweep averaged 107°: the push follows the *live* direction) |
+| Hand pulled back | springs home with 4 overshoots (0.79 → −0.31 → 0.13 → −0.05 px …), **all seven at 0.0000 px** |
+
+![Seven PxLinked pieces, one Interactive: pushed as one, then springing home](docs/images/interactive-seven-pieces.png)
+
+**A 2 px waistband painted on with Brush.** Every setup step was a real tap:
+
+1. Interactive set from the panel: Waistband Gives way, Hand Solid.
+2. In the PxLink window, Point is disabled and Brush is on.
+3. 80 px painted along the band with a real touch drag, making one brush
+   link of 80 pairs to the Torso.
+
+| | Result |
+| --- | --- |
+| Hand pulls it | lifts **12.82 px**, flat under the hand; 54 of 80 pairs peeled, 26 holding |
+| Along the band | 0.1 0.1 … 0.4 1.2 2.4 3.9 5.6 7.3 9.0 10.5 11.7 12.5 12.8 … 12.8 12.5 … 0.4 0.1 |
+| Ends | **0.08 px** each: still on the body |
+| Smoothness | steepest bend 0.52 px/texel², **0 folded triangles** |
+| Let go | back on the body exactly (0.0 px) |
+
+![The waistband pulled by the hand and let go](docs/images/interactive-waistband.png)
+
+**A bra strap pulls its cup, the cup pulls the breast.** The strap
+(Interactive, Gives way) is riveted to the body at the shoulder and sewn to
+the cup with Brush. The cup is Brush-linked over a breast on a spring bone.
+
+| | Result |
+| --- | --- |
+| Strap's panel | pushed with it: Cup, Breast; held by Torso (1 point link) |
+| Hand lifts the strap (5.02 px pressed) | strap (−2.20, −5.99); **cup and breast together (−2.67, −7.28)** |
+| Shoulder rivet / body | **0.0 px** / **0.00 px** |
+| Folds | strap 0, cup 0, breast 0 |
+| Let go | strap, cup and breast all home (0.0 px) |
+
+![A strap lifted by a hand: the cup and the breast under it come with it](docs/images/interactive-bra-strap.png)
+
+**The wedge at a body seam.** Panties (Piercer, tip = gusset) are pulled up
+with Free Move's Piercer tab between two separate body-half layers (both
+Pierced, mirror lines on the shared seam). Gap set: 6 px.
+
+| Pulled up | Both halves | Drawn |
+| --- | --- | --- |
+| 8 px | depth 7, open 0.39 | 1 + 1 px |
+| 14 px | depth 13, open 0.72 | 2 + 2 px |
+| 20 px | depth 18, open 1.00 | **3 + 3 = 6 px**, one wedge, even about the seam |
+| back out | closed | identical to rest, pixel for pixel |
+
+![Panties pulled up into the seam between two body halves: one symmetric wedge](docs/images/interactive-seam-wedge.png)
+
+**What it does not do.**
+
+- **A push moves things; it does not turn them.** A structure hanging from
+  one point is carried by the push and bent from its holds. It is not swung
+  like a pendulum.
+- **Spring bones do not feel the push.** A breast on a spring bone follows
+  through the field; its bone is not kicked.
+- **Pushes toward a hold are limited.** A strap pushed straight up toward its
+  own shoulder rivet gives only as far as it can without folding. Lifting it
+  away from the shoulder gives much more (7.3 px here, against 3.8 px when
+  the same hand's arc carried it toward the rivet).
+
+**Tests.** The new `tests/interactive.mjs` has 41 checks. They cover:
+
+- the shared measure (shape reading, outline sides, Pierce's `pressOf` and
+  `axialGap` in their new home, which faces press);
+- the push's size and direction, and the spring back home with overshoots;
+- seven pieces moving as one;
+- the waistband painted on (lifts, ends stay, no folds), held at its ends,
+  and riveted;
+- the strap, cup and breast chain;
+- the two-halves wedge;
+- save/load (older projects load with Interactive off).
+
+`tests/opening.mjs` (63) and `tests/pxlink.mjs` (87) pass unchanged after
+the move to `contact.js`. All 17 Node suites and the browser suites pass.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

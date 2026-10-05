@@ -35,6 +35,7 @@ import { setIcon } from './pixelIcons.js';
 import { noteToolUsed } from './recentTools.js';
 import { showToast } from './toast.js';
 import { renderBrushPresets, SQUARE_FORMAT, renderBrushButton } from './brushpresets.js';
+import { isThinElongated } from './contact.js';
 
 const TEAL = '#2EE6C8';
 const HANDLE_RADIUS = 9;
@@ -260,11 +261,30 @@ function render() {
   renderChrome();
 }
 
+// A THIN INTERACTIVE PIECE ATTACHES WITH BRUSH
+//
+// A waistband or a strap that is pushed and pulled (Interactive) has to be
+// held along its length: a Brush link is glue that peels smoothly round a
+// pull and sticks again, where point links are rivets it kinks round
+// (interactive.js, PAINTED HOLDS PEEL; POINTS ARE RIVETS). So with such a
+// piece among the chosen layers, Point is not offered at all.
+function thinInteractive() {
+  if (!session) return [];
+  return session.selected
+    .map((id) => partById(id))
+    .filter((part) => part && part.interactive && isThinElongated(part));
+}
+
 function renderChrome() {
   const count = pxlinkStore.links.length;
   els.pxlinkStatus.textContent = `${count} link${count === 1 ? '' : 's'} · ${Math.round(session.cam.zoom * 100)}%`;
   els.pxlinkCount.textContent = String(count);
 
+  const thin = thinInteractive();
+  if (thin.length && session.mode !== 'brush') {
+    session.mode = 'brush';
+    session.point = null;
+  }
   const brush = session.mode === 'brush';
   const ready = session.selected.length >= 2 && (brush ? session.painted.size > 0 : session.point);
   els.pxlinkCreateBtn.disabled = !ready;
@@ -278,11 +298,17 @@ function renderChrome() {
       : !session.point
         ? 'Tap where they meet, on the artwork. Two fingers pan, pinch to zoom.'
         : 'Drag the marker onto the joint, then Link.';
+  if (thin.length) {
+    els.pxlinkHint.textContent = `${thin.map((part) => part.name).join(', ')} ${thin.length === 1 ? 'is' : 'are'} long, thin and Interactive: ` +
+      'attached with Brush, painted along the length, so a pull lifts it smoothly instead of kinking it at a point. ' +
+      els.pxlinkHint.textContent;
+  }
   renderTools();
 }
 
 function renderTools() {
   const brush = session.mode === 'brush';
+  els.pxlinkModePointBtn.disabled = thinInteractive().length > 0;
   els.pxlinkModePointBtn.setAttribute('aria-pressed', String(!brush));
   els.pxlinkModeBrushBtn.setAttribute('aria-pressed', String(brush));
   els.pxlinkBrushTools.hidden = !brush;
@@ -316,6 +342,7 @@ function renderTools() {
 
 function setMode(mode) {
   if (!session || session.mode === mode) return;
+  if (mode === 'point' && thinInteractive().length) return;
   session.mode = mode;
   session.brushMenuOpen = false;
   render();
@@ -504,6 +531,7 @@ function createBrushLink() {
 
 function createLink() {
   if (session && session.mode === 'brush') { if (session.selected.length >= 2) createBrushLink(); return; }
+  if (session && thinInteractive().length) return;
   if (!session || session.selected.length < 2 || !session.point) return;
   const transforms = currentTransforms();
   const members = [];

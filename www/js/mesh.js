@@ -31,6 +31,7 @@ const FALLOFF_EXPONENT = 2;
 // module rather than pxlink.js, which deforms linked layers through THIS
 // file -- routing through a leaf keeps the import graph acyclic.
 import { pxlinkCorrection } from './pxlinkState.js';
+import { applyPush } from './interactState.js';
 import { localToWorld } from './layerSpace.js';
 
 export const DEFAULT_MAX_INFLUENCES = 3;
@@ -1244,7 +1245,21 @@ export function pinInfluence(mesh, part, radius = 0) {
 // all of them, and hands back each layer's correction -- along with the
 // uncorrected positions it already computed, so they are not worked out
 // twice in one frame.
+//
+// Last of all, an Interactive push (interactive.js, through interactState.js):
+// a layer being pushed, and the structure it is linked into, displaced by
+// the push field on top of everything else. After the links, not before:
+// the field is zero wherever the structure is held and one smooth field
+// across every layer in it, so its links stay joined without PxLink having
+// to undo the push -- and every caller of this function (the renderer, the
+// contact that measures the push, weight painting) sees the layer where it
+// is drawn.
 export function deformVertices(mesh, part, boneTransforms) {
+  return applyPush(part, deformVerticesUnpushed(mesh, part, boneTransforms));
+}
+
+// The same, without the push -- what the push field is laid over.
+export function deformVerticesUnpushed(mesh, part, boneTransforms) {
   const link = pxlinkCorrection(part, boneTransforms);
   if (!link) return deformVerticesUncorrected(mesh, part, boneTransforms);
   // The solve's own uncorrected positions, when it has them for this mesh.

@@ -13,6 +13,7 @@
 import { bonesStore } from './bones.js';
 import { partsStore } from './parts.js';
 import { stepPierce, markPierceStale } from './pierce.js';
+import { stepInteractive } from './interactive.js';
 import { requestRender, setFrameStep } from './canvas.js';
 
 const FALLBACK_DT = 1 / 60;
@@ -46,7 +47,11 @@ function step(timestamp) {
   // separate systems sharing only the clock.
   const bonesMoving = bonesStore.stepPhysics(dt);
   const fleshMoving = stepPierce();
-  const stillMoving = bonesMoving || fleshMoving;
+  // Interactive layers touching and springing back (interactive.js): a
+  // third system on the same clock, after the bones so it measures this
+  // frame's pose.
+  const pushMoving = stepInteractive(dt);
+  const stillMoving = bonesMoving || fleshMoving || pushMoving;
   if (!stillMoving) {
     active = false;
     lastTimestamp = 0;
@@ -60,7 +65,7 @@ export function wakePhysics() {
   if (active) return;
   // Either simulation is reason enough to run: a scene with no spring
   // bones at all still has to animate flesh giving way and springing back.
-  if (!bonesStore.hasPhysicsBones && !partsStore.hasPierce) return;
+  if (!bonesStore.hasPhysicsBones && !partsStore.hasPierce && !partsStore.hasInteractive) return;
   active = true;
   lastTimestamp = 0;
   // The pivot history deliberately survives this: during a drag the loop

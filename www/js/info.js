@@ -38,6 +38,63 @@ const TOPICS = {
       '• Both -- either one deepens it, and the two add together rather ' +
       'than competing.',
   },
+  interactive: {
+    title: 'Interactive',
+    body: 'Lets this layer’s outline -- the edge of its artwork -- touch the ' +
+      'outline of every other Interactive layer.\n\n' +
+      'When one moves into another that is set to Gives way, the touched ' +
+      'layer is pushed in the direction the first one is actually moving: a ' +
+      'hand dragged down into a waistband pushes it down, the same hand ' +
+      'coming up from underneath pushes it up. When the touch ends it ' +
+      'springs back.\n\n' +
+      'Only the faces the movement runs into are pushed: sliding along ' +
+      'something pushes nothing, and pulling back out lets go.\n\n' +
+      'Pierce is the specialised case of the same contact: a painted tip ' +
+      'pressed into a seam, opening a wedge.',
+  },
+  'interactive-response': {
+    title: 'Solid or Gives way',
+    body: '• Solid -- holds its ground. It pushes what it moves into and is ' +
+      'never pushed itself: a hand, a body.\n' +
+      '• Gives way -- pushed when touched, then springs back. Stiffness and ' +
+      'Damping are a physics bone’s, with the same defaults and the same ' +
+      'ranges: stiffer returns faster, more damping rings less.\n\n' +
+      'It gives way about four fifths of the way a toucher presses in: ' +
+      'enough to get out of its way without letting it pass through.',
+  },
+  'interactive-structure': {
+    title: 'Pushed together',
+    body: 'A layer that gives way takes everything PxLinked to it along -- ' +
+      'and everything linked to those, and so on -- as one structure: a ' +
+      'strap pulls its cup, the cup the breast under it.\n\n' +
+      'The walk stops at any layer that holds its ground: one on the ' +
+      'skeleton with no spring bone among its bones (a body on rigid ' +
+      'bones), or one that is Interactive and Solid. The structure is held ' +
+      'where it is linked to those -- the push is zero there and rises ' +
+      'smoothly to full strength where it is pressed -- so it bends from ' +
+      'its holds instead of tearing off them. Held nowhere, it moves as one ' +
+      'piece.\n\n' +
+      'A Brush link is glue: pulled near it, it peels round the pull and ' +
+      'sticks again as the piece settles, and the last quarter of it either ' +
+      'side never lets go. A point link is a rivet and never lets go, so a ' +
+      'long, thin piece held at points kinks at each one -- attach those ' +
+      'with Brush along their length.',
+  },
+  'interactive-wedge': {
+    title: 'Pressing into a seam',
+    body: 'Fabric pulled INTO the line where two layers meet -- the two ' +
+      'halves of a body part -- opens a wedge there, the way a piercer ' +
+      'opens one. It is Pierce, configured for it:\n\n' +
+      '• the fabric layer is the Piercer. Paint its tip over the whole part ' +
+      'that presses in -- a gusset, say -- running on past the edge of the ' +
+      'body, so the seam stays open where the fabric enters it;\n' +
+      '• each of the two layers is Pierced, its mirror line placed on the ' +
+      'line they share, so each opens its own side and together they open ' +
+      'one symmetric wedge;\n' +
+      '• set the Wedge Lock Point to 100% for the opening to keep following ' +
+      'the fabric all the way in.\n\n' +
+      'Move the fabric in with Free Move’s Piercer tab.',
+  },
   pxlink: {
     title: 'PxLink',
     body: 'Joins separate layers at one point, like a hinge.\n\n' +

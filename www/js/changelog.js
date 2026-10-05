@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.9.0',
+    date: '2026-10-05',
+    title: 'Interactive: layers that touch, push, and spring back -- through everything PxLinked to them',
+    kind: 'minor',
+    notes: [
+      'Scene Parts → ⋮ → Interactive, on any layer. Its outline touches every other Interactive layer\u2019s. Solid holds its ground (a hand, a body); Gives way is pushed in the direction the toucher is actually moving, then springs back on a spring with a physics bone\u2019s stiffness and damping (180 / 8, the same ranges).',
+      'A push moves the whole PxLinked structure as one: seven linked pieces, one touched, all seven move by the same amount and spring home together. The walk stops at layers that hold their ground (on rigid bones, or Solid); the structure bends from where it is linked to those, never folding and never tearing off them -- a strap lifts its cup, the cup the breast under it, while the strap stays on at the shoulder.',
+      'Brush links are glue: pulled near them they peel smoothly round the pull and stick again as the piece settles, the last quarter either side never letting go. Long, thin Interactive pieces (waistbands, straps) can only be attached with Brush -- the PxLink window offers no Point for them, and the panel warns about any point links they already have.',
+      'Only faces the movement runs into are pushed: sliding a hand along a waistband pushes nothing, and pulling it back out lets go. Pierce shares the contact measure (new contact.js) and is the specialised case -- fabric pressed into the seam between two body halves is a Piercer and two Pierced halves, each with its mirror line on the line they share.',
+    ],
+  },
+  {
     version: '2.8.0',
     date: '2026-10-03',
     title: 'Pierce: a mirror line for the wedge, a wedge width in plain pixels; Free Move picks one piercer',

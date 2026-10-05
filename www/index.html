@@ -533,6 +533,66 @@
       </div>
     </div>
 
+    <div id="interactiveModal" class="modal-backdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="interactiveTitle">
+        <h2 id="interactiveTitle" class="modal__title">Interactive</h2>
+        <p id="interactiveLayerName" class="modal__text modal__text--mono"></p>
+
+        <div class="field-label-row">
+          <div class="field-label">Touches other layers</div>
+          <button class="info-btn" type="button" data-info="interactive" aria-haspopup="true" aria-expanded="false" aria-label="What does Interactive do?"><span data-icon="info"></span></button>
+        </div>
+        <div class="segmented" role="group" aria-label="Interactive">
+          <button id="interactiveOffBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="true">Off</button>
+          <button id="interactiveOnBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">On</button>
+        </div>
+        <p id="interactiveHint" class="joint-hint"></p>
+
+        <div id="interactiveResponseRow" hidden>
+          <div class="field-label-row">
+            <div class="field-label">When touched</div>
+            <button class="info-btn" type="button" data-info="interactive-response" aria-haspopup="true" aria-expanded="false" aria-label="What do Solid and Gives way mean?"><span data-icon="info"></span></button>
+          </div>
+          <div class="segmented" role="group" aria-label="When touched">
+            <button id="interactiveSolidBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="true">Solid</button>
+            <button id="interactiveGivesBtn" class="segmented__btn segmented__btn--radio" type="button" aria-pressed="false">Gives way</button>
+          </div>
+          <p id="interactiveResponseHint" class="joint-hint"></p>
+          <div id="interactiveSpringRow" hidden>
+            <label class="slider-field slider-field--wide">
+              <span>Stiffness <b id="interactiveStiffnessValue">180</b></span>
+              <input id="interactiveStiffnessSlider" class="slider" type="range" min="10" max="600" step="5" value="180" />
+            </label>
+            <label class="slider-field slider-field--wide">
+              <span>Damping <b id="interactiveDampingValue">8</b></span>
+              <input id="interactiveDampingSlider" class="slider" type="range" min="0.5" max="40" step="0.5" value="8" />
+            </label>
+          </div>
+        </div>
+
+        <div id="interactiveStructureRow" hidden>
+          <div class="field-label-row">
+            <div class="field-label">Pushed together</div>
+            <button class="info-btn" type="button" data-info="interactive-structure" aria-haspopup="true" aria-expanded="false" aria-label="What moves together when it is pushed?"><span data-icon="info"></span></button>
+          </div>
+          <p id="interactiveStructureText" class="joint-hint"></p>
+          <p id="interactiveThinWarning" class="pose-layer__warning" hidden></p>
+          <button id="interactivePxLinkBtn" class="btn btn--sm px-pin-launch" type="button">PxLink…</button>
+        </div>
+
+        <div class="field-label-row">
+          <div class="field-label">Pressing into a seam</div>
+          <button class="info-btn" type="button" data-info="interactive-wedge" aria-haspopup="true" aria-expanded="false" aria-label="How does a layer press into a seam?"><span data-icon="info"></span></button>
+        </div>
+        <p id="interactiveWedgeText" class="joint-hint"></p>
+        <button id="interactivePierceBtn" class="btn btn--sm px-pin-launch" type="button">Wedge (Pierce)…</button>
+
+        <div class="modal__actions">
+          <button id="interactiveDoneBtn" class="btn btn--flourish" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
     <div id="pierceDepthModal" class="modal-backdrop" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pierceDepthTitle">
         <h2 id="pierceDepthTitle" class="modal__title">Enter, Dent, Lock &amp; End Points</h2>

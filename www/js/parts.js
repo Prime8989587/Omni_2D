@@ -17,6 +17,7 @@
 // same way a deformed mesh is.
 
 import { opaqueIndex, pointOnArtwork } from './artwork.js';
+import { DEFAULT_STIFFNESS, DEFAULT_DAMPING, PHYSICS_RANGES } from './bones.js';
 
 let nextId = 1;
 
@@ -209,6 +210,25 @@ export function clampScale(value) {
   return Math.min(MAX_PART_SCALE, Math.max(MIN_PART_SCALE, Math.round(value)));
 }
 
+// INTERACTIVE (interactive.js)
+//
+// A layer whose outline can touch another Interactive layer's outline. When
+// touched it either holds its ground (SOLID: a hand, a body -- it pushes,
+// and is not pushed) or GIVES WAY: it, and the structure it is PxLinked
+// into, are pushed in the direction the toucher is moving and spring back
+// when the touch ends, on a spring of the same stiffness and damping a
+// physics bone has (bones.js -- the same defaults, the same ranges).
+export const InteractiveResponse = Object.freeze({ SOLID: 'solid', GIVES: 'gives' });
+export const INTERACTIVE_RESPONSES = new Set(Object.values(InteractiveResponse));
+
+export function clampInteractiveSpring(key, value) {
+  const range = PHYSICS_RANGES[key];
+  const fallback = key === 'stiffness' ? DEFAULT_STIFFNESS : DEFAULT_DAMPING;
+  const n = Number(value);
+  if (!range || !Number.isFinite(n)) return fallback;
+  return Math.min(range.max, Math.max(range.min, n));
+}
+
 export class Part {
   constructor({ name, image = null, pixels, width, height, objectUrl = null, x, y, scale = 1, rotation = 0, placement = 'manual' }) {
     this.id = `part_${nextId++}`;
@@ -363,6 +383,18 @@ export class Part {
     // the piercer with Enter and End, because like them it describes the
     // relationship rather than the artwork.
     this.piercePhysics = PiercePhysics.PIERCER;
+
+    // Interactive (see INTERACTIVE above). Off by default: a layer touches
+    // nothing until it is asked to.
+    this.interactive = false;
+    this.interactiveResponse = InteractiveResponse.SOLID;
+    this.interactiveStiffness = DEFAULT_STIFFNESS;
+    this.interactiveDamping = DEFAULT_DAMPING;
+  }
+
+  // An Interactive layer that is pushed when touched.
+  get givesWay() {
+    return this.interactive && this.interactiveResponse === InteractiveResponse.GIVES;
   }
 
   get isPiercer() {
@@ -671,6 +703,46 @@ class PartsStore {
       moved = true;
     }
     if (moved) this._emit('transform');
+  }
+
+  // ---- Interactive ------------------------------------------------------
+
+  get interactiveLayers() {
+    return this._parts.filter((part) => part.interactive);
+  }
+
+  get hasInteractive() {
+    return this._parts.some((part) => part.interactive);
+  }
+
+  // Turning Interactive off keeps the layer's response and spring, so
+  // switching it back on is the same layer it was.
+  setInteractive(id, on) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || part.interactive === Boolean(on)) return false;
+    part.interactive = Boolean(on);
+    this._emit('structure');
+    return true;
+  }
+
+  setInteractiveResponse(id, response) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || !INTERACTIVE_RESPONSES.has(response) || part.interactiveResponse === response) return false;
+    part.interactiveResponse = response;
+    this._emit('structure');
+    return true;
+  }
+
+  // key: 'stiffness' or 'damping', clamped to the physics bone's own range.
+  setInteractiveSpring(id, key, value) {
+    const part = this._parts.find((candidate) => candidate.id === id);
+    if (!part || (key !== 'stiffness' && key !== 'damping')) return false;
+    const field = key === 'stiffness' ? 'interactiveStiffness' : 'interactiveDamping';
+    const next = clampInteractiveSpring(key, value);
+    if (part[field] === next) return false;
+    part[field] = next;
+    this._emit('transform');
+    return true;
   }
 
   // ---- Pierce -----------------------------------------------------------

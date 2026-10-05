@@ -15,9 +15,11 @@ import { partsStore } from './parts.js';
 import { bonesStore } from './bones.js';
 import { appState, AppState } from './state.js';
 import { getPlacement, getSnapCell, subscribeRig } from './rigTool.js';
-import { deformVerticesSnapped, partQuad } from './mesh.js';
+import { deformVerticesSnapped, deformVerticesUnpushed, partQuad } from './mesh.js';
 import { isLinked, ensureLinkMesh, linkPositions, linkOffsetAt, moveRigid } from './pxlink.js';
 import { pxlinkMove, applyPxLinkMove, pxlinkCorrection } from './pxlinkState.js';
+import { pushAt } from './interactState.js';
+import { interactiveFieldOf, pushBends } from './interactive.js';
 import { sceneStore } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion, layerClaims } from './raster.js';
@@ -134,7 +136,7 @@ function partGeometry(part, boneTransforms, { refine = true } = {}) {
     ? positions.map((p) => ({ x: Math.round(p.x - back.x), y: Math.round(p.y - back.y) }))
     : positions);
 
-  const through = (transforms) => (refine && linkBent(part, transforms, place)) || {
+  const through = (transforms) => (refine && (pushBent(part, transforms, place) || linkBent(part, transforms, place))) || {
     positions: place(deformVerticesSnapped(part.mesh, part, transforms)),
     uvs: part.mesh.vertices,
     triangles: part.mesh.triangles,
@@ -161,6 +163,12 @@ function partGeometry(part, boneTransforms, { refine = true } = {}) {
     ensureLinkMesh(part);
     return through(boneTransforms || NO_BONES);
   }
+  // A layer an Interactive push is moving: through a mesh as well, for the
+  // same reason -- the push is a field, and a field needs vertices to move.
+  if (interactiveFieldOf(part)) {
+    ensureLinkMesh(part);
+    return through(boneTransforms || NO_BONES);
+  }
 
   const quad = partQuad(part);
   return back ? { ...quad, positions: place(quad.positions) } : quad;
@@ -177,6 +185,12 @@ function partGeometry(part, boneTransforms, { refine = true } = {}) {
 // triangles of its own mesh bending in straight pieces. Null for everything
 // else, which is drawn exactly as before.
 function linkBent(part, transforms, place) {
+  const bent = linkBentRaw(part, transforms);
+  return bent ? { positions: place(bent.positions), uvs: bent.refined.uvs, triangles: bent.refined.triangles } : null;
+}
+
+// The finer drawing's points, before anything else moves them.
+function linkBentRaw(part, transforms) {
   const link = pxlinkCorrection(part, transforms);
   // Only a layer the links CARRY (no bones of its own, or attached): one
   // with bones keeps its own mesh, where its link points land exactly.
@@ -196,7 +210,36 @@ function linkBent(part, transforms, place) {
     // layer they only move rigidly, nothing changes.)
     return { x: p.x + d.x, y: p.y + d.y };
   });
-  return { positions: place(positions), uvs: refined.uvs, triangles: refined.triangles };
+  return { refined, positions };
+}
+
+// A layer an Interactive push BENDS -- held somewhere (a waistband painted
+// onto the body, a strap's end at the shoulder) and pushed elsewhere -- is
+// drawn through the same finer copy of its mesh, with the push field worked
+// out at every one of its points (interactive.js, THE PUSH FIELD), so it
+// curves smoothly from where it is held to where it is pushed instead of in
+// a few straight pieces. Unrounded, like the link drawing above and for the
+// same reason. A layer pushed whole (held nowhere) is moved by its own
+// vertices and drawn as usual.
+function pushBent(part, transforms, place) {
+  if (!part.mesh || !pushBends(part)) return null;
+  const field = interactiveFieldOf(part);
+  let bent = linkBentRaw(part, transforms);
+  if (!bent) {
+    const refined = refinedMesh(part.mesh, part);
+    const P = deformVerticesUnpushed(part.mesh, part, transforms);
+    const positions = refined.blends.map(({ ids, ws }) => {
+      const p = { x: 0, y: 0 };
+      for (let c = 0; c < ids.length; c++) { p.x += P[ids[c]].x * ws[c]; p.y += P[ids[c]].y * ws[c]; }
+      return p;
+    });
+    bent = { refined, positions };
+  }
+  const positions = bent.positions.map((p) => {
+    const d = pushAt(field, p.x, p.y);
+    return { x: p.x + d.x, y: p.y + d.y };
+  });
+  return { positions: place(positions), uvs: bent.refined.uvs, triangles: bent.refined.triangles };
 }
 
 // The same geometry, for a tool window that draws layers exactly as the scene

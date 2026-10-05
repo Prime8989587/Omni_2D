@@ -93,6 +93,9 @@ import {
 } from './opening.js';
 import { haptic } from './haptics.js';
 import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
+// The measuring is shared with Interactive (contact.js): how far apart two
+// painted regions are along an axis, and how hard a contact presses.
+import { centroid, spread, nearestSeparation, axialGap, pressOf } from './contact.js';
 
 // ---------------------------------------------------------------------------
 // Geometry
@@ -310,23 +313,6 @@ function layerCentre(part, transforms) {
   return applyPxLinkMove(pxlinkMove(part, transforms), { x: middle.x + carriage.x, y: middle.y + carriage.y });
 }
 
-function centroid(points) {
-  let x = 0;
-  let y = 0;
-  for (const p of points) { x += p.x; y += p.y; }
-  return { x: x / points.length, y: y / points.length };
-}
-
-// How far the painted tip reaches from its own middle. A broad tip pushes
-// a broad area aside and a needle pushes a narrow one, which falls out of
-// the artwork the user painted rather than from a number they have to
-// guess at.
-function spread(points, middle) {
-  let worst = 0;
-  for (const p of points) worst = Math.max(worst, Math.hypot(p.x - middle.x, p.y - middle.y));
-  return worst;
-}
-
 // The live contact between one piercer and one pierced layer. Null
 // when either side has nothing painted -- an unpainted region is not a
 // contact of size zero, it is no contact at all, and reporting it as one
@@ -344,74 +330,6 @@ function pierceAxis(piercer, tipMiddle, transforms) {
   const length = Math.hypot(dx, dy);
   if (length < 1e-6) return null;
   return { x: dx / length, y: dy / length };
-}
-
-// Plain closest-pixel separation. Not what depth is measured with (see
-// the header), but it is the honest answer to "how far apart are these
-// two regions" when the piercer is not pointed at the flesh at all, and
-// that is the number worth reporting in that case.
-//
-// Exact, but it does not look at every pair unless it has to. The naive
-// double loop is O(tip x flesh) -- 3.1 ms for a 160-texel tip against a
-// 1024-texel area, paid every frame the loop is awake -- and this is the
-// case where the piercer is NOT aimed at the flesh, which is most of the
-// time. A tip point whose distance to the flesh's bounding box already
-// exceeds the best pair found so far cannot beat it, so it is skipped
-// whole. The answer is identical; only the work is smaller.
-function nearestSeparation(tip, flesh) {
-  let x0 = Infinity;
-  let y0 = Infinity;
-  let x1 = -Infinity;
-  let y1 = -Infinity;
-  for (const b of flesh) {
-    if (b.x < x0) x0 = b.x;
-    if (b.y < y0) y0 = b.y;
-    if (b.x > x1) x1 = b.x;
-    if (b.y > y1) y1 = b.y;
-  }
-
-  let nearest = Infinity;
-  for (const a of tip) {
-    const dx = Math.max(x0 - a.x, 0, a.x - x1);
-    const dy = Math.max(y0 - a.y, 0, a.y - y1);
-    if (Math.hypot(dx, dy) >= nearest) continue;
-    for (const b of flesh) {
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (d < nearest) nearest = d;
-    }
-  }
-  return nearest;
-}
-
-// How far the tip still has to go, along the axis, to reach the flesh --
-// negative once it is already in. Only flesh within the tip's own width of
-// the axis counts: flesh off to one side is not in the path, and a needle
-// travelling past a shoulder should not drive into it sideways.
-//
-// Returns null when nothing at all is in the path, which is NOT a gap of
-// infinity -- it is "this piercer is not aimed at this flesh", and the
-// caller reports the plain separation and stays disengaged.
-function axialGap(tip, flesh, tipMiddle, tipSpread, axis) {
-  const reach = Math.max(1, tipSpread);
-  let lead = -Infinity;
-  for (const p of tip) lead = Math.max(lead, p.x * axis.x + p.y * axis.y);
-
-  let surface = Infinity;
-  for (const f of flesh) {
-    const ox = f.x - tipMiddle.x;
-    const oy = f.y - tipMiddle.y;
-    // Distance from the axis line: the perpendicular component.
-    if (Math.abs(oy * axis.x - ox * axis.y) > reach) continue;
-    surface = Math.min(surface, f.x * axis.x + f.y * axis.y);
-  }
-  if (!Number.isFinite(surface)) return null;
-  // Both numbers, not just their difference. The gap is what engagement is
-  // measured from; `surface` is WHERE along the axis the flesh's near face
-  // sits, which is the only thing that says where on the outline the dent's
-  // base belongs. Deriving it later from the gap is not possible once
-  // containment has moved the tip, so it travels with the reading that
-  // produced it.
-  return { gap: surface - lead, surface };
 }
 
 // A DISPLACEMENT NEEDS SOMEWHERE TO LIVE
@@ -784,13 +702,6 @@ let readout = [];
 // Point with a full lever -- a lean you can see, well short of a flail.
 const PIERCE_PUSH = 45;
 
-// Past the End Point the tip stops advancing, but the DRAG does not, and
-// that leftover travel is the only thing on screen still saying "harder".
-// So it goes on counting toward the press after the depth has stopped
-// counting -- which is what makes leaning on something feel different from
-// resting against it -- up to one more End Point's worth, and no further.
-const MAX_PRESS = 2;
-
 // The moment arm, in units of the bone's own length, clamped so a contact
 // far off to one side cannot manufacture an enormous torque out of a
 // small force. Beyond the bone's own reach the lever stops growing.
@@ -823,16 +734,9 @@ const torques = new Map();
 // for a full deflection -- and the spring's damping absorbs what is left.
 // That settling IS the soft-contact behaviour; nothing models it
 // separately.
-// How hard this contact is pressing, 0 at first touch and 1 at the End
-// Point. t is the part of it the depth accounts for; the overshoot carries
-// it on past, because past End the tip has stopped advancing and the
-// leftover travel is the only thing still saying "harder".
-function pressOf(contact) {
-  if (!contact || !contact.engaged) return 0;
-  const beyond = contact.end > 0 ? Math.min(1, contact.overshoot / contact.end) : 0;
-  return Math.min(MAX_PRESS, contact.t + beyond);
-}
-
+//
+// How hard a contact presses (pressOf) lives in contact.js: an Interactive
+// push is measured with the very same function (interactive.js).
 function chainFrom(attached) {
   const seen = new Set();
   const chain = [];

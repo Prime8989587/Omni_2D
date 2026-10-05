@@ -1047,8 +1047,9 @@ button, input, select, textarea {
    toggle. */
 .px-pin__controls .segmented__btn[aria-pressed="true"],
 /* The Pierce popup's choices -- role, physics direction -- read the same
-   way: the one in effect is filled. */
-#pierceModal .segmented__btn[aria-pressed="true"] {
+   way: the one in effect is filled. So do the Interactive popup's. */
+#pierceModal .segmented__btn[aria-pressed="true"],
+#interactiveModal .segmented__btn[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #000000;
@@ -3346,6 +3347,13 @@ input[type="number"] {
    so the list never claims something is on screen when it is not. */
 .debug-view .is-muted {
   opacity: 0.45;
+}
+
+/* A choice that is not on offer here -- PxLink's Point, while a long, thin
+   Interactive piece is chosen -- is dimmed and does not react. */
+.segmented__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* A pixel radio pip for a one-of-several choice (Physics Direction): a
