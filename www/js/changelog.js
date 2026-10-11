@@ -33,6 +33,18 @@
 
 export const RELEASES = [
   {
+    version: '2.9.2',
+    date: '2026-10-11',
+    title: 'Pierce: the wedge hugs what goes in -- the tip\u2019s own outline, slice by slice',
+    kind: 'patch',
+    notes: [
+      'Each slice of the seam now opens to the Opening width\u2019s share of the tip\u2019s OWN width in that slice: closed just ahead of a bottle\u2019s cap, tight round its neck, flaring with its shoulders. Before, the tip\u2019s rows were scaled as a whole to one width and trimmed at both ends -- a bottle came out as a tube with its cap cut off.',
+      'Paint the piercer\u2019s Tip over everything that goes in (a bottle\u2019s cap, neck and shoulders; a pair of panties\u2019 gusset but not their waistband). In each slice the run through the piercer\u2019s middle is measured, so a second prong beside it is not taken for a wider one.',
+      'Once the tip is in, the edges and the material beside them move together, tight against it: no more stretched strip that made a one-pixel lip line two pixels thick, or a thick dark knot of the slit line just ahead of the tip. Before it is in, the surface still flinches (the marker\u2019s Width).',
+      'What is inside is drawn inside: the part of the tip past the seam\u2019s mouth sinks beneath the layer, seen through the opening; the rest of the piercer stays on top. The band of skin that cut across a bottle between its shoulders and the opening is gone. The live preview does the same.',
+    ],
+  },
+  {
     version: '2.9.1',
     date: '2026-10-11',
     title: 'Pierce: the wedge opens again -- traced from the depth to the pixel, and fixed where it broke',

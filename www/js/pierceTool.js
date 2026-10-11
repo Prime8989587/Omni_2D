@@ -652,8 +652,8 @@ function endDentDrag() {
 // second opening: pierce.js (pierceOpeningPreview) makes the contact and
 // calls the same openingFor the live solver does, and the layer goes through
 // the same two passes (openingGeometry, split by openingSides) and the same
-// rasterizer as the scene, with the piercer's painted tip beneath it and the
-// rest of the piercer on top, as in a real contact. It is rebuilt whenever
+// rasterizer as the scene, with the part of the piercer inside the seam
+// beneath it and the rest on top, as in a real contact. It is rebuilt whenever
 // the marker, the opening's settings or the piercer's change -- every step
 // of a handle drag -- and reused while only the camera moves.
 const previewClaims = layerClaims();
@@ -756,7 +756,8 @@ function wedgePreview() {
         { u: piercer.naturalWidth, v: piercer.naturalHeight }, { u: 0, v: piercer.naturalHeight }],
       triangles: [0, 1, 2, 0, 2, 3],
     };
-    const masks = pierceMasks(piercer);
+    // What is inside the seam beneath, the rest on top -- as the scene.
+    const masks = built.masks || pierceMasks(piercer);
     tip = toCanvas([draw(piercer, quad, masks ? masks.region : null)]);
     rest = masks ? toCanvas([draw(piercer, quad, masks.rest)]) : null;
   }

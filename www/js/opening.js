@@ -349,8 +349,12 @@ const bump = (x) => (x >= 1 ? 0 : 0.5 * (1 + Math.cos(Math.PI * x)));
 //   dilation      and the share of it the gap opens to, in percent -- both
 //                 or neither (without them the gap is the tip's whole
 //                 outline, as before the Dilation existed)
+//   silhouette    the tip's texels and how they land in this layer's:
+//                 { opaque, width, map, texel, axis } -- see THE TIP'S OWN
+//                 OUTLINE. With it (and a gap set), each slice of the seam
+//                 opens to the tip's own width in that slice.
 export function openingFor(part, {
-  fraction, tip, tipHalfWidth = 0, tipPoints = null, tipWidth = 0, dilation = null,
+  fraction, tip, tipHalfWidth = 0, tipPoints = null, tipWidth = 0, dilation = null, silhouette = null,
 }) {
   const marker = openingMarker(part);
   if (!marker || !(fraction > 0) || !tip) return null;
@@ -362,6 +366,7 @@ export function openingFor(part, {
   // base. The swelling is centred there, kept on the seam -- short of the
   // surface, the surface flinches first.
   const sApex = (tip.u - base.x) * inward.x + (tip.v - base.y) * inward.y;
+  const tApex = (tip.u - base.x) * across.x + (tip.v - base.y) * across.y;
   const sTip = Math.max(0, Math.min(length, sApex));
   // The gap's two sides (see HOW WIDE IT OPENS): a fixed number of pixels
   // when the layer says so, whatever the piercer; otherwise the Dilation's
@@ -379,6 +384,7 @@ export function openingFor(part, {
     fraction: f,
     sTip,
     sApex,
+    tApex,
     tipHalfWidth: Math.max(0, tipHalfWidth),
     peak,
     // Behind the tip, the edges rest against the piercer rather than
@@ -412,6 +418,17 @@ export function openingFor(part, {
   // trimmed off BOTH ends of the painted tip. A tip painted eight rows deep
   // or less -- a bottle's cap, a fingertip -- had nothing left, and opened
   // nothing at any depth.
+  if (sides && silhouette && silhouette.opaque && silhouette.opaque.length) {
+    // Each slice of the seam its own width (THE TIP'S OWN OUTLINE).
+    const cover = silhouetteCoverage(o, part, silhouette, {
+      share: manual ? null : dilation,
+      manualPx: manual ? part.pierceWedgeWidthPx : null,
+    });
+    o.cover = cover;
+    o.sides = cover.widest;
+    o.lateral = LATERAL_SPREAD * Math.max(peak, cover.widest.a, cover.widest.b) + LATERAL_MARGIN;
+    return o;
+  }
   if (tipPoints && tipPoints.length) o.cover = coverageOf(o, tipPoints, sides ? 1 : coverMargin(part));
   if (sides) {
     // The widest the piercer reaches on each side, as openingCover reads it
@@ -495,6 +512,143 @@ function coverageOf(o, points, margin = 1) {
   };
   const both = raw();
   return { s0, a: both, b: both };
+}
+
+// THE TIP'S OWN OUTLINE, SLICE BY SLICE (2.9.2)
+//
+// The edges are meant to hug what is entering -- wide where a bottle's
+// shoulders are in the seam, pinching round its neck, closing over its cap
+// -- not to open into a generic notch. So the opening is built from the
+// real outline of what goes in, slice by slice along the seam:
+//
+//   * every texel of the piercer's painted tip -- "what counts as in": paint
+//     it over all of the part that goes in, the neck AND the shoulders of a
+//     bottle, the gusset of a pair of panties (and not their waistband,
+//     which lies across the body on the same layer);
+//   * carried into this layer's texels by one affine map (the piercer's own
+//     placement, then the local frame of this layer at the tip), so the
+//     whole tip costs a few multiplications a texel and no allocation;
+//   * binned by where each lands along the seam, a texel of seam a bin;
+//   * in each bin, the run of texels through the piercer's own middle line
+//     (its axis of travel) -- so a tip painted over two prongs, or anything
+//     else beside it, is not mistaken for one wide one -- and that run's
+//     width, edge to edge;
+//   * and that width opened to the layer's share of it: the Dilation, in
+//     whole pixels, split about the mirror line with the odd pixel to side
+//     B, exactly as the gap always was -- but now PER SLICE. (Manual: the
+//     pixels set, at the widest slice in the seam, and the others in
+//     proportion to it.)
+//
+// Before 2.9.2 the tip's rows were scaled as a whole so that the widest
+// matched one number (the share of the tip's widest slice), and trimmed
+// back three or four texels at each end: a bottle came out as a tube of
+// one width with its cap cut off.
+//
+// One texel of margin keeps the drawn edge inside the outline where it
+// steps or ends (see openingFor), and the smooth curve that reads the bins
+// back (reachOf) never rises above them.
+function silhouetteCoverage(o, part, silhouette, { share, manualPx }) {
+  const { opaque, width: W, map } = silhouette;
+  const texel = Math.max(1e-6, silhouette.texel || 1);
+  const scale = Math.max(1e-6, part.scale || 1);
+  const margin = 1;
+  // Only what can be inside the seam, or at its mouth, is worth binning.
+  const lo = -(o.closeOut + margin + 2);
+  const hi = o.length + margin + 2;
+  const s0 = Math.floor(lo) - 1;
+  const n = Math.ceil(hi) - s0 + 2;
+  const bins = Array.from({ length: n }, () => []);
+  // A piercer drawn larger than this layer's texels spans more than one
+  // bin with each of its texels; one drawn smaller lands in exactly one.
+  const half = texel > 1 ? texel / 2 : 0;
+  const { inward, across, base } = o;
+  for (let k = 0; k < opaque.length; k++) {
+    const index = opaque[k];
+    const x = (index % W) + 0.5;
+    const y = Math.floor(index / W) + 0.5;
+    const du = map.ux * x + map.uy * y + map.u0 - base.x;
+    const dv = map.vx * x + map.vy * y + map.v0 - base.y;
+    const s = du * inward.x + dv * inward.y;
+    if (s < lo || s > hi) continue;
+    const t = du * across.x + dv * across.y;
+    const first = Math.max(0, Math.floor(s - half - s0));
+    const last = Math.min(n - 1, half ? Math.floor(s + half - s0 - 1e-9) : first);
+    for (let i = first; i <= last; i++) bins[i].push(t);
+  }
+  // The piercer's middle line through the seam: through its leading point,
+  // along its direction of travel.
+  const axis = silhouette.axis || { u: inward.x, v: inward.y };
+  const ds = axis.u * inward.x + axis.v * inward.y;
+  const dt = axis.u * across.x + axis.v * across.y;
+  const slope = ds > 0.3 ? dt / ds : 0;
+  const split = 1.5 * Math.max(1, texel) + 0.25;
+  const widths = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const ts = bins[i];
+    if (ts.length === 0) continue;
+    ts.sort((p, q) => p - q);
+    const want = o.tApex + (s0 + i + 0.5 - o.sApex) * slope;
+    let best = null;
+    let bestDistance = Infinity;
+    let start = ts[0];
+    for (let j = 1; j <= ts.length; j++) {
+      if (j < ts.length && ts[j] - ts[j - 1] <= split) continue;
+      const end = ts[j - 1];
+      const distance = want < start ? start - want : want > end ? want - end : 0;
+      if (distance < bestDistance) { bestDistance = distance; best = [start, end]; }
+      if (j < ts.length) start = ts[j];
+    }
+    widths[i] = best[1] - best[0] + texel;
+  }
+  // What the gap is at each slice, in scene pixels.
+  const centre = (i) => s0 + i + 0.5;
+  const inSeam = (i) => centre(i) >= 0 && centre(i) <= o.length;
+  let widestWidth = 0;
+  for (let i = 0; i < n; i++) if (inSeam(i)) widestWidth = Math.max(widestWidth, widths[i]);
+  if (!(widestWidth > 0)) for (let i = 0; i < n; i++) widestWidth = Math.max(widestWidth, widths[i]);
+  const pxOf = (w) => {
+    if (!(w > 0)) return 0;
+    if (manualPx) return widestWidth > 0 ? Math.round((manualPx * w) / widestWidth) : 0;
+    return Math.round(((Number.isFinite(share) ? share : 100) / 100) * w * scale);
+  };
+  const rawA = new Float64Array(n);
+  const rawB = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const px = pxOf(widths[i]);
+    const a = Math.floor(px / 2);
+    rawA[i] = a / scale;
+    rawB[i] = (px - a) / scale;
+  }
+  // Kept back from the outline where it steps in or ENDS ahead -- past the
+  // leading edge there is nothing beneath the layer to show -- but not at
+  // the tip's back end: behind it the rest of the piercer carries on,
+  // drawn over the layer, so a gusset widest in its last row before the
+  // waistband opens to that row.
+  let back = n;
+  for (let i = 0; i < n; i++) if (widths[i] > 0) { back = i; break; }
+  const erode = (values) => {
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let least = values[i];
+      for (let j = i - margin; j <= i + margin; j++) {
+        if (j < back) continue;
+        least = Math.min(least, j < n ? values[j] : 0);
+      }
+      out[i] = least;
+    }
+    return out;
+  };
+  const a = erode(rawA);
+  const b = erode(rawB);
+  // The widest it opens where it opens at all -- in the seam or at its
+  // mouth -- for the readout and the sideways fade.
+  let widest = { a: 0, b: 0, px: 0 };
+  for (let i = 0; i < n; i++) {
+    if (centre(i) < -o.closeOut || centre(i) > o.length) continue;
+    const px = Math.round((a[i] + b[i]) * scale);
+    if (px > widest.px) widest = { a: a[i], b: b[i], px };
+  }
+  return { s0, a, b, widths, widest };
 }
 
 // How far the piercer reaches from the seam on one side (-1: side A, +1:
@@ -601,17 +755,51 @@ export function openingShift(o, u, v, side = 1) {
   const swelling = openingAmplitude(o, s);
   if (swelling === 0) return 0;
   const rim = openingRim(o, s, side, swelling);
-  // Never less than the gap (see HOW WIDE IT OPENS).
-  const amplitude = o.sides ? Math.max(swelling, openingRim(o, s, -1, swelling), openingRim(o, s, 1, swelling)) : swelling;
-  return sideProfile(o, rim, amplitude, Math.abs(t));
+  return sideProfile(o, rim, sideAmplitude(o, s, swelling, rim), Math.abs(t));
+}
+
+// HUGGING, ONCE IT IS IN (2.9.2)
+//
+// With a gap set, how far the material beside one side's edge is pushed:
+// never less than that edge (see HOW WIDE IT OPENS), and -- once the
+// piercer is in the seam -- exactly that edge and no more. Before it gets
+// there, the swelling still bulges the closed seam out, the surface
+// flinching from what is coming; over the tip's first few texels in it
+// gives way to the edges alone, and from then on the edges and the
+// material beside them move together, as one piece, tight against the
+// piercer wherever it is.
+//
+// Before, the swelling went on pushing the material beside the edges
+// further out than the edges themselves -- round the tip, ahead of it and
+// all the way down behind it. The strip between was stretched: a closed
+// slit drawn as a line came out as a thick dark knot just ahead of the
+// tip, a one-pixel lip line beside the piercer came out two pixels thick,
+// and the edges stood off the piercer instead of hugging it. Each side
+// also takes its own edge now, so the odd pixel of an odd gap no longer
+// stretches the narrower side out to the wider one.
+const HUG_BLEND = 3;
+
+function sideAmplitude(o, s, swelling, rim) {
+  if (!o.sides) return swelling;
+  const outside = 1 - smooth(o.sApex / HUG_BLEND);
+  return Math.max(rim, swelling * outside);
 }
 
 function riseOf(amplitude) {
   return Math.max(MIN_RISE, RISE_SPREAD * amplitude);
 }
 
+// With a gap set, the material this close to the seam moves rigidly with
+// its edge before the sideways fade begins: a lip line drawn a few pixels
+// off the seam is carried whole, never squeezed by the fade into a dropped
+// pixel (a one-pixel line came out with a gap in it where the shoulders
+// widened). The fade beyond is the same gentle one, just starting further
+// out.
+const HUG_FLAT = 4;
+
 function sideProfile(o, rim, amplitude, d) {
-  return (rim + (amplitude - rim) * smooth(d / riseOf(amplitude))) * (1 - smooth(d / o.lateral));
+  const out = o.sides ? Math.max(0, d - HUG_FLAT) : d;
+  return (rim + (amplitude - rim) * smooth(d / riseOf(amplitude))) * (1 - smooth(out / o.lateral));
 }
 
 // The whole displacement one PASS applies, as a signed distance along
@@ -634,17 +822,18 @@ export function openingDisplacement(o, u, v, pass) {
   if (swelling === 0) return 0;
   const rimA = openingRim(o, s, -1, swelling);
   const rimB = openingRim(o, s, 1, swelling);
-  // Never less than the gap (see HOW WIDE IT OPENS).
-  const amplitude = o.sides ? Math.max(swelling, rimA, rimB) : swelling;
+  // Never less than the gap (see HUGGING, BEHIND THE TIP).
+  const amplitudeA = sideAmplitude(o, s, swelling, rimA);
+  const amplitudeB = sideAmplitude(o, s, swelling, rimB);
   const d = Math.abs(t);
   const own = t >= 0 ? 1 : -1;
-  const value = own * sideProfile(o, own > 0 ? rimB : rimA, amplitude, d);
+  const value = own * (own > 0 ? sideProfile(o, rimB, amplitudeB, d) : sideProfile(o, rimA, amplitudeA, d));
   if (own === pass) return value;
   // The jump is +(rimA + rimB) going from side A to side B. It fades over
   // at least twice its own size, so the hidden side is never squeezed or
   // stretched by much more than the drawn one.
   const gap = rimA + rimB;
-  const fade = riseOf(amplitude) + 1 + 2 * gap;
+  const fade = riseOf(Math.max(amplitudeA, amplitudeB)) + 1 + 2 * gap;
   const jump = gap * (1 - smooth(d / fade));
   return pass > 0 ? value + jump : value - jump;
 }
@@ -907,7 +1096,15 @@ export function tipInTexels(part, positions, leading, points, shift = { x: 0, y:
     const dy = p.y + shift.y - leading.y;
     return { u: frame.u + frame.uX * dx + frame.uY * dy, v: frame.v + frame.vX * dx + frame.vY * dy };
   };
-  return { tip: { u: frame.u, v: frame.v }, points: points.map(carry) };
+  // The same map as six numbers, for carrying a whole sprite cheaply: a
+  // scene point (x, y) where the piercer's artwork was MEASURED lands at
+  // u = u0 + uX x + uY y, v = v0 + vX x + vY y.
+  const toTexels = {
+    uX: frame.uX, uY: frame.uY, vX: frame.vX, vY: frame.vY,
+    u0: frame.u + frame.uX * (shift.x - leading.x) + frame.uY * (shift.y - leading.y),
+    v0: frame.v + frame.vX * (shift.x - leading.x) + frame.vY * (shift.y - leading.y),
+  };
+  return { tip: { u: frame.u, v: frame.v }, points: points.map(carry), toTexels };
 }
 
 // ---------------------------------------------------------------------------

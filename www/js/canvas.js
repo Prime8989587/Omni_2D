@@ -27,7 +27,7 @@ import { outlineRing } from './contour.js';
 import { getSetting, shouldRenderFrame } from './settings.js';
 import {
   pierceOcclusion, pierceMasks, pierceOverlayEnabled, pierceOverlayTexture,
-  pierceOpenings, pierceReadout, pierceHold,
+  pierceOpenings, pierceReadout, pierceHold, pierceSinkMasks,
 } from './pierce.js';
 import { openingGeometry, openingSides, refinedMesh } from './opening.js';
 import { effectiveDpr } from './pixelScale.js';
@@ -261,9 +261,10 @@ const sceneClaims = layerClaims();
 //   * a pierced layer whose seam is open: one entry per side of the seam,
 //     each through its own continuous displacement (opening.js), so the
 //     seam parts between them and nowhere else;
-//   * a piercer in contact: its painted tip moved down beneath the layer it
-//     is in, the rest of it left where it was, both with the SAME geometry,
-//     so that split cannot open a seam.
+//   * a piercer in contact: its painted tip -- where the layer has a seam,
+//     the part of it past the seam's mouth -- moved down beneath the layer
+//     it is in, the rest of it left where it was, both with the SAME
+//     geometry, so that split cannot open a seam.
 function buildDrawList(boneTransforms) {
   const openings = pierceOpenings();
   const entries = [];
@@ -291,7 +292,9 @@ function buildDrawList(boneTransforms) {
     // Already below the flesh: the stack is doing the job unaided, and
     // moving anything would be a change with nothing to show for it.
     if (from < 0 || to < 0 || from < to) continue;
-    const masks = pierceMasks(entries[from].part);
+    // What is inside the seam sinks (pierce.js, WHAT IS INSIDE IS DRAWN
+    // INSIDE); a layer with no seam sinks the piercer's painted tip.
+    const masks = pierceSinkMasks(piercerId) || pierceMasks(entries[from].part);
     if (!masks) continue;
     entries[from].mask = masks.rest;
     entries.splice(to, 0, { ...entries[from], mask: masks.region });

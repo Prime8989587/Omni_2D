@@ -15,7 +15,7 @@ import {
 import { serializeProject, applyProject } from '../www/js/project.js';
 import {
   contactOf, pierceOpeningOf, markPierceStale, resetPierceContainment, pierceDentIssue,
-  pierceOpeningPreview,
+  pierceOpeningPreview, mouthMasks,
 } from '../www/js/pierce.js';
 import {
   openingFor, openingAmplitude, openingShift, openingSides, openingGeometry,
@@ -33,9 +33,14 @@ function check(name, fn) {
 }
 const section = (title) => results.push(`\n${title}`);
 
-function makePart(name, { w, h, x, y }) {
+// Opaque everywhere, or only where `solid(u, v)` says: a piercer is drawn on
+// transparency, and since 2.9.2 its whole outline is what the edges hug.
+function makePart(name, { w, h, x, y }, solid = null) {
   const pixels = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0; i < w * h; i++) { pixels[i * 4] = 200; pixels[i * 4 + 1] = 200; pixels[i * 4 + 2] = 200; pixels[i * 4 + 3] = 255; }
+  for (let i = 0; i < w * h; i++) {
+    pixels[i * 4] = 200; pixels[i * 4 + 1] = 200; pixels[i * 4 + 2] = 200;
+    pixels[i * 4 + 3] = !solid || solid(i % w, Math.floor(i / w)) ? 255 : 0;
+  }
   return new Part({ name, image: null, pixels, width: w, height: h, x, y, scale: 1 });
 }
 
@@ -584,10 +589,13 @@ section('3. Driven by the live contact');
       // The tip is where the needle really is -- never taken back.
       assert.equal(r.opening.sTip, free.sTip);
       assert.equal(r.opening.sApex, free.sApex);
-      for (let s = -2; s <= 30; s += 0.25) {
+      // Inside the seam the edges are the needle's, identical; only the
+      // soft fade at its two ends follows the swelling, which is held.
+      const inside = r.opening.length - Math.max(r.opening.closeIn, free.closeIn);
+      for (let s = 0; s <= inside; s += 0.25) {
         for (const side of [-1, 1]) assert.equal(openingRim(r.opening, s, side), openingRim(free, s, side), `y ${r.y} s ${s}`);
-        assert.ok(openingAmplitude(r.opening, s) <= openingAmplitude(free, s) + 1e-12);
       }
+      for (let s = -2; s <= 30; s += 0.25) assert.ok(openingAmplitude(r.opening, s) <= openingAmplitude(free, s) + 1e-12);
     }
     // And the swelling really is held: the same peak on every frame past it.
     assert.ok(past.every((r) => r.opening.peak === past[0].opening.peak));
@@ -677,7 +685,9 @@ section('4. How wide it opens: a share of the piercer\'s tip width');
     resetOpeningCaches();
     const pierced = seamPart();
     const lo = 4 - Math.floor(tipWidth / 2);
-    const piercer = makePart('needle', { w: 8 + 8, h: 24, x: 112, y: 40 });
+    // The needle itself is tipWidth wide, on transparency; its bottom 12
+    // rows are its painted tip.
+    const piercer = makePart('needle', { w: 8 + 8, h: 24, x: 112, y: 40 }, (u) => u >= lo + 4 && u < lo + 4 + tipWidth);
     piercer.pierceRole = PierceRole.PIERCER;
     for (let v = 12; v < 24; v++) for (let u = lo + 4; u < lo + 4 + tipWidth; u++) piercer.pierceRegion.add(v * 16 + u);
     piercer.pierceRegionVersion++;
@@ -912,6 +922,124 @@ section('4. How wide it opens: a share of the piercer\'s tip width');
     applyProject(data);
     const old = partsStore.parts.find((x) => x.name === 'flesh');
     assert.deepEqual([old.pierceMirrorPlaced, old.pierceWedgeMode, old.pierceWedgeWidthPx], [false, 'auto', 6]);
+  });
+}
+
+// ---------------------------------------------------------------------------
+results.push('\n6. The tip\'s own outline, slice by slice (2.9.2)');
+{
+  // A bottle, upside down over the seam (which runs DOWN from the pierced
+  // layer's top edge): body rows 0-15 (14 wide, NOT painted), then the
+  // painted tip -- shoulders 12, 10, 8, 6 wide, a neck 4 wide, a cap 2 wide.
+  const ROWS = [];
+  for (let r = 0; r < 16; r++) ROWS.push(14);
+  ROWS.push(12, 10, 8, 6);
+  for (let r = 0; r < 8; r++) ROWS.push(4);
+  ROWS.push(2, 2);
+  const H = ROWS.length; // 30
+  const W = 16;
+  const inRow = (u, v) => Math.abs(u + 0.5 - 8) <= ROWS[v] / 2;
+  const bottle = (prong = false) => {
+    partsStore._parts.length = 0;
+    resetPierceContainment();
+    resetOpeningCaches();
+    const pierced = seamPart();
+    // A second prong beside the neck, painted too: not part of the neck.
+    const solid = (u, v) => inRow(u, v) || (prong && v >= 20 && v < 28 && (u === 13 || u === 14));
+    const piercer = makePart('bottle', { w: W, h: H, x: 112, y: 40 }, solid);
+    piercer.pierceRole = PierceRole.PIERCER;
+    for (let v = 16; v < H; v++) for (let u = 0; u < W; u++) if (solid(u, v)) piercer.pierceRegion.add(v * W + u);
+    piercer.pierceRegionVersion++;
+    piercer.pierceEnter = 4;
+    piercer.pierceEnd = 30;
+    piercer.pierceDentStart = 4;
+    partsStore.add(pierced);
+    partsStore.add(piercer);
+    // The cap 20 texels into the seam: shoulders, neck and cap all inside.
+    piercer.y = 90;
+    markPierceStale();
+    resetPierceContainment();
+    contactOf(piercer, pierced, null);
+    markPierceStale();
+    return { pierced, piercer, o: pierceOpeningOf(pierced) };
+  };
+  const { pierced, o } = bottle();
+  // Row r of the bottle sits at s = 90 + r + 0.5 - 100 along the seam.
+  const binOf = (r) => Math.floor(90 + r + 0.5 - 100 - o.cover.s0);
+
+  check('each slice of the seam measures the tip\'s own width there: cap 2, neck 4, shoulders 6 -> 12', () => {
+    for (let r = 16; r < H; r++) assert.equal(o.cover.widths[binOf(r)], ROWS[r], `row ${r}`);
+  });
+
+  check('only the painted tip goes in: the bottle\'s unpainted body (14 wide, in the seam too) opens nothing', () => {
+    for (let r = 10; r < 16; r++) assert.equal(o.cover.widths[binOf(r)], 0, `row ${r}`);
+  });
+
+  check('each slice opens to 75% of ITS width, whole pixels, the odd one to side B', () => {
+    for (let r = 21; r < 27; r++) {
+      const i = binOf(r);
+      assert.equal(o.cover.a[i] + o.cover.b[i], 3, `neck row ${r}: 75% of 4 is 3`);
+      assert.ok(o.cover.b[i] - o.cover.a[i] === 1, 'split 1 + 2');
+    }
+    // The shoulders, widening behind the neck: each between its own share
+    // and its deeper neighbour's (one texel of margin where it steps in).
+    for (let r = 17; r < 20; r++) {
+      const i = binOf(r);
+      const px = o.cover.a[i] + o.cover.b[i];
+      assert.ok(px <= Math.round(0.75 * ROWS[r]) && px >= Math.round(0.75 * ROWS[r + 1]), `row ${r}: ${px}`);
+    }
+    // Wider at the shoulders than round the neck: the wedge, not a tube.
+    assert.ok(o.sides.px >= Math.round(0.75 * 10) && o.sides.px <= Math.round(0.75 * 12), `widest ${o.sides.px}`);
+  });
+
+  check('closed over the leading edge, open round the cap just behind it', () => {
+    assert.equal(o.cover.a[binOf(H - 1)] + o.cover.b[binOf(H - 1)], 0, 'the very front row');
+    assert.equal(o.cover.a[binOf(H - 1) + 1] + o.cover.b[binOf(H - 1) + 1], 0, 'and ahead of it');
+    assert.ok(openingRim(o, 90 + 27.5 - 100, 1) > 0.4, 'round the cap, behind its front');
+  });
+
+  check('a second painted prong beside the neck is not mistaken for a wider neck', () => {
+    const { o: two } = bottle(true);
+    for (let r = 20; r < 28; r++) assert.equal(two.cover.widths[binOf(r)], ROWS[r], `row ${r}`);
+  });
+
+  check('once in, the material beside each edge moves WITH it -- hugging, no stretched strip; before it is in, the surface still flinches', () => {
+    // Behind the tip, at the neck: flat out to three texels from the seam.
+    const s = 90 + 23.5 - 100;
+    const rim = openingRim(o, s, 1);
+    for (const d of [0.5, 1, 2, 3]) {
+      const shift = openingShift(o, 20 - d, s, 1);
+      assert.ok(shift <= rim + 1e-9 && shift >= 0.9 * rim, `d ${d}: ${shift.toFixed(3)} vs rim ${rim.toFixed(3)}`);
+    }
+    // A tip still short of the seam: the closed seam bulges out beside it.
+    const before = openingFor(pierced, { fraction: 0.5, tip: { u: 20, v: -2 }, tipHalfWidth: 2, tipWidth: 4, dilation: 75 });
+    assert.ok(openingShift(before, 20 - 4, 0.5, 1) > 0.5, 'flinches');
+    assert.equal(openingRim(before, 0.5, 1), 0, 'without opening');
+  });
+
+  check('inside sinks, outside stays on top: the tip past the mouth is drawn beneath the layer, the rest of the bottle over it', () => {
+    // (Built afresh: the prong check above replaced the scene.)
+    const { pierced, piercer, o } = bottle();
+    const masks = mouthMasks(piercer, o.piercerMap, o, 'test');
+    for (let r = 0; r < H; r++) {
+      for (let u = 0; u < W; u++) {
+        const i = r * W + u;
+        const tip = piercer.pierceRegion.has(i) && piercer.pixels[i * 4 + 3] > 0;
+        const inside = 90 + r + 0.5 - 100 > 0;
+        assert.equal(masks.region[i], tip && inside ? 1 : 0, `row ${r} col ${u}`);
+        assert.equal(masks.rest[i], 1 - masks.region[i]);
+      }
+    }
+    // The bottle 4 texels further out: the tip's last rows are now outside.
+    piercer.y = 80;
+    markPierceStale();
+    resetPierceContainment();
+    contactOf(piercer, pierced, null);
+    markPierceStale();
+    const out = pierceOpeningOf(pierced);
+    const m2 = mouthMasks(piercer, out.piercerMap, out, 'test');
+    assert.equal(m2.region[16 * W + 8], 0, 'a shoulder row short of the mouth: on top');
+    assert.equal(m2.region[25 * W + 8], 1, 'a neck row past it: beneath');
   });
 }
 

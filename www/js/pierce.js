@@ -161,6 +161,72 @@ function regionPoints(part, transforms, which = 'pierce') {
   return points;
 }
 
+// What goes in: the piercer's painted tip, as texel indices -- the outline
+// an opening hugs, slice by slice (opening.js, THE TIP'S OWN OUTLINE), and
+// what sinks into the seam once it is past the mouth (mouthMasks). Not the
+// whole sprite: a waistband lying across the body is on the same layer as
+// the gusset pressed into the seam, and only the gusset goes in. Kept until
+// the painting or the pixels change.
+const silhouettes = new Map();
+
+function silhouetteOf(part) {
+  if (!part || !part.pixels) return null;
+  const key = `${part.pierceRegionVersion || 0}:${part.pierceRegion.size}:${part.naturalWidth}x${part.naturalHeight}`;
+  const cached = silhouettes.get(part.id);
+  if (cached && cached.key === key && cached.pixels === part.pixels) return cached.opaque;
+  const n = part.naturalWidth * part.naturalHeight;
+  const list = [];
+  for (const index of part.pierceRegion) {
+    if (index >= 0 && index < n && part.pixels[index * 4 + 3] > 0) list.push(index);
+  }
+  list.sort((a, b) => a - b);
+  const opaque = Int32Array.from(list);
+  silhouettes.set(part.id, { key, pixels: part.pixels, opaque });
+  return opaque;
+}
+
+// Where a texel corner (x, y) of a layer lands in the scene, exactly as
+// regionPoints places its texels -- its own transform, the carriage its
+// bones give it, and a PxLink attachment -- as six numbers: every one of
+// those is affine, so three points decide it.
+function texelToScene(part, transforms) {
+  const carriage = pinCarriageOffset(part, transforms);
+  const move = pxlinkMove(part, transforms);
+  const halfW = part.naturalWidth / 2;
+  const halfH = part.naturalHeight / 2;
+  const at = (x, y) => {
+    const world = localToWorld(part, { x: x - halfW, y: y - halfH });
+    return applyPxLinkMove(move, { x: world.x + carriage.x, y: world.y + carriage.y });
+  };
+  const o = at(0, 0);
+  const ex = at(1, 0);
+  const ey = at(0, 1);
+  return { xx: ex.x - o.x, xy: ey.x - o.x, x0: o.x, yx: ex.y - o.y, yy: ey.y - o.y, y0: o.y };
+}
+
+// The piercer's texels carried into the pierced layer's, this frame: its
+// placement in the scene, then the pierced layer's local frame at the tip
+// (tipInTexels). One affine map, { ux, uy, u0, vx, vy, v0 }, for the whole
+// sprite; with its tip's texels, its direction of travel and the size of
+// one of its texels in the pierced layer's.
+function piercerInTexels(piercer, toTexels, axis, transforms) {
+  const S = texelToScene(piercer, transforms);
+  const T = toTexels;
+  const map = {
+    ux: T.uX * S.xx + T.uY * S.yx, uy: T.uX * S.xy + T.uY * S.yy, u0: T.u0 + T.uX * S.x0 + T.uY * S.y0,
+    vx: T.vX * S.xx + T.vY * S.yx, vy: T.vX * S.xy + T.vY * S.yy, v0: T.v0 + T.vX * S.x0 + T.vY * S.y0,
+  };
+  const texel = (Math.hypot(map.ux, map.vx) + Math.hypot(map.uy, map.vy)) / 2;
+  let along = null;
+  if (axis) {
+    const u = T.uX * axis.x + T.uY * axis.y;
+    const v = T.vX * axis.x + T.vY * axis.y;
+    const length = Math.hypot(u, v);
+    if (length > 1e-9) along = { u: u / length, v: v / length };
+  }
+  return { opaque: silhouetteOf(piercer), width: piercer.naturalWidth, map, texel, axis: along };
+}
+
 // LATERAL CONTAINMENT
 //
 // Enter and End say how far IN the tip may go, along one axis. They say
@@ -690,6 +756,7 @@ function activeContacts(transforms) {
 let occlusion = new Map(); // piercer id -> the pierced part to sink beneath
 let hold = new Map();      // piercer id -> how far to hold its artwork back
 let openings = new Map(); // pierced id -> its opening this frame (opening.js)
+let sinks = new Map();    // piercer id -> { region, rest }: what is inside the seam
 let occlusionStale = true;
 let readout = [];
 
@@ -853,6 +920,31 @@ function publishOcclusion(contacts) {
     if (opening) opened.set(pierced.id, opening);
   }
   openings = opened;
+
+  // WHAT IS INSIDE IS DRAWN INSIDE (2.9.2)
+  //
+  // A piercer in contact sinks its painted tip beneath the layer it is in.
+  // It used to sink all of it, from the moment of contact: a tip painted
+  // down a bottle's neck and shoulders sank the part still BELOW the seam
+  // under the skin there -- a band of skin cut straight across the bottle,
+  // between its shoulders and the opening. Where the layer has a seam, the
+  // line across the seam's mouth now decides: the tip's texels past it are
+  // inside, drawn beneath the layer and seen through the opening, hugged by
+  // its edges; the rest of the piercer, and the tip short of the mouth, is
+  // outside, drawn on top. The tip disappears into the seam exactly where
+  // the edges close round it. A layer with no seam sinks the whole tip, as
+  // before.
+  const sunk = new Map();
+  for (const { pierced, contact } of contacts) {
+    if (!contact || next.get(contact.piercer.id) !== pierced) continue;
+    const opening = openings.get(pierced.id);
+    const seam = opening || (pierceDentIssue(pierced) === null ? openingMarker(pierced) : null);
+    if (!seam) continue;
+    const map = opening ? opening.piercerMap : (seamFrameOf(pierced, contact) || {}).map;
+    if (!map) continue;
+    sunk.set(contact.piercer.id, mouthMasks(contact.piercer, map, seam));
+  }
+  sinks = sunk;
   // Taken from the same contacts in the same pass, so the on-screen
   // numbers are the ones the frame was actually drawn from rather than a
   // second measurement that could disagree with it.
@@ -962,6 +1054,48 @@ export function pierceOpeningOf(part) {
 // region and everything else. Cached against the region version, so
 // painting rebuilds them and a frame never does.
 const maskCache = new Map();
+
+// Which of a piercer's texels are inside the seam this frame, and so drawn
+// beneath the layer it is in -- null when its painted tip decides (no seam).
+export function pierceSinkMasks(piercerId) {
+  pierceOcclusion();
+  return sinks.get(piercerId) || null;
+}
+
+// A piercer's texels split by the line across a seam's mouth: its painted
+// tip past it (inside, `region`), and everything else (`rest`). Its texel
+// centres land in the pierced layer's texels by `map` (piercerInTexels),
+// and `seam` is the opening or its marker -- the base on the mouth,
+// `inward` into the seam. The arrays are reused frame to frame, one pair
+// per piercer.
+const mouthBuffers = new Map();
+
+export function mouthMasks(piercer, map, seam, key = piercer.id) {
+  const W = piercer.naturalWidth;
+  const H = piercer.naturalHeight;
+  let buffers = mouthBuffers.get(key);
+  if (!buffers || buffers.region.length !== W * H) {
+    buffers = { region: new Uint8Array(W * H), rest: new Uint8Array(W * H) };
+    mouthBuffers.set(key, buffers);
+  }
+  const { region, rest } = buffers;
+  const { inward, base } = seam;
+  region.fill(0);
+  rest.fill(1);
+  // How far in from the mouth a texel centre is: affine in the texel.
+  const sx = map.ux * inward.x + map.vx * inward.y;
+  const sy = map.uy * inward.x + map.vy * inward.y;
+  const s0 = (map.u0 - base.x) * inward.x + (map.v0 - base.y) * inward.y;
+  const tip = silhouetteOf(piercer) || [];
+  for (let k = 0; k < tip.length; k++) {
+    const i = tip[k];
+    if (sx * ((i % W) + 0.5) + sy * (Math.floor(i / W) + 0.5) + s0 > 0) {
+      region[i] = 1;
+      rest[i] = 0;
+    }
+  }
+  return buffers;
+}
 
 export function pierceMasks(part) {
   if (!part || part.pierceRegion.size === 0) return null;
@@ -1140,9 +1274,35 @@ function openingOf(pierced, contact) {
   // Where the tip is, in the pierced layer's own texels -- through the
   // layer as it is posed right now, so a moved or bent layer opens where
   // the tip actually is on it.
-  const positions = deformVertices(pierced.mesh, pierced, transforms || {});
+  const frame = seamFrameOf(pierced, contact, transforms);
+  if (!frame) return null;
+  const { carried, silhouette } = frame;
   const lock = Number.isFinite(contact.lockT) ? contact.lockT : 1;
   const fraction = Math.min(contact.dentT, lock);
+  const opening = openingFor(pierced, {
+    fraction,
+    tip: carried.tip,
+    tipHalfWidth: contact.tipHalfWidth / Math.max(1e-6, pierced.scale || 1),
+    tipPoints: carried.points,
+    // The gap: the pierced layer's Dilation of the tip's width (opening.js,
+    // HOW WIDE IT OPENS).
+    tipWidth: contact.tipWidth,
+    dilation: pierced.pierceDentDilation,
+    silhouette,
+  });
+  // Kept with the opening for the renderer: which of the piercer's texels
+  // are inside the seam and so drawn beneath this layer (mouthMasks).
+  if (opening) opening.piercerMap = silhouette.map;
+  return opening;
+}
+
+// The piercer as the pierced layer sees it this frame: its tip and every
+// one of its texels carried into the pierced layer's own texels, through
+// that layer as it is posed right now -- so a moved or bent layer opens
+// where the tip actually is on it.
+function seamFrameOf(pierced, contact, transforms = bonesStore.isEmpty ? null : bonesStore.snapshotTransforms()) {
+  if (!pierced.mesh) return null;
+  const positions = deformVertices(pierced.mesh, pierced, transforms || {});
   // Where the tip is DRAWN: held back by the End Point and the walls, and
   // nothing else.
   const shift = { x: contact.tip.x - contact.rawTip.x, y: contact.tip.y - contact.rawTip.y };
@@ -1153,16 +1313,10 @@ function openingOf(pierced, contact) {
   const leading = leadingPoint(contact.tipPoints, contact.axis, contact.tip, shift);
   const carried = tipInTexels(pierced, positions, leading, contact.tipPoints, shift);
   if (!carried) return null;
-  return openingFor(pierced, {
-    fraction,
-    tip: carried.tip,
-    tipHalfWidth: contact.tipHalfWidth / Math.max(1e-6, pierced.scale || 1),
-    tipPoints: carried.points,
-    // The gap: the pierced layer's Dilation of the tip's width (opening.js,
-    // HOW WIDE IT OPENS).
-    tipWidth: contact.tipWidth,
-    dilation: pierced.pierceDentDilation,
-  });
+  // The tip's texels as one map: the edges hug its own outline slice by
+  // slice (opening.js, THE TIP'S OWN OUTLINE).
+  const silhouette = piercerInTexels(contact.piercer, carried.toTexels, contact.axis, transforms);
+  return { carried, silhouette, map: silhouette.map };
 }
 
 // THE WEDGE, PREVIEWED WHERE THE MARKER IS
@@ -1260,16 +1414,28 @@ export function pierceOpeningPreview(piercer, pierced) {
   lead.u += nudge.u;
   lead.v += nudge.v;
   const { tipHalfWidth, tipWidth } = tipAcross(points, middle, axis, 1);
+  // The tip as one map, for the edges to hug and for which of it is inside
+  // the seam -- as the scene does (openingOf, publishOcclusion).
+  const o0 = map({ x: 0, y: 0 });
+  const ex = map({ x: 1, y: 0 });
+  const ey = map({ x: 0, y: 1 });
+  const piercerMap = { ux: ex.u - o0.u, uy: ey.u - o0.u, u0: o0.u, vx: ex.v - o0.v, vy: ey.v - o0.v, v0: o0.v };
+  const opening = openingFor(pierced, {
+    ...common,
+    tipHalfWidth: tipHalfWidth * ratio,
+    tipPoints: points.map(map),
+    tipWidth: tipWidth * Math.max(1e-6, piercer.scale || 1),
+    silhouette: {
+      opaque: silhouetteOf(piercer), width: W, map: piercerMap, texel: ratio,
+      axis: { u: marker.inward.x, v: marker.inward.y },
+    },
+  });
   return {
-    opening: openingFor(pierced, {
-      ...common,
-      tipHalfWidth: tipHalfWidth * ratio,
-      tipPoints: points.map(map),
-      tipWidth: tipWidth * Math.max(1e-6, piercer.scale || 1),
-    }),
+    opening,
     map,
     reach,
     lock,
+    masks: opening ? mouthMasks(piercer, piercerMap, opening, `preview:${piercer.id}`) : null,
   };
 }
 

@@ -494,10 +494,12 @@
           <p class="joint-hint">
             The seam a pierce opens in this layer, in its own pixels. Depth is
             how far the seam runs in from the surface; Width is how far the
-            material beside it swells outward round the tip. <b>Opening
+            surface flinches outward before the piercer breaks in. <b>Opening
             width</b> is how wide the gap itself parts: a share of the
-            piercer's tip width — at 75% an 8 px tip opens 6 px and a 12 px tip
-            9 px, in whole pixels split between the two sides (7 px is 3 + 4).
+            piercer's tip width, slice by slice — at 75% an 8 px neck opens
+            6 px and 12 px shoulders 9 px, in whole pixels split between the
+            two sides (7 px is 3 + 4) — so the edges hug the tip's real
+            outline. Paint the piercer's tip over all of what goes in.
             Nothing is cut: the edges part around the tip and follow it in
             from the Dent Trigger Distance all the way to the End Point, and
             ease back to closed on the way out. WHERE the seam is is yours to place: Paint

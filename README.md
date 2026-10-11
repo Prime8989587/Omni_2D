@@ -8659,6 +8659,149 @@ mode too. A recorded frame has 0 transparent pixels. The project saves
 - The new `tests/backdrop.mjs` has 6 checks.
 - `npm test` passes, 18 suites.
 
+## 2.9.2: the wedge hugs what goes in -- the tip's own outline, slice by slice
+
+With the wedge opening again (2.9.1), the second half of your request was its
+shape. Your reference drawing has the two lip-edges hugging the actual outline
+of the bottle as it goes in:
+- closed just ahead of the cap;
+- tight round the neck;
+- flaring with the shoulders.
+
+It is not a generic notch. On the same bottle, 2.9.1 opened a rounded bulge
+instead, with a band of skin cutting straight across the bottle. Four things
+made it so, and each is fixed.
+
+### 1. Each slice opens to the tip's own width there
+
+The seam is cut into one-texel slices along its length. In each slice the
+opening measures the piercer's **tip** exactly where it is:
+- **Where.** Every painted tip texel is carried into the pierced layer's
+  texels by one affine map (the piercer's placement, then the pierced layer's
+  local frame at the tip). The whole sprite costs a few multiplications per
+  texel.
+- **How wide.** It takes the run of texels through the piercer's own middle
+  line, so a second prong beside it is not mistaken for a wider one, and
+  measures it edge to edge.
+- **How far the slice opens.** The layer's Opening width share of that width,
+  in whole pixels, split about the mirror line with the odd pixel to side B,
+  exactly as the gap always was, **but per slice**. Manual mode gives the
+  pixels set to the widest slice in the seam and the others in proportion.
+
+Before, the tip's rows were scaled as a whole so that the widest matched one
+number, and trimmed three or four texels at both ends. A bottle came out as a
+tube of one width with its cap cut off (`opening.js`, *THE TIP'S OWN OUTLINE,
+SLICE BY SLICE*).
+
+The trim is now one texel, and only where the outline steps in or ends ahead,
+because past the leading edge nothing is beneath the layer to show. It no
+longer applies at the tip's back end: behind it the rest of the piercer carries
+on, drawn on top. A gusset widest in its last row before the waistband opens to
+that row.
+
+**Paint the Tip over everything that goes in:**
+- a bottle: its cap, neck **and** shoulders;
+- a pair of panties: the gusset, but not the waistband, which lies across the
+  body on the same layer.
+
+Measuring the whole sprite instead was tried first. It opened the clothing
+wedge 30 px wide for a waistband that only lies on the body. The Tip is the
+one place that says what goes in.
+
+### 2. Once it is in, the edges hug -- nothing stretches beside them
+
+The swelling (the marker's **Width**) used to push the material beside the
+edges further out than the edges themselves: round the tip, ahead of it, and
+all the way down behind it. The strip in between was stretched. On real art:
+- a closed slit drawn as a 2-px line came out as a thick dark knot just ahead
+  of the cap;
+- a 1-px lip line beside the bottle came out 2 px thick;
+- the lips stood off the bottle instead of hugging it.
+
+Now, with a gap set:
+- **Before entry.** While the tip is short of the seam, the surface still
+  flinches.
+- **Once in.** Over the tip's first three texels in, the swelling gives way to
+  the edges alone.
+- **After that.** The edges and the material beside them move together as one
+  piece, with the four texels next to the seam rigid before the sideways fade
+  begins. A lip line a few pixels off the seam is carried whole, never squeezed
+  into a dropped pixel.
+- **Each side its own edge.** The odd pixel of an odd gap no longer stretches
+  the narrower side.
+
+(`opening.js`, *HUGGING, ONCE IT IS IN*.)
+
+### 3. What is inside is drawn inside
+
+A piercer in contact used to sink its whole painted tip beneath the layer it
+was in, from the moment of contact. A tip painted down a bottle's neck and
+shoulders sank the part still below the seam under the skin there: the band of
+skin between the shoulders and the opening.
+
+Where the layer has a seam, the line across the seam's **mouth** now decides
+(`pierce.js`, *WHAT IS INSIDE IS DRAWN INSIDE*):
+- the tip's texels past the mouth sink beneath the layer, seen through the
+  opening and hugged by its edges;
+- the rest of the piercer, and the tip still short of the mouth, stay on top;
+- a layer with no seam sinks the whole tip, as before.
+
+The Pierce window's live preview does the same.
+
+### Verified, in the real app
+
+**The rig.** A Body whose V of lip lines meets in one closed slit (a 2-px line
+on the seam, as in your drawing), and the champagne bottle, Tip painted over
+its cap, neck and shoulders. It was driven in by a real Free Move drag to the
+End Point, then back out.
+
+**Three builds, same drag:**
+
+![Same rig, same real drag, on 2.9.0, 2.9.1 and 2.9.2: the slit shut with the tip sunk under the skin; a rounded bulge cut off from the bottle; the edges hugging cap, neck and shoulders](docs/images/wedge-292-three-builds.png)
+
+| Depth | Edges apart | Drawn |
+| --- | --- | --- |
+| 14 | 0.6 px | the slit line still one crisp 2-px line, the cap at its foot |
+| 17 / 20 | 3.0 / 5.0 px | the line splits round the cap; lips tight down the neck (`#bbbbb#`) |
+| 32 | 6.6 px | the shoulders arriving: the lips start to flare |
+| 38 / 40 (End) | 13.5 / 14.5 px | flaring one pixel per row with the shoulders, closed just above the cap |
+
+Every one of the 42 frames, read off the screen:
+- **0 holes.** No background shows anywhere in the slit area.
+- **0 dropped lip pixels.**
+- **Back out.** All 41 frames on the way out are the way-in frame at the same
+  place, pixel for pixel, and the final picture is the rest picture.
+- **Nothing lost.** 0 of the Body's 8606 art pixels show checkerboard with the
+  wedge 14.5 px open.
+
+**Lips drawn as ||**, two lines with skin between at rest, part the same way.
+They keep their own spacing as they follow the tip (0 holes, 0 drops):
+
+![The || rig: the two lip lines part round the bottle, each keeping its own 2 px of skin between it and the tip, following the cap, neck and shoulders](docs/images/wedge-292-parallel.png)
+
+**The Interactive clothing wedge** (2.9.0's scene D, panties into the seam
+between two body halves) still opens 3 + 3 = 6 px and closes back pixel for
+pixel.
+
+**Cost.** A frame of contact, opening and sinking for a 200×200 piercer takes
+about 2.5 ms plus 1 ms for the sink masks. 2.9.1 took 3.0-3.5 ms: the one affine
+map replaced a scene point per tip texel.
+
+### Tests
+
+`tests/opening.mjs` has 70 checks (7 new):
+- the slices measure cap 2, neck 4, shoulders 6 → 12;
+- the unpainted body opens nothing;
+- each slice opens to 75% of its own width, split 1 + 2;
+- closed over the leading edge, open behind it;
+- a second prong is not a wider neck;
+- the material beside an edge moves with it once in, and the surface flinches
+  before;
+- inside sinks, outside stays on top, texel by texel.
+
+The needle fixtures are now drawn on transparency, as real piercers are.
+`npm test`: 18 suites pass.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

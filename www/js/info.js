@@ -249,7 +249,11 @@ const TOPICS = {
   },
   'pierce-targets': {
     title: 'Paint targets',
-    body: 'Tip (on the piercer) is what counts as "in".\n\n' +
+    body: 'Tip (on the piercer) is what counts as "in". Paint it over ALL ' +
+      'of the part that goes in -- a bottle\u2019s cap, neck AND shoulders, a ' +
+      'finger to the knuckle -- not just its point: the wedge\u2019s edges hug ' +
+      'the tip\u2019s own outline slice by slice, and the part of it past the ' +
+      'seam\u2019s mouth is drawn inside, beneath the layer.\n\n' +
       'On the pierced layer, three masks and one placement:\n' +
       '• Pierceable -- where contact is detected at all.\n' +
       '• Deformable -- which pixels GIVE WAY as the seam opens: the edges ' +
@@ -286,8 +290,9 @@ const TOPICS = {
       'and reaches further along the edge; as it comes out, everything eases ' +
       'back to the rest outline the same way.\n\n' +
       '• Depth -- how far the seam runs in from the surface.\n' +
-      '• Width -- how far the material beside the seam swells outward ' +
-      'round the tip.\n' +
+      '• Width -- how far the surface flinches outward before the piercer ' +
+      'breaks in. Once its tip is in, the edges and the material beside ' +
+      'them move together, tight against it.\n' +
       '• Wedge width, Automatic (ratio) -- how wide the gap itself parts, ' +
       'as a share of the piercer\u2019s tip width (Opening width): at 75% an ' +
       '8 px tip opens 6 px and a 12 px tip 9 px.\n' +
@@ -298,9 +303,11 @@ const TOPICS = {
       'sides are mirror images however far off the line the piercer comes ' +
       'in -- so put the line where the piercer goes in: one that comes in ' +
       'well off it leaves a sliver of the gap beside the tip uncovered. ' +
-      'The edges follow the tip\u2019s own width row by row, so the gap ' +
-      'grows as the tip goes in, all the way to the End point (on the ' +
-      'piercer, with Enter and Lock).\n\n' +
+      'Each slice of the seam opens to that share of the tip\u2019s OWN ' +
+      'width in that slice, so the edges hug its real outline -- pinching ' +
+      'round a narrow neck, flaring round the shoulders behind it, closed ' +
+      'just ahead of it -- and follow it all the way to the End point (on ' +
+      'the piercer, with Enter and Lock).\n\n' +
       'Set Depth or Width to 0 for no opening at all.\n\n' +
       'Easier still by hand: Paint regions…, then the Dent target, and drag ' +
       'the triangle marker on the artwork -- the wedge is drawn there live, ' +
