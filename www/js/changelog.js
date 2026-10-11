@@ -33,6 +33,19 @@
 
 export const RELEASES = [
   {
+    version: '2.9.1',
+    date: '2026-10-11',
+    title: 'Pierce: the wedge opens again -- traced from the depth to the pixel, and fixed where it broke',
+    kind: 'patch',
+    notes: [
+      'With the default depths (Enter 12, Dent 12, End 24, Lock 50%) the wedge never opened: the depth climbed to 24 and "open" to 100% while the two edges stayed 0.00 px apart on every frame. The Wedge Lock Point froze the shape at the moment the tip first touched the surface -- before any of it was inside the seam -- so it froze it shut. The Lock now holds only the swelling beside the seam; the edges always wrap the piercer where it really is, all the way to End.',
+      'A tip painted only a few rows deep (a cap, a fingertip) opened nothing at any depth either: the opening was trimmed 3-4 texels back from both ends of the painted tip. Now one.',
+      'The Pierce window\u2019s live preview shows the wedge at the End Point, the deepest it goes (it was at the Lock, where the same bug showed a closed seam).',
+      'Debug overlay -> Pierce depth readout has a third line: how far apart the wedge\u2019s edges really are ("edges 5.0px apart"), or "closed: no piercer inside the seam yet" -- so depth, open % and the opening itself can be told apart at a glance.',
+      'Canvas window -> Backdrop: Checkerboard (transparent, as before) or a colour -- your layers\u2019 own colours offered first. It fills every pixel no layer covers, on the canvas and in exported frames, so artwork that stops short of the frame no longer sits on a checkerboard.',
+    ],
+  },
+  {
     version: '2.9.0',
     date: '2026-10-05',
     title: 'Interactive: layers that touch, push, and spring back -- through everything PxLinked to them',

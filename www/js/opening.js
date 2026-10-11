@@ -57,9 +57,9 @@
 // the same shape, and backing out is the same sweep run backwards.
 //
 // Past the piercer's Wedge Lock Point the solver hands this module the
-// contact AS IT WAS AT THE LOCK -- the fraction clamped there, the tip taken
-// back to where it was (pierce.js, openingOf) -- so from the lock to the
-// End Point the shape built here is one and the same.
+// fraction AS IT WAS AT THE LOCK, so the swelling stops growing there; the
+// tip and its outline are always where the piercer really is, so the edges
+// go on wrapping it all the way to the End Point (pierce.js, openingOf).
 //
 // HOW THE SEAM OPENS WITHOUT TEARING ANYTHING ELSE
 //
@@ -164,8 +164,8 @@ const RIM_SOFTNESS = 1;
 // pointed front, full width where the tip is widest -- and the two sides
 // are the same shape, mirror images, wherever across the line it sits. So
 // the gap grows as the tip goes in, from its outline alone; the Wedge Lock
-// Point needs no say in it -- past the lock the tip it is given is
-// the one AT the lock (pierce.js, openingOf), so the gap holds there too.
+// Point needs no say in it -- it holds only the swelling (pierce.js,
+// openingOf).
 // The swelling beside the gap is never allowed below the gap itself, so the
 // material at the edge is pushed exactly the gap's width and eases out from
 // there.
@@ -403,7 +403,16 @@ export function openingFor(part, {
     // widest row lands exactly on that side's width (1: unscaled).
     coverScale: { a: 1, b: 1 },
   };
-  if (tipPoints && tipPoints.length) o.cover = coverageOf(o, tipPoints, coverMargin(part));
+  // With a gap set (always, in the app), one texel of margin: the gap is a
+  // share of the outline -- 75% unless the artist says otherwise -- so the
+  // drawn edge has room to spare inside it. Without one, the rim runs right
+  // up to the outline and keeps a refined triangle's reach back from it.
+  //
+  // Until 2.9.1 the gap kept that whole reach too: three or four texels
+  // trimmed off BOTH ends of the painted tip. A tip painted eight rows deep
+  // or less -- a bottle's cap, a fingertip -- had nothing left, and opened
+  // nothing at any depth.
+  if (tipPoints && tipPoints.length) o.cover = coverageOf(o, tipPoints, sides ? 1 : coverMargin(part));
   if (sides) {
     // The widest the piercer reaches on each side, as openingCover reads it
     // -- the smooth curve through the bins, sampled finely: it peaks between
@@ -560,6 +569,22 @@ export function openingRim(o, s, side, amplitude = openingAmplitude(o, s)) {
   if (cover <= 0) return 0;
   const d = amplitude - cover;
   return Math.max(0, 0.5 * (amplitude + cover - Math.sqrt(d * d + RIM_SOFTNESS * RIM_SOFTNESS)));
+}
+
+// How far apart the seam's two edges actually stand, at the widest point
+// along it, in texels -- the opening itself, as against how deep the
+// piercer is or how far open its fraction says the seam is. The readout
+// prints it, because those two can climb while this stays at 0, and
+// telling the two apart is the whole point of reading them.
+export function openingApart(o) {
+  if (!o) return { a: 0, b: 0, s: null };
+  let best = { a: 0, b: 0, s: null };
+  for (let s = -2; s <= o.length + 2; s += 0.25) {
+    const a = openingRim(o, s, -1);
+    const b = openingRim(o, s, 1);
+    if (a + b > best.a + best.b) best = { a, b, s };
+  }
+  return best;
 }
 
 // The displacement at a texel point for one side's pass (-1: side A, the

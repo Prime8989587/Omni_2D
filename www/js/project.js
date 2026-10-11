@@ -367,7 +367,7 @@ function deserializeBone(data) {
 export function serializeProject({ copyPixels = false } = {}) {
   return {
     version: PROJECT_FORMAT_VERSION,
-    canvas: { width: sceneStore.width, height: sceneStore.height },
+    canvas: { width: sceneStore.width, height: sceneStore.height, backdrop: sceneStore.backdrop },
     parts: partsStore.parts.map((part) => serializePart(part, copyPixels)),
     bones: bonesStore.bones.map(serializeBone),
     // PxLink connections. Through this one function they reach every place a
@@ -385,6 +385,8 @@ export function serializeProject({ copyPixels = false } = {}) {
 export function applyProject(data) {
   if (!data) return;
   if (data.canvas) sceneStore.setSize(data.canvas.width, data.canvas.height);
+  // A project from before the backdrop existed has none: the checkerboard.
+  sceneStore.setBackdrop(data.canvas ? data.canvas.backdrop : null);
   partsStore.replaceAll((data.parts || []).map(deserializePart), data.selectedPartId ?? null);
   bonesStore.replaceAll((data.bones || []).map(deserializeBone), data.selectedBoneId ?? null);
   // After the layers, because a link is only kept if every layer it joins

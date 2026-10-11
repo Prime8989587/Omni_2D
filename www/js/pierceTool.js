@@ -646,8 +646,9 @@ function endDentDrag() {
 // The wedge, live, while the triangle is placed
 //
 // On the Dent target the pierced layer is drawn OPENED, exactly as the
-// scene will draw it at the Wedge Lock Point -- the shape the wedge keeps --
-// with the paired piercer in it as the stand-in contact. Nothing here is a
+// scene will draw it at the End Point -- the deepest the piercer goes, with
+// the swelling held at the Wedge Lock Point -- with the paired piercer in it
+// as the stand-in contact. Nothing here is a
 // second opening: pierce.js (pierceOpeningPreview) makes the contact and
 // calls the same openingFor the live solver does, and the layer goes through
 // the same two passes (openingGeometry, split by openingSides) and the same
@@ -846,7 +847,7 @@ function render() {
     const o = preview.built.opening;
     const how = pierced.pierceWedgeMode === WedgeWidthMode.MANUAL ? 'manual' : `${pierced.pierceDentDilation}% of the tip`;
     const gap = o.sides ? `gap ${o.sides.px} px = ${Math.floor(o.sides.px / 2)} + ${o.sides.px - Math.floor(o.sides.px / 2)} mirrored (${how}) · ` : '';
-    els.pierceWindowStatus.textContent = `preview at the Lock ${Math.round(preview.built.lock * 100)}% · ${gap}` +
+    els.pierceWindowStatus.textContent = `preview at the End Point (swelling held at ${Math.round(preview.built.lock * 100)}%) · ${gap}` +
       `seam ${pierced.pierceDentDepth}×${pierced.pierceDentWidth} · ${Math.round(cam.zoom * 100)}%`;
   } else {
     els.pierceWindowStatus.textContent = status;

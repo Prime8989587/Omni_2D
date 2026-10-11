@@ -20,7 +20,7 @@ import {
 import {
   openingFor, openingAmplitude, openingShift, openingSides, openingGeometry,
   refinedMesh, openingMarker, seamCoordinates, resetOpeningCaches, openingRim, openingCover,
-  openingDisplacement, openingSideWidths, openingMirror, openingPlacement,
+  openingDisplacement, openingSideWidths, openingMirror, openingPlacement, openingApart,
 } from '../www/js/opening.js';
 import { generateMesh, defaultDensity, deformVertices } from '../www/js/mesh.js';
 
@@ -576,29 +576,51 @@ section('3. Driven by the live contact');
     }
   });
 
-  check('past it the shape is FROZEN: every frame from the lock to the End Point and beyond draws the identical opening', () => {
+  check('past it the swelling HOLDS at the lock, while the edges keep wrapping the needle exactly as with no lock', () => {
     assert.ok(past.length > 10, `${past.length} frames past the lock`);
-    const first = both(past[0].opening);
     for (const r of past) {
       assert.equal(r.opening.fraction, 0.75);
-      const g = both(r.opening);
-      let worst = 0;
-      for (let side = 0; side < 2; side++) {
-        for (let i = 0; i < g[side].length; i++) {
-          worst = Math.max(worst, Math.hypot(g[side][i].x - first[side][i].x, g[side][i].y - first[side][i].y));
-        }
+      const free = unlocked.find((x) => x.y === r.y).opening;
+      // The tip is where the needle really is -- never taken back.
+      assert.equal(r.opening.sTip, free.sTip);
+      assert.equal(r.opening.sApex, free.sApex);
+      for (let s = -2; s <= 30; s += 0.25) {
+        for (const side of [-1, 1]) assert.equal(openingRim(r.opening, s, side), openingRim(free, s, side), `y ${r.y} s ${s}`);
+        assert.ok(openingAmplitude(r.opening, s) <= openingAmplitude(free, s) + 1e-12);
       }
-      assert.ok(worst < 1e-9, `y ${r.y}: moved ${worst}`);
     }
+    // And the swelling really is held: the same peak on every frame past it.
+    assert.ok(past.every((r) => r.opening.peak === past[0].opening.peak));
   });
 
-  check('and it is the very shape the opening had AT the lock -- not a different one it jumps to', () => {
-    // Exactly at the lock: the needle placed so the gap is -6.
-    const atLock = locked.find((r) => r.contact && Math.abs(r.contact.dentT - 0.75) < 1e-9);
-    assert.ok(atLock, 'a frame exactly at the lock');
-    assert.deepEqual(both(atLock.opening), both(past[0].opening));
-    const free = unlocked.find((x) => x.y === atLock.y).opening;
-    assert.deepEqual(both(atLock.opening), both(free));
+  check('THE 2.9.1 REGRESSION: with the default depths the lock falls at first touch -- and the wedge still opens past it, further in as it goes in', () => {
+    piercer.pierceWedgeLock = DEFAULT_WEDGE_LOCK;
+    piercer.pierceEnter = DEFAULT_PIERCE_ENTER;
+    piercer.pierceEnd = DEFAULT_PIERCE_END;
+    piercer.pierceDentStart = DEFAULT_PIERCE_ENTER;
+    const rows = [];
+    for (let y = 50; y <= 110; y += 1) {
+      const r = read(y);
+      if (!r.opening) continue;
+      const w = openingApart(r.opening);
+      // How long a stretch of the seam stands open (edges over half a texel apart).
+      let deepest = -Infinity;
+      for (let s = -2; s <= 30; s += 0.25) if (openingRim(r.opening, s, -1) + openingRim(r.opening, s, 1) > 0.5) deepest = s;
+      rows.push({ y, t: r.contact.dentT, lock: r.contact.lockT, gap: r.contact.gap, apart: w.a + w.b, deepest });
+    }
+    // The lock lands where the gap is 0: the tip touching, nothing inside.
+    const atLock = rows.find((r) => Math.abs(r.t - r.lock) < 1e-9);
+    assert.ok(atLock && Math.abs(atLock.gap) < 1e-9, `the lock at gap ${atLock && atLock.gap}`);
+    const after = rows.filter((r) => r.t > r.lock + 1e-9);
+    assert.ok(after.length > 6, `${after.length} frames past the lock`);
+    // 2.9.0 drew 0.00 px apart on every one of these frames.
+    assert.ok(after.at(-1).apart > 4, `edges ${after.at(-1).apart.toFixed(2)} texels apart at the deepest`);
+    for (let i = 1; i < after.length; i++) {
+      assert.ok(after[i].apart >= after[i - 1].apart - 1e-9, 'never narrows on the way in');
+      assert.ok(after[i].deepest >= after[i - 1].deepest - 1e-9, 'never falls back on the way in');
+    }
+    assert.ok(after.at(-1).deepest > after[0].deepest + 6, `opens further in as it goes in: to s ${after[0].deepest} -> ${after.at(-1).deepest}`);
+    piercer.pierceWedgeLock = 75;
   });
 
   check('the needle itself keeps going in past the lock, in step with the depth', () => {
@@ -609,7 +631,7 @@ section('3. Driven by the live contact');
     assert.ok(inPast.at(-1).contact.dentT > inPast[0].contact.dentT, 'and the depth kept climbing');
   });
 
-  check('backing out: held while past the lock, then closing through the same shapes it opened through', () => {
+  check('backing out runs the very same shapes in reverse, and closes', () => {
     piercer.pierceWedgeLock = 75;
     const back = [];
     for (let y = 110; y >= 50; y -= 1) back.push({ y, ...read(y) });
@@ -707,7 +729,7 @@ section('4. How wide it opens: a share of the piercer\'s tip width');
     assert.equal(atLock(p12).opening.sides.px, 6);
   });
 
-  check('it grows as the tip goes in, and holds from the lock on -- the lock deciding only WHERE it stops', () => {
+  check('it grows as the tip goes in, and stays at the tip\'s share as the tip goes on in past the lock', () => {
     const p = pair(12);
     const sweep = [];
     for (let y = 40; y <= 120; y += 1) {
@@ -726,10 +748,21 @@ section('4. How wide it opens: a share of the piercer\'s tip width');
     for (const r of after) assert.ok(Math.abs(r.gap - 9) < 0.02, `held at 9: ${r.gap.toFixed(3)}`);
   });
 
-  check('the Pierce window\'s preview is the same opening the contact makes at the lock', () => {
+  // Driven in to the End Point, and read.
+  const atEnd = ({ pierced, piercer }) => {
+    for (let y = 40; y <= 160; y += 1) {
+      piercer.y = y;
+      markPierceStale();
+      resetPierceContainment();
+      const contact = contactOf(piercer, pierced, null);
+      if (contact && contact.dentT >= 1) return { contact, opening: pierceOpeningOf(pierced) };
+    }
+    return null;
+  };
+  check('the Pierce window\'s preview is the same opening the contact makes at the End Point (2.9.1: it was the lock)', () => {
     for (const tip of [8, 12, 9]) {
       const p = pair(tip);
-      const live = atLock(p).opening;
+      const live = atEnd(p).opening;
       const preview = pierceOpeningPreview(p.piercer, p.pierced).opening;
       assert.deepEqual(preview.sides, live.sides, `tip ${tip}`);
       assert.equal(preview.fraction, live.fraction);

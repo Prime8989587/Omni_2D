@@ -20,7 +20,7 @@ import { isLinked, ensureLinkMesh, linkPositions, linkOffsetAt, moveRigid } from
 import { pxlinkMove, applyPxLinkMove, pxlinkCorrection } from './pxlinkState.js';
 import { pushAt } from './interactState.js';
 import { interactiveFieldOf, pushBends } from './interactive.js';
-import { sceneStore } from './scene.js';
+import { sceneStore, withBackdrop } from './scene.js';
 import { view } from './view.js';
 import { rasterizeTriangle, clearRegion, layerClaims } from './raster.js';
 import { outlineRing } from './contour.js';
@@ -569,9 +569,11 @@ function checkerPattern() {
   return pattern;
 }
 
+// Behind the artwork: the scene's backdrop colour when it has one (scene.js,
+// THE BACKDROP), otherwise the transparency checkerboard.
 function drawGrid() {
   const origin = view.toCanvas(0, 0);
-  ctx.fillStyle = checkerPattern();
+  ctx.fillStyle = sceneStore.backdrop || checkerPattern();
   ctx.fillRect(origin.x, origin.y, sceneStore.width * view.zoom, sceneStore.height * view.zoom);
 }
 
@@ -596,14 +598,20 @@ let checkerSceneKey = '';
 // pattern shows, dark on the scene's (0, 0).
 function sceneChecker() {
   const light = CHECKER_STRENGTHS[getSetting('checkerStrength')] || CHECKER_LIGHT;
-  const key = `${sceneWidth}x${sceneHeight}:${light}`;
+  const backdrop = sceneStore.backdrop;
+  const key = `${sceneWidth}x${sceneHeight}:${light}:${backdrop}`;
   if (checkerScene && checkerSceneKey === key) return checkerScene;
   checkerScene = document.createElement('canvas');
   checkerScene.width = sceneWidth;
   checkerScene.height = sceneHeight;
   const c = checkerScene.getContext('2d');
-  c.fillStyle = CHECKER_DARK;
+  c.fillStyle = backdrop || CHECKER_DARK;
   c.fillRect(0, 0, sceneWidth, sceneHeight);
+  if (backdrop) {
+    // The turned view's backdrop: the same flat colour as straight on.
+    checkerSceneKey = key;
+    return checkerScene;
+  }
   c.fillStyle = light;
   for (let y = 0; y < sceneHeight; y++) {
     for (let x = (y + 1) % 2; x < sceneWidth; x += 2) c.fillRect(x, y, 1, 1);
@@ -965,11 +973,17 @@ function drawPierceProbe() {
     // The opening's trigger is printed next to its percentage because the
     // two together are the only way to tell "not opening yet" from "not
     // working".
+    // The third number of the three: how far apart the edges really are.
+    // Depth and open can both climb while this stays at 0, and only this
+    // line can tell that apart from a wedge that is opening.
+    const wedge = r.open > 0
+      ? `\n  wedge ${r.apart > 0.05 ? `edges ${r.apart.toFixed(1)}px apart` : 'closed: no piercer inside the seam yet'}`
+      : '';
     return `${r.piercer} -> ${r.pierced}\n` +
       `  gap ${gap}  enter ${r.enter}  end ${r.end}  opens at ${r.dentStart}\n` +
       `  depth ${r.depth.toFixed(1)}  open ${(r.open * 100).toFixed(0)}%` +
-      `${r.locked ? ` (shape held at ${Math.round(r.lock * 100)}%)` : ''}${press}  ` +
-      `${zone}${r.sunk ? '  tip sunk' : ''}${held}`;
+      `${r.locked ? ` (swelling held at ${Math.round(r.lock * 100)}%)` : ''}${press}  ` +
+      `${zone}${r.sunk ? '  tip sunk' : ''}${held}${wedge}`;
   });
   probeEl.textContent = lines.length ? lines.join('\n') : 'pierce: no pierced layer';
   probeEl.hidden = false;
@@ -1058,6 +1072,7 @@ export function initCanvas(canvas) {
   bonesStore.subscribe(requestRender);
   appState.subscribe(requestRender);
   sceneStore.subscribe(requestRender);
+  sceneStore.subscribeBackdrop(requestRender);
   view.subscribe(requestRender);
   // Placing a bone's head changes what to draw without touching a store.
   subscribeRig(requestRender);
@@ -1110,7 +1125,7 @@ function captureFrame() {
   captureWidth = sceneWidth;
   captureHeight = sceneHeight;
   // A copy, not a reference: the buffer is written in place every frame.
-  capturedFrames.push(new Uint8ClampedArray(sceneImage.data));
+  capturedFrames.push(withBackdrop(new Uint8ClampedArray(sceneImage.data), sceneStore.backdrop));
 }
 
 export function onStartRecording() {

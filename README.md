@@ -8522,6 +8522,143 @@ Pierced, mirror lines on the shared seam). Gap set: 6 px.
 `tests/opening.mjs` (63) and `tests/pxlink.mjs` (87) pass unchanged after
 the move to `contact.js`. All 17 Node suites and the browser suites pass.
 
+## 2.9.1: the wedge opens again -- traced from the depth to the pixel
+
+You sent a screenshot of the wedge as two parallel lines, ||, with a champagne
+bottle pushed right up into it, and a drawing of what it should look like: the
+two edges parting round the bottle and hugging it. You asked for it to be
+traced from scratch, step by step, without trusting anything that had been
+"verified" before.
+
+### The trace
+
+Your rig was rebuilt in the real app: a Body layer with a V of lip lines
+closing into a || slit, a champagne-bottle Piercer (cap, narrow neck, sloping
+shoulders), and Pierce set up the way the Pierce window sets it up, with the
+default depths. Then it was driven in by a real touch drag through Free Move's
+Piercer tab, and every link of the chain was logged on every frame:
+
+| Step | What it is | 2.9.0, 40 frames of the drag |
+| --- | --- | --- |
+| 1. Contact | `contactOf`: depth, from the tip's gap to the Pierceable paint | **1 → 24**, growing ✓ |
+| 2a. Fraction | how far open the seam should be, 0 at the Dent Trigger, 1 at End | **0.04 → 1.00**, growing ✓ |
+| 2b. **The opening** | `openingFor`: how far apart the seam's two edges are | **0.00 px on every frame** ✗ |
+| 3. Drawn | what the renderer moves and the screen shows | a swelling of ≤ 2.2 px beside a closed seam: the lips stay || |
+
+So the value broke down at **step 2b**: `openingFor` was called on every
+frame with the right, growing depth, and returned a closed seam every time.
+
+### Why: the Wedge Lock Point froze it shut
+
+The edges of the opening are built from the piercer's texels that are inside
+the seam. Past the Wedge Lock Point the solver handed `openingFor` the tip as
+it was **at the Lock**, so that the shape would freeze there (2.5.3).
+
+With the default depths (Enter 12, Dent Trigger 12, End 24, Lock 50%) the Lock
+falls at a gap of exactly 0. That is the instant the tip first **touches**
+the Pierceable paint, with not one of its texels inside the seam yet. The
+frozen shape was a closed seam, and it stayed frozen for the whole rest of the
+drag. The readout said `open 100% (shape held at 50%)` the whole time.
+
+The 2.5.3 checks never caught it: they typed Enter 4 / End 28 into the window,
+which puts the Lock 10 px into the flesh. The defaults put it at 0.
+
+**The fix** (`pierce.js`, `openingOf`, *THE LOCK HOLDS THE SWELLING, NEVER THE
+EDGES*): the Lock now holds only the swelling, the soft push of the material
+beside the seam. The seam's two edges are never held. They wrap whatever of
+the piercer is inside the seam, wherever it really is, all the way to the End
+Point. Backing out runs the same shapes in reverse, as before.
+
+### A second zero: a short tip was trimmed away
+
+Fixing the Lock alone, a needle with a 4-row tip still opened nothing. The
+opening's edges were kept back 3-4 texels (one refined triangle's reach) from
+**both** ends of the painted tip. That was a guard against the drawn edge
+cutting a corner of the outline. A tip painted eight rows deep or less, such
+as a bottle's cap or a fingertip, had nothing left. With a gap set, which in
+the app is always, the guard is now one texel. The gap is a share of the
+outline (75% by default), so the edge has room to spare inside it.
+
+### The live preview had the same zero
+
+The Pierce window's preview showed the wedge **at the Lock**, with the defaults
+a closed seam. It now shows it at the **End Point**, the deepest the piercer
+goes, with the swelling held at the Lock.
+
+![The Pierce window, Dent target: the preview at the Lock (2.9.0, the bottle at the surface, closed) and at the End Point (2.9.1, the neck in, parted)](docs/images/wedge-291-preview.png)
+
+### The readout now shows the opening itself
+
+Debug overlay → **Pierce depth readout** has a third line. Depth and `open %`
+can both climb while nothing opens, so the opening itself is now printed:
+`wedge edges 5.0px apart`, or `wedge closed: no piercer inside the seam yet`.
+
+### Verified, in the real app
+
+Same rig, same real drag, the Debug overlay switched on by real taps, the
+phone's canvas captured mid-drag:
+
+![2.9.0 against 2.9.1, the same drag: the readout climbs to depth 24 / open 100% while the lips stay || (top); the new line shows the edges parting and the lips open round the bottle (bottom)](docs/images/wedge-291-before-after.png)
+
+| Depth | 2.9.0: edges apart | 2.9.1: edges apart | 2.9.1 readout |
+| --- | --- | --- | --- |
+| 1-12 (tip outside the slit) | 0.00 | 0.00 | `closed: no piercer inside the seam yet` |
+| 13 | 0.00 | 0.18 | `edges 0.2px apart` |
+| 14 | 0.00 | 1.08 | `edges 1.1px apart` |
+| 15 | 0.00 | 2.35 | `edges 2.4px apart` |
+| 19 | 0.00 | 4.31 | `edges 4.3px apart` |
+| 20-24 (End) | 0.00 | 5.00 | `edges 5.0px apart` |
+
+The bottle's painted tip here is its cap and neck, 6 px wide. 75% of it is
+4.5, rounded to a 5 px gap (2 + 3).
+
+### The checkerboard at the frame edges: a separate thing, and not a bleed
+
+Every scene pixel of the Body was read off the phone's canvas and classified.
+The checkerboard is pure #000000 / #262626, which the rig's art never uses.
+
+| | Body pixels with art | showing checkerboard | Body pixels with no art | showing checkerboard |
+| --- | --- | --- | --- | --- |
+| At rest | 8606 | **0** | 994 | 994 |
+| Wedge open, 5 px | 8606 | **0** | 994 | 994 |
+| Wedge open, 15.9 px | 8606 | **0** | 994 | 994 |
+
+So nothing on the wedge's path drops a pixel. The checkerboard is exactly
+where the layer has **no** pixels: in your project, outside the hips' outline.
+It is the editor's transparency grid, and an exported GIF is transparent there
+too. If the frame should show something there, the scene needed a way to say
+what. Now it has one:
+
+**Canvas window → Backdrop: Checkerboard | Colour.**
+- **Colour** fills every pixel no layer covers, on the canvas (any mode, the
+  turned view included) and in every recorded frame, so the export is the
+  picture on screen.
+- **Your layers' own colours are offered first**, most used first, so the skin
+  tone is one tap away. A hex field reaches any colour.
+- **Saved with the project.** Undo takes it back, and projects from before it
+  load with the checkerboard.
+
+![Canvas window → Backdrop → Colour, the layers' own colours first; the checkerboard round a Body that stops short of the frame, and the same frame in Animate mode with the skin colour as the backdrop](docs/images/backdrop.png)
+
+Checked by real taps in the real app: the first swatch offered is the Body's
+skin #F8DCCD. After Apply, 0 of 4710 empty pixels are checkerboard, in Animate
+mode too. A recorded frame has 0 transparent pixels. The project saves
+`"backdrop":"#F8DCCD"`, and Undo restores the checkerboard.
+
+### Tests
+
+- `tests/opening.mjs` has 63 checks, with the Lock checks rewritten for what
+  it now means:
+  - the swelling holds;
+  - the edges match an unlocked wedge exactly, frame for frame;
+  - backing out retraces the same shapes.
+- A regression check drives a needle in with the default depths. It asserts
+  the Lock falls at a gap of 0 and the wedge still opens past it (5 texels),
+  never narrowing.
+- The preview check now compares against the End Point.
+- The new `tests/backdrop.mjs` has 6 checks.
+- `npm test` passes, 18 suites.
+
 ## What's next
 
 With artwork bound to a working skeleton and GIF export producing real

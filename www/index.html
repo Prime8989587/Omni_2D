@@ -499,9 +499,8 @@
             piercer's tip width — at 75% an 8 px tip opens 6 px and a 12 px tip
             9 px, in whole pixels split between the two sides (7 px is 3 + 4).
             Nothing is cut: the edges part around the tip and follow it in
-            from the Dent Trigger Distance, reach that width at the piercer's
-            Wedge Lock Point, hold that shape beyond it, and ease back to
-            closed on the way out. WHERE the seam is is yours to place: Paint
+            from the Dent Trigger Distance all the way to the End Point, and
+            ease back to closed on the way out. WHERE the seam is is yours to place: Paint
             regions…, then Dent, and drag the triangle marker onto the spot —
             the wedge is previewed there as you drag. Set Depth or Width to 0
             for no opening.
@@ -608,8 +607,8 @@
         <p class="modal__text">
           A separate gap: where the seam <b>starts to open</b>. Contact,
           z-order and force all begin at the Enter Point; the opening begins
-          here, grows until the Wedge Lock Point below, and holds its shape
-          from there. Set it closer than Enter for a tip that touches first and
+          here; its swelling grows until the Wedge Lock Point below, while the
+          edges keep wrapping the piercer all the way to the End Point. Set it closer than Enter for a tip that touches first and
           only opens the seam once it is further in.
         </p>
         <div class="bind-row">
@@ -632,9 +631,8 @@
         </div>
         <p class="modal__text">
           How far through its growth — from the Dent Trigger (0%) to the End
-          Point (100%) — the opening <b>stops changing</b>. Past it the
-          wedge holds exactly the shape it had there while the piercer keeps
-          going in.
+          Point (100%) — the swelling beside the seam <b>stops growing</b>.
+          The edges never stop: they keep wrapping the piercer as it goes in.
         </p>
         <div class="bind-row">
           <label class="slider-field">
@@ -799,6 +797,26 @@
           </label>
         </div>
         <button id="canvasMirrorToggle" class="toggle-chip toggle-chip--wide toggle-chip--switch" type="button" aria-pressed="false">Mirror: Off</button>
+        <div class="field-row">
+          <div class="field-label">Backdrop</div>
+        </div>
+        <p class="modal__text">
+          What shows where no layer has a pixel. The <b>checkerboard</b> means
+          transparent — an exported GIF is transparent there too. A
+          <b>colour</b> fills those pixels, on the canvas and in exports.
+        </p>
+        <div class="segmented" role="group" aria-label="Backdrop">
+          <button id="canvasBackdropCheckerBtn" class="segmented__btn" type="button" aria-pressed="true">Checkerboard</button>
+          <button id="canvasBackdropColourBtn" class="segmented__btn" type="button" aria-pressed="false">Colour</button>
+        </div>
+        <div id="canvasBackdropPicker" class="canvas-backdrop" hidden>
+          <p class="modal__text">The colours your layers use most, first.</p>
+          <div id="canvasBackdropSwatches" class="settings-swatches" role="group" aria-label="Backdrop colour"></div>
+          <div class="settings-hex">
+            <span id="canvasBackdropPreview" class="settings-hex__preview"></span>
+            <input id="canvasBackdropHex" class="text-input text-input--inline settings-hex__input" type="text" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Backdrop colour (hex)" />
+          </div>
+        </div>
         <div class="modal__actions">
           <button id="applyCanvasSizeBtn" class="btn btn--flourish" type="button">Apply</button>
           <button id="cancelCanvasSizeBtn" class="btn" type="button">Cancel</button>

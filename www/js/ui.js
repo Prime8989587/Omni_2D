@@ -13,7 +13,7 @@ import {
 } from './parts.js';
 import { bonesStore, PHYSICS_RANGES, JointType } from './bones.js';
 import { initPhysics } from './physics.js';
-import { sceneStore, SCENE_PRESETS } from './scene.js';
+import { sceneStore, SCENE_PRESETS, normalizeBackdrop } from './scene.js';
 import { view } from './view.js';
 import { initViewGestures } from './viewGestures.js';
 import { importFiles } from './importer.js';
@@ -118,6 +118,12 @@ function cacheElements() {
   els.canvasMirrorToggle = document.getElementById('canvasMirrorToggle');
   els.applyCanvasSizeBtn = document.getElementById('applyCanvasSizeBtn');
   els.cancelCanvasSizeBtn = document.getElementById('cancelCanvasSizeBtn');
+  els.canvasBackdropCheckerBtn = document.getElementById('canvasBackdropCheckerBtn');
+  els.canvasBackdropColourBtn = document.getElementById('canvasBackdropColourBtn');
+  els.canvasBackdropPicker = document.getElementById('canvasBackdropPicker');
+  els.canvasBackdropSwatches = document.getElementById('canvasBackdropSwatches');
+  els.canvasBackdropPreview = document.getElementById('canvasBackdropPreview');
+  els.canvasBackdropHex = document.getElementById('canvasBackdropHex');
   els.canvasEmptyHint = document.getElementById('canvasEmptyHint');
 
   els.fileInput = document.getElementById('fileInput');
@@ -719,9 +725,75 @@ function rigHintText(status) {
 function openCanvasSizeModal() {
   els.canvasWidthInput.value = String(sceneStore.width);
   els.canvasHeightInput.value = String(sceneStore.height);
+  canvasBackdropDraft = sceneStore.backdrop;
+  if (sceneStore.backdrop) canvasBackdropLast = sceneStore.backdrop;
+  canvasBackdropChoices = sceneColours();
   renderCanvasMirrorToggle();
   renderCanvasPresets();
+  renderCanvasBackdrop();
   els.canvasSizeModal.hidden = false;
+}
+
+// ---- The backdrop (scene.js, THE BACKDROP) --------------------------------
+//
+// Chosen in the Canvas window and applied with its size, as one undo step.
+// Until Apply it is only a draft: Cancel leaves the scene as it was.
+let canvasBackdropDraft = null; // null: the checkerboard
+let canvasBackdropLast = null; // the colour Colour returns to
+let canvasBackdropChoices = [];
+
+// The colours the layers use most, most first: the backdrop wanted is
+// nearly always the skin, sky or wall the artwork stops short of. Opaque
+// pixels of every visible layer, a large one sampled rather than read
+// whole; then white and black, which every palette wants.
+function sceneColours(limit = 10) {
+  const counts = new Map();
+  for (const part of partsStore.parts) {
+    if (!part.visible || !part.pixels) continue;
+    const px = part.pixels;
+    const step = Math.max(1, Math.floor(px.length / 4 / 40000));
+    for (let i = 0; i < px.length; i += 4 * step) {
+      if (px[i + 3] !== 255) continue;
+      const key = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const hex = (key) => `#${key.toString(16).padStart(6, '0').toUpperCase()}`;
+  const colours = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([key]) => hex(key));
+  for (const fixed of ['#FFFFFF', '#000000']) if (!colours.includes(fixed)) colours.push(fixed);
+  return colours;
+}
+
+function renderCanvasBackdrop() {
+  const colour = canvasBackdropDraft;
+  els.canvasBackdropCheckerBtn.setAttribute('aria-pressed', String(!colour));
+  els.canvasBackdropColourBtn.setAttribute('aria-pressed', String(Boolean(colour)));
+  els.canvasBackdropPicker.hidden = !colour;
+  if (!colour) return;
+  els.canvasBackdropSwatches.replaceChildren();
+  for (const choice of canvasBackdropChoices) {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'settings-swatch';
+    swatch.style.setProperty('--swatch', choice);
+    swatch.setAttribute('aria-label', choice);
+    swatch.setAttribute('aria-pressed', String(choice === colour));
+    swatch.addEventListener('click', () => chooseCanvasBackdrop(choice));
+    els.canvasBackdropSwatches.appendChild(swatch);
+  }
+  els.canvasBackdropPreview.style.setProperty('--swatch', colour);
+  if (document.activeElement !== els.canvasBackdropHex) els.canvasBackdropHex.value = colour;
+  els.canvasBackdropHex.classList.remove('is-invalid');
+}
+
+function chooseCanvasBackdrop(colour) {
+  canvasBackdropDraft = normalizeBackdrop(colour);
+  if (canvasBackdropDraft) canvasBackdropLast = canvasBackdropDraft;
+  renderCanvasBackdrop();
+}
+
+function readCanvasBackdropHex() {
+  return normalizeBackdrop(els.canvasBackdropHex.value.trim().replace(/^#?/, '#'));
 }
 
 function closeCanvasSizeModal() {
@@ -759,10 +831,13 @@ function handleCanvasHeightInput() {
 // The store clamps to the 8..3072 limits; what the user typed is echoed
 // back as the size that was actually applied.
 function applyCanvasSize() {
-  history.run('Change canvas size',
-    () => sceneStore.setSize(els.canvasWidthInput.value, els.canvasHeightInput.value));
+  history.run('Change canvas', () => {
+    sceneStore.setSize(els.canvasWidthInput.value, els.canvasHeightInput.value);
+    sceneStore.setBackdrop(canvasBackdropDraft);
+  });
   closeCanvasSizeModal();
-  showToast(`Canvas is ${sceneStore.width} × ${sceneStore.height} pixels.`);
+  showToast(`Canvas is ${sceneStore.width} × ${sceneStore.height} pixels` +
+    `${sceneStore.backdrop ? `, backdrop ${sceneStore.backdrop}` : ''}.`);
 }
 
 // Preset buttons fill the width/height fields; Apply commits them. The
@@ -3341,6 +3416,19 @@ function bindEvents() {
   els.canvasWidthInput.addEventListener('input', handleCanvasWidthInput);
   els.canvasHeightInput.addEventListener('input', handleCanvasHeightInput);
   els.canvasMirrorToggle.addEventListener('click', handleCanvasMirrorToggle);
+  els.canvasBackdropCheckerBtn.addEventListener('click', () => chooseCanvasBackdrop(null));
+  els.canvasBackdropColourBtn.addEventListener('click', () => chooseCanvasBackdrop(canvasBackdropLast || canvasBackdropChoices[0]));
+  els.canvasBackdropHex.addEventListener('input', () => {
+    const colour = readCanvasBackdropHex();
+    els.canvasBackdropHex.classList.toggle('is-invalid', !colour);
+    if (colour) els.canvasBackdropPreview.style.setProperty('--swatch', colour);
+  });
+  els.canvasBackdropHex.addEventListener('change', () => {
+    const colour = readCanvasBackdropHex();
+    if (colour) chooseCanvasBackdrop(colour);
+    else renderCanvasBackdrop();
+  });
+  els.canvasBackdropHex.addEventListener('keydown', (event) => { if (event.key === 'Enter') els.canvasBackdropHex.blur(); });
   els.fileInput.addEventListener('change', handleFilesPicked);
   els.animateBtn.addEventListener('click', handleAnimateTapped);
   els.exitBtn.addEventListener('click', handleExit);

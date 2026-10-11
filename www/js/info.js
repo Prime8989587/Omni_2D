@@ -91,8 +91,8 @@ const TOPICS = {
       '• each of the two layers is Pierced, its mirror line placed on the ' +
       'line they share, so each opens its own side and together they open ' +
       'one symmetric wedge;\n' +
-      '• set the Wedge Lock Point to 100% for the opening to keep following ' +
-      'the fabric all the way in.\n\n' +
+      '• the opening follows the fabric all the way in; the Wedge Lock ' +
+      'Point only stops the swelling beside it growing.\n\n' +
       'Move the fabric in with Free Move’s Piercer tab.',
   },
   pxlink: {
@@ -203,8 +203,9 @@ const TOPICS = {
       'tip sinks under the surface and starts pressing on its bones.\n' +
       '• Dent Trigger is the gap where the SEAM starts to open. Its own ' +
       'setting, so touching and opening need not happen at the same moment.\n' +
-      '• Lock is where the opening stops changing. Past it the wedge holds ' +
-      'the shape it had there while the piercer carries on in.\n' +
+      '• Lock is where the swelling beside the seam stops growing. The ' +
+      'seam\u2019s edges never stop: they keep wrapping the piercer ' +
+      'wherever it is, all the way to End.\n' +
       '• End is how much deeper the piercer keeps going before it stops ' +
       'advancing. Past End it holds at its deepest.\n\n' +
       'Set them by typing the numbers, or by dragging the handles ' +
@@ -226,22 +227,24 @@ const TOPICS = {
       'project behaved before this setting existed.\n' +
       '• Further out than Enter -- the surface flinches before anything ' +
       'touches it.\n\n' +
-      'Whichever you choose, the opening grows from here to the Wedge Lock ' +
-      'Point and holds its shape from there to the End point.',
+      'Whichever you choose, the swelling grows from here to the Wedge Lock ' +
+      'Point and holds there, while the edges keep wrapping the piercer to ' +
+      'the End point.',
   },
   'pierce-wedge-lock': {
     title: 'Wedge Lock Point',
-    body: 'How far through its growth the opening stops changing -- as a ' +
-      'share of the way from the Dent Trigger Distance (0%) to the End ' +
-      'point (100%).\n\n' +
-      'Up to the Lock the wedge grows smoothly with the depth. From the ' +
-      'Lock on, its shape is frozen exactly as it was there -- the edges, ' +
-      'the swelling, all of it -- however much deeper the piercer goes. The ' +
-      'piercer itself keeps moving in, beneath the layer. Backing out, the ' +
-      'shape holds until the piercer is back above the Lock, then closes ' +
-      'the way it opened.\n\n' +
-      '• 50% (the default) -- the wedge finishes half way in and holds.\n' +
-      '• 100% -- it keeps changing all the way to End.\n\n' +
+    body: 'How far through its growth the SWELLING beside the seam stops ' +
+      'growing -- as a share of the way from the Dent Trigger Distance (0%) ' +
+      'to the End point (100%).\n\n' +
+      'The seam\u2019s two edges are never held: they wrap whatever of the ' +
+      'piercer is inside the seam, wherever it is, all the way to End. Only ' +
+      'the soft swelling of the material beside them stops growing at the ' +
+      'Lock. Backing out runs the same shapes in reverse.\n\n' +
+      '(Before 2.9.1 the Lock froze the edges too, at the tip\u2019s position ' +
+      'there. With the default depths that is the moment the tip first ' +
+      'touches, so the wedge locked shut and never opened.)\n\n' +
+      '• 50% (the default) -- the swelling finishes half way in.\n' +
+      '• 100% -- it keeps growing all the way to End.\n\n' +
       'Type it, or drag the green Lock handle between Dent and End.',
   },
   'pierce-targets': {
@@ -265,7 +268,7 @@ const TOPICS = {
       'line, so it can never be off-centre -- its base on the surface, its ' +
       'point aimed the way the piercer goes in. ' +
       'While Dent is chosen the layer is drawn OPENED, as the scene will ' +
-      'draw it at the Wedge Lock Point, with the piercer in it -- and it ' +
+      'draw it at the End point, with the piercer in it -- and it ' +
       'follows every drag of the marker, so you see the real wedge before ' +
       'ever testing it.\n\n' +
       'The opacity slider under the targets sets how solid the chosen ' +
@@ -296,8 +299,8 @@ const TOPICS = {
       'in -- so put the line where the piercer goes in: one that comes in ' +
       'well off it leaves a sliver of the gap beside the tip uncovered. ' +
       'The edges follow the tip\u2019s own width row by row, so the gap ' +
-      'grows as the tip goes in, and holds from the Wedge Lock Point (on ' +
-      'the piercer, with Enter and End).\n\n' +
+      'grows as the tip goes in, all the way to the End point (on the ' +
+      'piercer, with Enter and Lock).\n\n' +
       'Set Depth or Width to 0 for no opening at all.\n\n' +
       'Easier still by hand: Paint regions…, then the Dent target, and drag ' +
       'the triangle marker on the artwork -- the wedge is drawn there live, ' +

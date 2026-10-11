@@ -89,7 +89,7 @@ import {
   localToWorld, pinCarriageOffset, generateMesh, defaultDensity, deformVertices,
 } from './mesh.js';
 import {
-  openingFor, openingMarker, markerCoversArtwork, tipInTexels, resetOpeningCaches,
+  openingFor, openingMarker, markerCoversArtwork, tipInTexels, resetOpeningCaches, openingApart,
 } from './opening.js';
 import { haptic } from './haptics.js';
 import { pxlinkMove, applyPxLinkMove } from './pxlinkState.js';
@@ -881,6 +881,13 @@ function publishOcclusion(contacts) {
     // that splits between side A and side B (the pierced layer's Dilation
     // of the piercer's tip width) -- null without an opening.
     gapPx: openings.has(pierced.id) && openings.get(pierced.id).sides ? openings.get(pierced.id).sides.px : null,
+    // How far apart the seam's two edges actually are right now, at their
+    // widest, in scene pixels: what the frame draws, as against what the
+    // depth and the fraction say. 0 with an opening means the seam is
+    // swelling but nothing of the piercer is inside it yet.
+    apart: openings.has(pierced.id)
+      ? (() => { const w = openingApart(openings.get(pierced.id)); return (w.a + w.b) * Math.max(1e-6, pierced.scale || 1); })()
+      : 0,
     tipWidth: contact ? contact.tipWidth : null,
     dentStart: contact ? dentStartOf(contact.piercer, contact.piercer.pierceEnter, contact.end) : null,
     engaged: Boolean(contact && contact.engaged),
@@ -1107,18 +1114,25 @@ export function pierceDentIssue(part) {
 // the opening before contact, and one set closer has to be able to hold it
 // back after contact has begun.
 //
-// THE SHAPE LOCKS PART-WAY IN
+// THE LOCK HOLDS THE SWELLING, NEVER THE EDGES
 //
-// Past the Wedge Lock Point the opening is evaluated exactly AS IF the
-// piercer had stopped at the lock: the fraction is clamped to it, and the
-// tip is taken back along its axis by however far it has come since --
-// (dentT - lock) of the opening's span, because the gap closes one pixel
-// for every pixel the tip advances. Both inputs at once, so the WHOLE shape
-// freezes, the swelling and the rim alike, not just its size. The piercer
-// itself is untouched and carries on in, beneath the layer, under a seam
-// that no longer moves. Below the lock nothing is clamped, so backing out
-// holds the frozen shape down to the lock and then closes it through the
-// same shapes it opened through.
+// Past the Wedge Lock Point the swelling stops growing: the fraction is
+// clamped to the lock. The seam's two EDGES are not held. They follow the
+// piercer wherever it actually is, wrapping whatever of it is inside the
+// seam, all the way to the End Point.
+//
+// Until 2.9.1 the lock held the edges as well, by taking the tip back to
+// where it had been at the lock. With the default depths (Enter 12, Dent
+// Trigger 12, End 24, Lock 50%) the lock falls at a gap of 0: the instant
+// the tip first touches the Pierceable paint, with not one of its texels
+// inside the seam yet. The rim is built from the piercer's texels inside
+// the seam, so the shape it locked was a CLOSED seam, and it stayed closed
+// for the rest of the drag. Measured in the real app on a champagne bottle
+// driven up into a slit: depth 1 -> 24, open 4% -> 100%, and the two edges
+// 0.00 px apart at every one of 40 frames -- the "||" that never opened.
+// A wedge that wraps the piercer cannot also be frozen at an earlier
+// depth, so the lock now holds only the part of the shape that grows on
+// its own (the swelling), and backing out runs the same shapes in reverse.
 function openingOf(pierced, contact) {
   if (!contact || !(contact.dentT > 0) || !pierced.mesh) return null;
   if (pierceDentIssue(pierced) !== null) return null;
@@ -1129,11 +1143,9 @@ function openingOf(pierced, contact) {
   const positions = deformVertices(pierced.mesh, pierced, transforms || {});
   const lock = Number.isFinite(contact.lockT) ? contact.lockT : 1;
   const fraction = Math.min(contact.dentT, lock);
-  const past = contact.axis && contact.dentT > lock ? (contact.dentT - lock) * contact.dentSpan : 0;
-  const shift = {
-    x: contact.tip.x - contact.rawTip.x - (contact.axis ? contact.axis.x * past : 0),
-    y: contact.tip.y - contact.rawTip.y - (contact.axis ? contact.axis.y * past : 0),
-  };
+  // Where the tip is DRAWN: held back by the End Point and the walls, and
+  // nothing else.
+  const shift = { x: contact.tip.x - contact.rawTip.x, y: contact.tip.y - contact.rawTip.y };
   // The LEADING point is what goes into the seam first, so it is where the
   // swelling is centred -- not the tip's middle, which on a long painted
   // tip sits well behind it. The front edge's midpoint, as containment
@@ -1164,10 +1176,15 @@ function openingOf(pierced, contact) {
 //     travels along the seam (its middle-to-tip line onto the marker's
 //     centreline) and scaled into the pierced layer's texels;
 //   * its leading point on the seam exactly as far past the surface (the
-//     marker's base) as the piercer's depth settings put it at the Wedge
-//     Lock Point -- the Lock's share of the way from the Dent Trigger
-//     Distance to the End Point -- so the shape is the one the wedge keeps;
-//   * the fraction at the lock, the tip's width, and the layer's Dilation.
+//     marker's base) as the piercer's depth settings let it go: the End
+//     Point, where the piercer stops, so the shape is the deepest the wedge
+//     ever opens;
+//   * the fraction at the lock (the swelling holds from there), the tip's
+//     width, and the layer's Dilation.
+//
+// Until 2.9.1 the preview was taken AT the Lock, with the tip there. With
+// the default depths that is the instant the tip touches the surface, so
+// the preview showed the same closed seam the scene did (openingOf).
 //
 // With no tip painted yet there is no outline to wrap, so a stand-in is
 // used: a round-ended tip the marker's Width across. Returns the opening and
@@ -1185,9 +1202,9 @@ export function pierceOpeningPreview(piercer, pierced) {
   const end = Math.max(1, piercer.pierceEnd);
   const lock = wedgeLockOf(piercer);
   const scale = Math.max(1e-6, pierced.scale || 1);
-  // How far past the surface the leading point is at the lock, in the
-  // pierced layer's texels: the gap there is start - lock x span.
-  const reach = (lock * dentSpan(piercer, enter, end) - dentStartOf(piercer, enter, end)) / scale;
+  // How far past the surface the leading point is at the End Point, in the
+  // pierced layer's texels: the gap there is start - span.
+  const reach = (dentSpan(piercer, enter, end) - dentStartOf(piercer, enter, end)) / scale;
   const lead = { u: marker.base.x + marker.inward.x * reach, v: marker.base.y + marker.inward.y * reach };
   const common = { fraction: lock, tip: lead, dilation: pierced.pierceDentDilation };
 

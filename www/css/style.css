@@ -1049,7 +1049,9 @@ button, input, select, textarea {
 /* The Pierce popup's choices -- role, physics direction -- read the same
    way: the one in effect is filled. So do the Interactive popup's. */
 #pierceModal .segmented__btn[aria-pressed="true"],
-#interactiveModal .segmented__btn[aria-pressed="true"] {
+#interactiveModal .segmented__btn[aria-pressed="true"],
+/* And the Canvas window's backdrop: checkerboard or colour. */
+#canvasSizeModal .segmented__btn[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #000000;
@@ -3304,6 +3306,19 @@ input[type="number"] {
 
 .settings-hex__input.is-invalid {
   border-color: var(--color-danger, #FF3B3B);
+}
+
+/* The Canvas window's backdrop colour: the same swatches and hex field as
+   Settings' colours, stacked under the Checkerboard | Colour choice. */
+.canvas-backdrop {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.canvas-backdrop[hidden] {
+  display: none;
 }
 
 /* ===================================================================== */
